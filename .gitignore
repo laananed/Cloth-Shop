@@ -1,0 +1,32 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor and tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local caches and dependencies
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.vite/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# Local helper data
+.agents/
+.git-template/
+.git-backup/
+.git-blocked/
+.git-data/
+.git-staging/

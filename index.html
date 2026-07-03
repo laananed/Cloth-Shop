@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>蓝屿织梦 · 二次元服装售卖首页</title>
+    <meta
+      name="description"
+      content="蓝屿织梦是一页式二次元服装展示首页，主打清透海风感、轻互动和梦幻氛围。"
+    />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="topbar">
+        <div class="brand-mark">
+          <span class="brand-mark__orb" aria-hidden="true"></span>
+          <span class="brand-mark__text">蓝屿织梦</span>
+        </div>
+        <div class="topbar__note">海风感 · 二次元日常 · 轻盈上新</div>
+      </header>
+
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero__art" aria-hidden="true">
+          <span class="hero__orb hero__orb--one"></span>
+          <span class="hero__orb hero__orb--two"></span>
+        </div>
+        <div class="hero__content">
+          <div class="hero__eyebrow">
+            <span class="hero__eyebrow-dot" aria-hidden="true"></span>
+            <span>2026 Summer Atelier</span>
+          </div>
+          <h1 id="hero-title" data-hero-title></h1>
+          <p data-hero-slogan></p>
+          <p data-hero-intro></p>
+          <div class="hero__actions">
+            <button class="button button--primary" type="button" data-primary-cta>浏览新品</button>
+            <button class="button button--secondary" type="button" data-secondary-cta>查看风格</button>
+          </div>
+          <div class="hero__stats">
+            <span data-hero-note></span>
+            <span>清透配色 / 轻玻璃卡片 / 海天蓝渐变</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="collections" aria-labelledby="collections-title">
+        <div class="section__header">
+          <div>
+            <h2 id="collections-title">风格入口</h2>
+            <p>快速浏览三个核心穿搭方向，先看气质，再挑单品。</p>
+          </div>
+          <p>当前筛选：<strong data-active-collection>全部</strong></p>
+        </div>
+        <div class="collection-rail" data-collection-rail></div>
+      </section>
+
+      <section class="section" id="products" aria-labelledby="products-title">
+        <div class="section__header">
+          <div>
+            <h2 id="products-title">上新商品</h2>
+            <p>共 <span data-product-count>0 件商品</span>，保持轻盈但能卖。</p>
+          </div>
+          <p>轻互动展示，不打扰浏览。</p>
+        </div>
+        <div class="product-grid" data-product-grid></div>
+      </section>
+
+      <footer class="footer">
+        <div class="footer__story">
+          <h2>关于蓝屿织梦</h2>
+          <p>
+            我们把海天蓝、云白和浅樱粉织成一页轻盈的服装小店。这里卖的不只是衣服，
+            还有那种“刚好能把今天过得更像自己”的氛围。
+          </p>
+        </div>
+        <div class="footer__utility">
+          <p>配送提示：现阶段为静态展示页，可后续接入真实库存与下单流程。</p>
+          <div class="footer__social" aria-label="社交链接">
+            <a href="#" aria-label="小红书">小红书</a>
+            <a href="#" aria-label="微博">微博</a>
+            <a href="#" aria-label="B站">B站</a>
+          </div>
+        </div>
+      </footer>
+    </main>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

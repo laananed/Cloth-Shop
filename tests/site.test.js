@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getCollections, getProducts, getSiteCopy } from '../src/content.js';
+import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
 
 test('site copy keeps the one-page brand-led direction', () => {
   const copy = getSiteCopy();
@@ -29,4 +30,14 @@ test('products expose per-item sales counts', () => {
 
   assert.ok(products.every((item) => typeof item.sales === 'string' && item.sales.length > 0));
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
+});
+
+test('sales ranks are derived from the highest sales first', () => {
+  const products = getProducts();
+  const rankMap = getSalesRankMap(products);
+
+  assert.equal(rankMap.get('product-3'), 1);
+  assert.equal(rankMap.get('product-5'), 2);
+  assert.equal(rankMap.get('product-1'), 3);
+  assert.equal(formatSalesRank(rankMap.get('product-3')), '销量第1名');
 });

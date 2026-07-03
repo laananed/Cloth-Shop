@@ -530,6 +530,7 @@ body::after {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .product-card__footer strong {
@@ -540,6 +541,12 @@ body::after {
   color: var(--muted);
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.product-card__rank {
+  color: var(--accent-strong);
+  font-size: 0.88rem;
+  font-weight: 700;
 }
 
 .product-card__actions {

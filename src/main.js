@@ -1,8 +1,10 @@
 import { getCollections, getProducts, getSiteCopy } from './content.js';
+import { formatSalesRank, getSalesRankMap } from './ranking.js';
 
 const copy = getSiteCopy();
 const collections = getCollections();
 const products = getProducts();
+const salesRankMap = getSalesRankMap(products);
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -81,6 +83,7 @@ function renderProducts() {
             <div class="product-card__footer">
               <div class="product-card__meta">
                 <strong>${formatPrice(product.price)}</strong>
+                <span class="product-card__rank">${formatSalesRank(salesRankMap.get(product.id))}</span>
                 <span class="product-card__sales">销量 ${product.sales}</span>
               </div>
               <div class="product-card__actions">

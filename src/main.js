@@ -14,14 +14,21 @@ const collectionRail = document.querySelector('[data-collection-rail]');
 const productGrid = document.querySelector('[data-product-grid]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
 const productCountLabel = document.querySelector('[data-product-count]');
+const hero = document.querySelector('.hero');
+
+const referenceImageUrl =
+  'file:///F:/Pictures/%E5%A3%81%E7%BA%B8/ChatGPT%20Image%202026%E5%B9%B46%E6%9C%8827%E6%97%A5%2021_34_30_16_9.png';
 
 let activeCategory = '全部';
+let scrollFrame = 0;
 
 function formatPrice(value) {
   return `¥${value}`;
 }
 
 function renderHero() {
+  hero.style.setProperty('--hero-image', `url("${referenceImageUrl}")`);
+  document.body.style.setProperty('--page-portrait', `url("${referenceImageUrl}")`);
   heroTitle.textContent = copy.brandName;
   heroSlogan.textContent = copy.slogan;
   heroIntro.textContent = copy.intro;
@@ -90,6 +97,37 @@ function updateView() {
   renderProducts();
 }
 
+function updateHeroParallax() {
+  const rect = hero.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const centerRatio = Math.min(1, Math.max(0, (viewportHeight - rect.top) / (viewportHeight + rect.height)));
+  const shift = (centerRatio - 0.5) * 42;
+  const opacity = 0.2 + centerRatio * 0.18;
+  const scale = 1.06 + centerRatio * 0.07;
+  const pageShift = Math.max(-28, Math.min(28, window.scrollY * 0.02));
+  const pageScale = 1.03 + Math.min(0.06, window.scrollY * 0.00005);
+  const pageOpacity = 0.14 + Math.min(0.08, centerRatio * 0.04);
+
+  hero.style.setProperty('--hero-bg-shift', `${shift}px`);
+  hero.style.setProperty('--hero-bg-offset', `${Math.round(centerRatio * 18)}%`);
+  hero.style.setProperty('--hero-bg-opacity', `${opacity}`);
+  hero.style.setProperty('--hero-bg-scale', `${scale}`);
+  document.body.style.setProperty('--page-portrait-shift', `${pageShift}px`);
+  document.body.style.setProperty('--page-portrait-scale', `${pageScale}`);
+  document.body.style.setProperty('--page-portrait-opacity', `${pageOpacity}`);
+}
+
+function scheduleHeroParallax() {
+  if (scrollFrame) {
+    return;
+  }
+
+  scrollFrame = window.requestAnimationFrame(() => {
+    scrollFrame = 0;
+    updateHeroParallax();
+  });
+}
+
 collectionRail.addEventListener('click', (event) => {
   const button = event.target.closest('[data-collection]');
   if (!button) {
@@ -108,5 +146,9 @@ secondaryCta.addEventListener('click', () => {
   document.querySelector('#collections').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
+window.addEventListener('scroll', scheduleHeroParallax, { passive: true });
+window.addEventListener('resize', scheduleHeroParallax);
+
 renderHero();
 updateView();
+updateHeroParallax();

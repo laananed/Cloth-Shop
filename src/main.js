@@ -79,7 +79,10 @@ function renderProducts() {
             <h3>${product.name}</h3>
             <p class="product-card__detail">${product.detail}</p>
             <div class="product-card__footer">
-              <strong>${formatPrice(product.price)}</strong>
+              <div class="product-card__meta">
+                <strong>${formatPrice(product.price)}</strong>
+                <span class="product-card__sales">销量 ${product.sales}</span>
+              </div>
               <div class="product-card__actions">
                 <button type="button" class="ghost-button">加入收藏</button>
                 <button type="button" class="ghost-button ghost-button--solid">查看详情</button>

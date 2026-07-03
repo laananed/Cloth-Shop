@@ -525,8 +525,21 @@ body::after {
   margin-top: 2px;
 }
 
+.product-card__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .product-card__footer strong {
   font-size: 1.15rem;
+}
+
+.product-card__sales {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 .product-card__actions {

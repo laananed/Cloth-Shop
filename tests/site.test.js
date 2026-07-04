@@ -72,6 +72,14 @@ test('products expose per-item sales counts', () => {
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
 });
 
+test('all products use the split purchase card format', () => {
+  const products = getProducts();
+
+  assert.equal(products.length, 20);
+  assert.ok(products.every((item) => item.detailLayout === 'split'));
+  assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
+});
+
 test('purchase cards expose 收藏夹 购物车 立即购买 actions', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
 

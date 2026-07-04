@@ -44,6 +44,16 @@ test('products render a curated set of twenty items', () => {
   assert.ok(products.every((item) => typeof item.image === 'string' && item.image.startsWith('./assets/products/')));
 });
 
+test('shoe products keep the full shoe visible in the preview', () => {
+  const products = getProducts();
+  const shoeProduct = products.find((item) => item.id === 'product-01');
+
+  assert.ok(shoeProduct);
+  assert.equal(shoeProduct.imageFit, 'contain');
+  assert.equal(shoeProduct.imageFocus, undefined);
+  assert.equal(shoeProduct.imageZoom, undefined);
+});
+
 test('product preview images are present in the workspace', () => {
   const products = getProducts();
 

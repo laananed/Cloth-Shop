@@ -54,6 +54,8 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 299,
     sales: '3.6k',
+    detailLayout: 'split',
+    imageFit: 'contain',
     detail: '黑色漆皮与蝴蝶结搭扣组合，脚背线条和鞋面弧度都很清楚。',
   },
   {

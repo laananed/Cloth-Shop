@@ -1,5 +1,5 @@
-import { getCollections, getProducts, getSiteCopy } from './content.js';
-import { formatSalesRank, getSalesRankMap } from './ranking.js';
+﻿import { getCollections, getProducts, getSiteCopy } from './content.js?v=20260704j';
+import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704j';
 import {
   getStoredOrders,
   getStoredProfile,
@@ -7,7 +7,7 @@ import {
   saveStoredProfile,
   validateAddress,
   validateRegistration,
-} from './account-store.js';
+} from './account-store.js?v=20260704j';
 
 const copy = getSiteCopy();
 const collections = getCollections();
@@ -48,11 +48,30 @@ const storage = window.localStorage;
 const storedProfile = getStoredProfile(storage);
 const storedOrders = getStoredOrders(storage);
 
-let activeCategory = '全部';
+let activeCategory = '鍏ㄩ儴';
 let scrollFrame = 0;
 
 function formatPrice(value) {
-  return `¥${value}`;
+  return `楼${value}`;
+}
+
+function getProductImageStyle(product) {
+  const styles = [];
+
+  if (product.imageFit) {
+    styles.push(`object-fit: ${product.imageFit};`);
+  }
+
+  if (product.imageFocus) {
+    styles.push(`object-position: ${product.imageFocus};`);
+  }
+
+  if (product.imageZoom && product.imageZoom !== 1) {
+    styles.push(`transform: scale(${product.imageZoom});`);
+    styles.push('transform-origin: center center;');
+  }
+
+  return styles.join(' ');
 }
 
 function renderHero() {
@@ -66,13 +85,12 @@ function renderHero() {
 }
 
 function renderCollections() {
-  const buttons = [{ title: '全部', summary: '浏览全部商品' }, ...collections].map((item) => {
+  const buttons = [{ title: '鍏ㄩ儴', summary: '娴忚鍏ㄩ儴鍟嗗搧' }, ...collections].map((item) => {
     const isActive = item.title === activeCategory;
 
     return `
       <button class="collection-chip ${isActive ? 'is-active' : ''}" type="button" data-collection="${item.title}">
         <span class="collection-chip__title">${item.title}</span>
-        <span class="collection-chip__summary">${item.summary}</span>
       </button>
     `;
   });
@@ -82,7 +100,7 @@ function renderCollections() {
 }
 
 function filteredProducts() {
-  return activeCategory === '全部'
+  return activeCategory === '鍏ㄩ儴'
     ? products
     : products.filter((product) => product.category === activeCategory);
 }
@@ -90,36 +108,48 @@ function filteredProducts() {
 function renderProducts() {
   const visibleProducts = filteredProducts();
 
-  productCountLabel.textContent = `${visibleProducts.length} 件商品`;
+  productCountLabel.textContent = `${visibleProducts.length} 浠跺晢鍝乣;
   productGrid.innerHTML = visibleProducts
-    .map(
-      (product) => `
-        <article class="product-card" data-category="${product.category}">
+    .map((product) => {
+      const isSplitDetail = product.detailLayout === 'split';
+
+      return `
+        <article class="product-card ${isSplitDetail ? 'product-card--split-detail' : ''}" data-category="${product.category}">
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
           <div class="product-card__art" aria-hidden="true">
-            <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" loading="lazy" decoding="async" />
+            <img class="product-card__image" src="${product.image}" alt="${product.name} 棰勮鍥? style="${getProductImageStyle(product)}" loading="lazy" decoding="async" />
             <span class="product-card__art-overlay"></span>
           </div>
-          <div class="product-card__body">
+          <div class="product-card__body ${isSplitDetail ? 'product-card__body--split-detail' : ''}">
             <p class="product-card__category">${product.category}</p>
             <h3>${product.name}</h3>
-            <p class="product-card__detail">${product.detail}</p>
-            <div class="product-card__footer">
-              <div class="product-card__meta">
+            ${
+              isSplitDetail
+                ? `
+            <div class="product-card__detail-grid">
+              <div class="product-card__meta product-card__meta--stacked">
                 <strong>${formatPrice(product.price)}</strong>
                 <span class="product-card__rank">${formatSalesRank(salesRankMap.get(product.id))}</span>
-                <span class="product-card__sales">销量：${product.sales}</span>
+                <span class="product-card__sales">閿€閲忥細${product.sales}</span>
               </div>
+              <p class="product-card__detail">${product.detail}</p>
+            </div>
+                `
+                : `
+            <p class="product-card__detail">${product.detail}</p>
+                `
+            }
+            <div class="product-card__footer">
               <div class="product-card__actions">
-                <button type="button" class="ghost-button">加入收藏</button>
-                <button type="button" class="ghost-button ghost-button--solid">查看详情</button>
+                <button type="button" class="ghost-button">鍔犲叆鏀惰棌</button>
+                <button type="button" class="ghost-button ghost-button--solid">鏌ョ湅璇︽儏</button>
               </div>
             </div>
           </div>
         </article>
-      `,
-    )
+      `;
+    })
     .join('');
 }
 
@@ -173,8 +203,8 @@ function getDisplayName(email, fallback = '') {
 
 function renderSidebar() {
   const profile = getStoredProfile(storage);
-  const email = profile?.user?.email || '未登录';
-  const displayName = profile?.user?.displayName || '未设置';
+  const email = profile?.user?.email || '鏈櫥褰?;
+  const displayName = profile?.user?.displayName || '鏈缃?;
 
   if (accountEmail) {
     accountEmail.textContent = email;
@@ -207,8 +237,8 @@ function renderSidebar() {
                 <strong>${order.orderNo}</strong>
                 <span>${order.status}</span>
               </div>
-              <p>${order.items.join(' · ')}</p>
-              <p>合计：${formatPrice(order.totalPrice)}</p>
+              <p>${order.items.join(' 路 ')}</p>
+              <p>鍚堣锛?{formatPrice(order.totalPrice)}</p>
               <p>${order.createdAt}</p>
             </article>
           `,
@@ -285,7 +315,7 @@ if (loginForm) {
     const values = readFieldValues(loginForm);
 
     if (!values.email || !values.password) {
-      setFeedback(authFeedback, '请先填写邮箱和密码。', true);
+      setFeedback(authFeedback, '璇峰厛濉啓閭鍜屽瘑鐮併€?, true);
       return;
     }
 
@@ -298,7 +328,7 @@ if (loginForm) {
       address: profile.address || null,
     });
 
-    setFeedback(authFeedback, '登录信息已保存。');
+    setFeedback(authFeedback, '鐧诲綍淇℃伅宸蹭繚瀛樸€?);
     renderSidebar();
     closeAuthModal();
   });
@@ -313,7 +343,7 @@ if (registerForm) {
     if (!validation.ok) {
       setFeedback(
         authFeedback,
-        validation.error === 'password-mismatch' ? '两次输入的密码不一致。' : '请把注册信息填写完整。',
+        validation.error === 'password-mismatch' ? '涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷淬€? : '璇锋妸娉ㄥ唽淇℃伅濉啓瀹屾暣銆?,
         true,
       );
       return;
@@ -328,7 +358,7 @@ if (registerForm) {
       address: profile.address || null,
     });
 
-    setFeedback(authFeedback, '注册成功，账号信息已保存。');
+    setFeedback(authFeedback, '娉ㄥ唽鎴愬姛锛岃处鍙蜂俊鎭凡淇濆瓨銆?);
     renderSidebar();
     closeAuthModal();
   });
@@ -352,7 +382,7 @@ if (sidebarAddressForm) {
     const validation = validateAddress(values);
 
     if (!validation.ok) {
-      setFeedback(sidebarAddressFeedback, '请把收件人、手机号和地址信息填写完整。', true);
+      setFeedback(sidebarAddressFeedback, '璇锋妸鏀朵欢浜恒€佹墜鏈哄彿鍜屽湴鍧€淇℃伅濉啓瀹屾暣銆?, true);
       return;
     }
 
@@ -368,7 +398,7 @@ if (sidebarAddressForm) {
       },
     });
 
-    setFeedback(sidebarAddressFeedback, '收货地址已保存。');
+    setFeedback(sidebarAddressFeedback, '鏀惰揣鍦板潃宸蹭繚瀛樸€?);
     renderSidebar();
   });
 }

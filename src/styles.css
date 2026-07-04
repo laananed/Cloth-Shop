@@ -607,7 +607,7 @@ body::after {
   justify-content: space-between;
   align-items: end;
   gap: 18px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .section__header h2 {
@@ -621,18 +621,21 @@ body::after {
 }
 
 .collection-rail {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .collection-chip {
-  position: relative;
-  padding: 22px;
+  min-height: 44px;
+  padding: 10px 16px;
   border: 1px solid rgba(255, 255, 255, 0.68);
-  border-radius: var(--radius-lg);
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.58);
-  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   cursor: pointer;
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
   box-shadow: 0 12px 28px rgba(120, 159, 194, 0.12);
@@ -640,32 +643,19 @@ body::after {
 
 .collection-chip:hover,
 .collection-chip.is-active {
-  transform: translateY(-4px);
+  transform: translateY(-2px);
   border-color: rgba(105, 174, 230, 0.38);
   box-shadow: 0 18px 34px rgba(120, 159, 194, 0.18);
 }
 
 .collection-chip::after {
-  content: "";
-  position: absolute;
-  inset: auto 18px 16px auto;
-  width: 66px;
-  height: 66px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(105, 174, 230, 0.18), transparent 68%);
+  content: none;
 }
 
 .collection-chip__title {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 1.12rem;
+  display: inline;
+  font-size: 0.98rem;
   font-weight: 700;
-}
-
-.collection-chip__summary {
-  display: block;
-  color: var(--muted);
-  line-height: 1.6;
 }
 
 .collection-chip.is-active .collection-chip__title {

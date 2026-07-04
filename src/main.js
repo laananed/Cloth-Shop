@@ -12,21 +12,7 @@ import {
 const copy = getSiteCopy();
 const collections = getCollections();
 const products = getProducts();
-const productPreviewImages = [
-  './assets/products/product-01.png',
-  './assets/products/product-02.png',
-  './assets/products/product-03.png',
-  './assets/products/product-04.png',
-  './assets/products/product-05.png',
-  './assets/products/product-06.png',
-  './assets/products/product-07.png',
-  './assets/products/product-08.png',
-];
-const productsWithImages = products.map((product, index) => ({
-  ...product,
-  image: productPreviewImages[index],
-}));
-const salesRankMap = getSalesRankMap(productsWithImages);
+const salesRankMap = getSalesRankMap(products);
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -70,7 +56,7 @@ function formatPrice(value) {
 }
 
 function renderHero() {
-  const heroImageUrl = './assets/products/product-01.png';
+  const heroImageUrl = products[0]?.image || './assets/products/product-01.png';
   hero.style.setProperty('--hero-image', `url("${heroImageUrl}")`);
   document.body.style.setProperty('--page-portrait', `url("${heroImageUrl}")`);
   heroTitle.textContent = copy.brandName;
@@ -80,7 +66,7 @@ function renderHero() {
 }
 
 function renderCollections() {
-  const buttons = [{ title: '全部', summary: '浏览全部风格' }, ...collections].map((item) => {
+  const buttons = [{ title: '全部', summary: '浏览全部商品' }, ...collections].map((item) => {
     const isActive = item.title === activeCategory;
 
     return `
@@ -97,8 +83,8 @@ function renderCollections() {
 
 function filteredProducts() {
   return activeCategory === '全部'
-    ? productsWithImages
-    : productsWithImages.filter((product) => product.category === activeCategory);
+    ? products
+    : products.filter((product) => product.category === activeCategory);
 }
 
 function renderProducts() {
@@ -123,7 +109,7 @@ function renderProducts() {
               <div class="product-card__meta">
                 <strong>${formatPrice(product.price)}</strong>
                 <span class="product-card__rank">${formatSalesRank(salesRankMap.get(product.id))}</span>
-                <span class="product-card__sales">销量 ${product.sales}</span>
+                <span class="product-card__sales">销量：${product.sales}</span>
               </div>
               <div class="product-card__actions">
                 <button type="button" class="ghost-button">加入收藏</button>
@@ -222,7 +208,7 @@ function renderSidebar() {
                 <span>${order.status}</span>
               </div>
               <p>${order.items.join(' · ')}</p>
-              <p>合计：¥${order.totalPrice}</p>
+              <p>合计：${formatPrice(order.totalPrice)}</p>
               <p>${order.createdAt}</p>
             </article>
           `,
@@ -389,13 +375,13 @@ if (sidebarAddressForm) {
 
 if (primaryCta) {
   primaryCta.addEventListener('click', () => {
-    document.querySelector('#products').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.querySelector('#products')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 
 if (secondaryCta) {
   secondaryCta.addEventListener('click', () => {
-    document.querySelector('#collections').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.querySelector('#collections')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 

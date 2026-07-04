@@ -417,7 +417,7 @@ body::after {
   position: relative;
   overflow: hidden;
   display: grid;
-  grid-template-rows: 140px 1fr;
+  grid-template-rows: auto 1fr;
   border-radius: var(--radius-lg);
   border: 1px solid rgba(255, 255, 255, 0.64);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.42));
@@ -456,38 +456,30 @@ body::after {
 .product-card__art {
   position: relative;
   overflow: hidden;
+  aspect-ratio: 4 / 5;
   background:
     linear-gradient(180deg, rgba(165, 211, 245, 0.68), rgba(255, 255, 255, 0.24)),
     radial-gradient(circle at 50% 20%, rgba(255, 255, 255, 0.72), transparent 42%);
 }
 
-.product-card__orb {
+.product-card__image {
+  position: relative;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+
+.product-card__art-overlay {
   position: absolute;
-  inset: auto 14% 18px auto;
-  width: 96px;
-  height: 96px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0));
-}
-
-.product-card__spark {
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.75);
-}
-
-.product-card__spark--one {
-  width: 16px;
-  height: 16px;
-  left: 18px;
-  top: 28px;
-}
-
-.product-card__spark--two {
-  width: 10px;
-  height: 10px;
-  right: 24px;
-  top: 22px;
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.3)),
+    linear-gradient(180deg, rgba(108, 173, 228, 0.08), rgba(255, 255, 255, 0));
+  pointer-events: none;
 }
 
 .product-card__body {
@@ -531,6 +523,10 @@ body::after {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.product-card__meta strong {
+  font-size: 1.15rem;
 }
 
 .product-card__footer strong {

@@ -4,7 +4,21 @@ import { formatSalesRank, getSalesRankMap } from './ranking.js';
 const copy = getSiteCopy();
 const collections = getCollections();
 const products = getProducts();
-const salesRankMap = getSalesRankMap(products);
+const productPreviewImages = [
+  './assets/products/product-01.png',
+  './assets/products/product-02.png',
+  './assets/products/product-03.png',
+  './assets/products/product-04.png',
+  './assets/products/product-05.png',
+  './assets/products/product-06.png',
+  './assets/products/product-07.png',
+  './assets/products/product-08.png',
+];
+const productsWithImages = products.map((product, index) => ({
+  ...product,
+  image: productPreviewImages[index],
+}));
+const salesRankMap = getSalesRankMap(productsWithImages);
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -38,11 +52,9 @@ function renderHero() {
 }
 
 function renderCollections() {
-  const buttons = [
-    { title: '全部', summary: '浏览全部风格' },
-    ...collections,
-  ].map((item) => {
+  const buttons = [{ title: '全部', summary: '浏览全部风格' }, ...collections].map((item) => {
     const isActive = item.title === activeCategory;
+
     return `
       <button class="collection-chip ${isActive ? 'is-active' : ''}" type="button" data-collection="${item.title}">
         <span class="collection-chip__title">${item.title}</span>
@@ -57,8 +69,8 @@ function renderCollections() {
 
 function filteredProducts() {
   return activeCategory === '全部'
-    ? products
-    : products.filter((product) => product.category === activeCategory);
+    ? productsWithImages
+    : productsWithImages.filter((product) => product.category === activeCategory);
 }
 
 function renderProducts() {
@@ -72,9 +84,8 @@ function renderProducts() {
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
           <div class="product-card__art" aria-hidden="true">
-            <span class="product-card__orb"></span>
-            <span class="product-card__spark product-card__spark--one"></span>
-            <span class="product-card__spark product-card__spark--two"></span>
+            <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" loading="lazy" decoding="async" />
+            <span class="product-card__art-overlay"></span>
           </div>
           <div class="product-card__body">
             <p class="product-card__category">${product.category}</p>

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 
 import { getCollections, getProducts, getSiteCopy } from '../src/content.js';
 import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
@@ -23,6 +24,13 @@ test('products render a curated set of eight items', () => {
 
   assert.equal(products.length, 8);
   assert.ok(products.every((item) => item.price > 0));
+});
+
+test('product preview images are present in the workspace', () => {
+  for (let index = 1; index <= 8; index += 1) {
+    const fileName = `assets/products/product-${String(index).padStart(2, '0')}.png`;
+    assert.equal(existsSync(fileName), true, `${fileName} should exist`);
+  }
 });
 
 test('products expose per-item sales counts', () => {

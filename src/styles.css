@@ -776,10 +776,66 @@ body::after {
   font-size: 0.93rem;
 }
 
+.product-card__body--split-detail {
+  gap: 14px;
+}
+
+.product-card__detail-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.84fr) minmax(0, 1.16fr);
+  gap: 14px 18px;
+  align-items: start;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(105, 174, 230, 0.14);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.product-card__meta--stacked {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  justify-items: start;
+  gap: 12px;
+}
+
+.product-card--split-detail .product-card__meta--stacked {
+  display: grid;
+  justify-items: start;
+  align-items: start;
+  grid-auto-rows: min-content;
+}
+
+.product-card__info-line {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+}
+
+.product-card__info-label {
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.product-card__info-value {
+  color: var(--ink);
+  font-size: 1.18rem;
+  font-weight: 700;
+}
+
+.product-card__info-value--muted {
+  font-size: 1.06rem;
+}
+
 .product-card__footer {
   display: grid;
   gap: 12px;
   margin-top: 2px;
+}
+
+.product-card--split-detail .product-card__footer {
+  margin-top: 0;
 }
 
 .product-card__meta {
@@ -816,6 +872,11 @@ body::after {
   flex-wrap: wrap;
 }
 
+.product-card__actions--purchase {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .ghost-button {
   appearance: none;
   border: 1px solid rgba(105, 174, 230, 0.24);
@@ -827,9 +888,19 @@ body::after {
   cursor: pointer;
 }
 
+.product-card--purchase-ui .ghost-button {
+  width: 100%;
+  justify-content: center;
+  padding: 12px 14px;
+}
+
 .ghost-button--solid {
   color: white;
   background: linear-gradient(135deg, rgba(105, 174, 230, 0.92), rgba(95, 144, 184, 0.9));
+}
+
+.ghost-button--buy {
+  box-shadow: 0 16px 30px rgba(75, 143, 223, 0.22);
 }
 
 .footer {
@@ -1080,6 +1151,10 @@ body::after {
 
   .collection-rail,
   .product-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .product-card__detail-grid {
     grid-template-columns: 1fr;
   }
 

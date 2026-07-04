@@ -55,6 +55,7 @@ const PRODUCT_DEFINITIONS = [
     price: 299,
     sales: '3.6k',
     detailLayout: 'split',
+    purchaseLayout: 'buy',
     imageFit: 'contain',
     detail: '黑色漆皮与蝴蝶结搭扣组合，脚背线条和鞋面弧度都很清楚。',
   },
@@ -65,6 +66,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 289,
     sales: '3.3k',
+    imageFit: 'contain',
     detail: '轻薄绑带搭配珍珠细节，适合夏季清爽感展示。',
   },
   {
@@ -74,6 +76,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 279,
     sales: '3.1k',
+    imageFit: 'contain',
     detail: '浅口轮廓干净利落，能很好地突出脚部比例和鞋型。',
   },
   {
@@ -83,6 +86,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 269,
     sales: '2.9k',
+    imageFit: 'contain',
     detail: '偏通勤感的轮廓配上高光漆面，适合日常搭配风格。',
   },
   {

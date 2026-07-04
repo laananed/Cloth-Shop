@@ -46,12 +46,12 @@ test('products render a curated set of twenty items', () => {
 
 test('shoe products keep the full shoe visible in the preview', () => {
   const products = getProducts();
-  const shoeProduct = products.find((item) => item.id === 'product-01');
+  const shoeProducts = products.filter((item) => item.category === '鞋子');
 
-  assert.ok(shoeProduct);
-  assert.equal(shoeProduct.imageFit, 'contain');
-  assert.equal(shoeProduct.imageFocus, undefined);
-  assert.equal(shoeProduct.imageZoom, undefined);
+  assert.equal(shoeProducts.length, 4);
+  assert.ok(shoeProducts.every((item) => item.imageFit === 'contain'));
+  assert.ok(shoeProducts.every((item) => item.imageFocus === undefined));
+  assert.ok(shoeProducts.every((item) => item.imageZoom === undefined));
 });
 
 test('product preview images are present in the workspace', () => {

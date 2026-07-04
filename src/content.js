@@ -2,32 +2,10 @@ export function getSiteCopy() {
   return {
     brandName: '蓝笙织梦',
     slogan: '把海风、云光和二次元日常穿在身上',
-    intro:
-      '为喜欢轻盈、梦幻和少女感穿搭的人准备的服装小店。每一件都像从海边晴天里摘出来的灵感。',
+    intro: '为喜欢轻盈、梦幻和少女感穿搭的人准备的服装小店。每一件都像从海边晴天里摘出来的灵感。',
     primaryCta: '浏览新品',
     secondaryCta: '查看风格',
-    note: '轻互动展示页 · 暂无真实支付',
-  };
-}
-
-export function getAuthCheckoutContract() {
-  return {
-    auth: {
-      loginMethod: 'email-password',
-      session: 'cookie-or-token',
-    },
-    user: {
-      fields: ['email', 'password'],
-    },
-    address: {
-      mode: 'single-default',
-      fields: ['recipientName', 'phone', 'province', 'city', 'detail'],
-      extensible: true,
-    },
-    order: {
-      requiresAuth: true,
-      requiresAddress: true,
-    },
+    note: '首屏登录门禁 + 个人中心侧边栏',
   };
 }
 
@@ -126,4 +104,40 @@ export function getProducts() {
       detail: '裙摆有自然垂坠感，走动时会有很轻的流动感。',
     },
   ];
+}
+
+export function getAuthCheckoutContract() {
+  return {
+    auth: {
+      loginMethod: 'email-password',
+      session: 'cookie-or-token',
+    },
+    address: {
+      mode: 'single-default',
+      fields: ['recipientName', 'phone', 'province', 'city', 'detail'],
+      extensible: true,
+    },
+    sidebar: {
+      sections: ['account', 'address', 'orders'],
+    },
+    order: {
+      requiresAuth: true,
+      requiresAddress: true,
+      historySource: 'backend',
+    },
+  };
+}
+
+export function getPersonalCenterContract() {
+  return {
+    account: {
+      fields: ['email', 'displayName'],
+    },
+    address: {
+      fields: ['recipientName', 'phone', 'province', 'city', 'detail'],
+    },
+    orders: {
+      fields: ['orderNo', 'status', 'items', 'totalPrice', 'createdAt'],
+    },
+  };
 }

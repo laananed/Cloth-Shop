@@ -2,9 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
-import { getAuthCheckoutContract, getCollections, getProducts, getSiteCopy } from '../src/content.js';
+import { getAuthCheckoutContract, getCollections, getPersonalCenterContract, getProducts, getSiteCopy } from '../src/content.js';
 import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
-import { loadStoredProfile, saveStoredProfile, validateRegistration } from '../src/account-state.js';
+import {
+  getStoredProfile,
+  renderOrderItems,
+  saveStoredProfile,
+  validateRegistration,
+} from '../src/account-store.js';
 
 test('site copy keeps the one-page brand-led direction', () => {
   const copy = getSiteCopy();
@@ -51,34 +56,41 @@ test('sales ranks are derived from the highest sales first', () => {
   assert.equal(formatSalesRank(rankMap.get('product-3')), '销量第1名');
 });
 
-test('auth and checkout contract exposes the expected shapes', () => {
-  const contract = getAuthCheckoutContract();
-
-  assert.equal(contract.auth.loginMethod, 'email-password');
-  assert.equal(contract.address.mode, 'single-default');
-  assert.ok(contract.user.fields.includes('email'));
-  assert.ok(contract.user.fields.includes('password'));
-  assert.ok(contract.address.fields.includes('recipientName'));
-  assert.ok(contract.address.fields.includes('phone'));
-  assert.ok(contract.address.fields.includes('province'));
-  assert.ok(contract.address.fields.includes('city'));
-  assert.ok(contract.address.fields.includes('detail'));
-});
-
-test('page exposes login and register entry points', () => {
+test('auth modal opens on load and replaces the inline auth section', () => {
   const html = readFileSync('index.html', 'utf8');
 
-  assert.ok(html.includes('data-auth-entry'));
-  assert.ok(html.includes('data-login-panel'));
-  assert.ok(html.includes('data-register-panel'));
-  assert.ok(html.includes('data-auth-toggle'));
+  assert.ok(html.includes('data-auth-modal'));
+  assert.ok(html.includes('data-auth-tab-login'));
+  assert.ok(html.includes('data-auth-tab-register'));
+  assert.ok(html.includes('data-auth-close'));
+  assert.ok(!html.includes('data-auth-entry'));
 });
 
-test('checkout page exposes a saved-address form', () => {
+test('site exposes a personal sidebar shell', () => {
   const html = readFileSync('index.html', 'utf8');
 
-  assert.ok(html.includes('data-checkout-entry'));
-  assert.ok(html.includes('data-address-form'));
+  assert.ok(html.includes('data-sidebar'));
+  assert.ok(html.includes('data-sidebar-account'));
+  assert.ok(html.includes('data-sidebar-address'));
+  assert.ok(html.includes('data-sidebar-orders'));
+  assert.ok(html.includes('data-menu-open'));
+  assert.ok(html.includes('data-menu-close'));
+});
+
+test('personal data contract exposes account address and order fields', () => {
+  const contract = getPersonalCenterContract();
+
+  assert.deepEqual(contract.account.fields, ['email', 'displayName']);
+  assert.deepEqual(contract.address.fields, ['recipientName', 'phone', 'province', 'city', 'detail']);
+  assert.ok(contract.orders.fields.includes('orderNo'));
+  assert.ok(contract.orders.fields.includes('status'));
+  assert.ok(contract.orders.fields.includes('items'));
+});
+
+test('sidebar exposes an editable address form', () => {
+  const html = readFileSync('index.html', 'utf8');
+
+  assert.ok(html.includes('data-sidebar-address-form'));
   assert.ok(html.includes('name="recipientName"'));
   assert.ok(html.includes('name="phone"'));
   assert.ok(html.includes('name="province"'));
@@ -100,7 +112,10 @@ test('registration validation rejects mismatched passwords', () => {
 test('stored profile round-trips through storage', () => {
   const storage = createMemoryStorage();
   const profile = {
-    user: { email: 'demo@example.com' },
+    user: {
+      email: 'demo@example.com',
+      displayName: '小蓝',
+    },
     address: {
       recipientName: '小蓝',
       phone: '13800000000',
@@ -112,7 +127,14 @@ test('stored profile round-trips through storage', () => {
 
   saveStoredProfile(storage, profile);
 
-  assert.deepEqual(loadStoredProfile(storage), profile);
+  assert.deepEqual(getStoredProfile(storage), profile);
+});
+
+test('orders panel renders an empty state when there are no orders', () => {
+  const orders = renderOrderItems([]);
+
+  assert.equal(orders.emptyState, '暂无购买记录');
+  assert.deepEqual(orders.items, []);
 });
 
 function createMemoryStorage() {

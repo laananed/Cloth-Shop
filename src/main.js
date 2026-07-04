@@ -1,11 +1,13 @@
 import { getCollections, getProducts, getSiteCopy } from './content.js';
 import { formatSalesRank, getSalesRankMap } from './ranking.js';
 import {
-  loadStoredProfile,
+  getStoredOrders,
+  getStoredProfile,
+  renderOrderItems,
   saveStoredProfile,
   validateAddress,
   validateRegistration,
-} from './account-state.js';
+} from './account-store.js';
 
 const copy = getSiteCopy();
 const collections = getCollections();
@@ -37,16 +39,28 @@ const productGrid = document.querySelector('[data-product-grid]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
 const productCountLabel = document.querySelector('[data-product-count]');
 const hero = document.querySelector('.hero');
-const authToggle = document.querySelector('[data-auth-toggle]');
-const loginPanel = document.querySelector('[data-login-panel]');
-const registerPanel = document.querySelector('[data-register-panel]');
-const authFeedback = document.querySelector('[data-auth-feedback]');
-const addressForm = document.querySelector('[data-address-form]');
-const checkoutFeedback = document.querySelector('[data-checkout-feedback]');
-const addressFields = addressForm ? Array.from(addressForm.querySelectorAll('input, textarea')) : [];
 
-const heroImageUrl = './assets/products/product-01.png';
-const storedProfile = loadStoredProfile(window.localStorage);
+const authModal = document.querySelector('[data-auth-modal]');
+const authCloseButtons = document.querySelectorAll('[data-auth-close]');
+const authTabLogin = document.querySelector('[data-auth-tab-login]');
+const authTabRegister = document.querySelector('[data-auth-tab-register]');
+const loginForm = document.querySelector('[data-auth-login-form]');
+const registerForm = document.querySelector('[data-auth-register-form]');
+const authFeedback = document.querySelector('[data-auth-feedback]');
+
+const sidebar = document.querySelector('[data-sidebar]');
+const menuOpenButton = document.querySelector('[data-menu-open]');
+const menuCloseButtons = document.querySelectorAll('[data-menu-close]');
+const sidebarAccount = document.querySelector('[data-sidebar-account]');
+const sidebarAddressForm = document.querySelector('[data-sidebar-address-form]');
+const sidebarAddressFeedback = document.querySelector('[data-sidebar-address-feedback]');
+const ordersList = document.querySelector('[data-orders-list]');
+const accountEmail = document.querySelector('[data-account-email]');
+const accountDisplayName = document.querySelector('[data-account-display-name]');
+
+const storage = window.localStorage;
+const storedProfile = getStoredProfile(storage);
+const storedOrders = getStoredOrders(storage);
 
 let activeCategory = '全部';
 let scrollFrame = 0;
@@ -56,6 +70,7 @@ function formatPrice(value) {
 }
 
 function renderHero() {
+  const heroImageUrl = './assets/products/product-01.png';
   hero.style.setProperty('--hero-image', `url("${heroImageUrl}")`);
   document.body.style.setProperty('--page-portrait', `url("${heroImageUrl}")`);
   heroTitle.textContent = copy.brandName;
@@ -140,35 +155,80 @@ function readFieldValues(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
-function getCurrentProfile() {
-  const profile = loadStoredProfile(window.localStorage);
-  return profile || { user: null, address: null };
+function openAuthModal() {
+  authModal.classList.add('is-open');
+  authModal.setAttribute('aria-hidden', 'false');
 }
 
-function prefillStoredState() {
-  if (!storedProfile) {
-    return;
+function closeAuthModal() {
+  authModal.classList.remove('is-open');
+  authModal.setAttribute('aria-hidden', 'true');
+}
+
+function openSidebar() {
+  sidebar.classList.add('is-open');
+  sidebar.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('has-sidebar');
+}
+
+function closeSidebar() {
+  sidebar.classList.remove('is-open');
+  sidebar.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('has-sidebar');
+}
+
+function getDisplayName(email, fallback = '') {
+  if (fallback) {
+    return fallback;
   }
 
-  if (storedProfile.user?.email) {
-    const emailInput = loginPanel?.querySelector('input[name="email"]');
-    const registerEmailInput = registerPanel?.querySelector('input[name="email"]');
+  return email.includes('@') ? email.split('@')[0] : email;
+}
 
-    if (emailInput) {
-      emailInput.value = storedProfile.user.email;
-    }
+function renderSidebar() {
+  const profile = getStoredProfile(storage);
+  const email = profile?.user?.email || '未登录';
+  const displayName = profile?.user?.displayName || '未设置';
 
-    if (registerEmailInput) {
-      registerEmailInput.value = storedProfile.user.email;
-    }
+  if (accountEmail) {
+    accountEmail.textContent = email;
   }
 
-  if (storedProfile.address) {
-    addressFields.forEach((field) => {
-      if (field.name in storedProfile.address) {
-        field.value = storedProfile.address[field.name] || '';
+  if (accountDisplayName) {
+    accountDisplayName.textContent = displayName;
+  }
+
+  const address = profile?.address || {};
+  if (sidebarAddressForm) {
+    Object.entries(address).forEach(([key, value]) => {
+      const field = sidebarAddressForm.elements.namedItem(key);
+      if (field) {
+        field.value = value || '';
       }
     });
+  }
+
+  const orderView = renderOrderItems(storedOrders);
+  if (ordersList) {
+    if (orderView.emptyState) {
+      ordersList.innerHTML = `<p class="orders-empty">${orderView.emptyState}</p>`;
+    } else {
+      ordersList.innerHTML = orderView.items
+        .map(
+          (order) => `
+            <article class="order-card">
+              <div class="order-card__header">
+                <strong>${order.orderNo}</strong>
+                <span>${order.status}</span>
+              </div>
+              <p>${order.items.join(' · ')}</p>
+              <p>合计：¥${order.totalPrice}</p>
+              <p>${order.createdAt}</p>
+            </article>
+          `,
+        )
+        .join('');
+    }
   }
 }
 
@@ -213,37 +273,55 @@ collectionRail.addEventListener('click', (event) => {
   updateView();
 });
 
-if (authToggle && loginPanel && registerPanel) {
-  authToggle.addEventListener('click', () => {
-    loginPanel.classList.toggle('is-hidden');
-    registerPanel.classList.toggle('is-hidden');
-    setFeedback(authFeedback, '');
+if (authTabLogin && authTabRegister && loginForm && registerForm) {
+  authTabLogin.addEventListener('click', () => {
+    authTabLogin.classList.add('is-active');
+    authTabRegister.classList.remove('is-active');
+    loginForm.classList.remove('is-hidden');
+    registerForm.classList.add('is-hidden');
+  });
+
+  authTabRegister.addEventListener('click', () => {
+    authTabRegister.classList.add('is-active');
+    authTabLogin.classList.remove('is-active');
+    registerForm.classList.remove('is-hidden');
+    loginForm.classList.add('is-hidden');
   });
 }
 
-if (loginPanel) {
-  loginPanel.addEventListener('submit', (event) => {
+authCloseButtons.forEach((button) => {
+  button.addEventListener('click', () => closeAuthModal());
+});
+
+if (loginForm) {
+  loginForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    const values = readFieldValues(loginPanel);
+    const values = readFieldValues(loginForm);
 
     if (!values.email || !values.password) {
       setFeedback(authFeedback, '请先填写邮箱和密码。', true);
       return;
     }
 
-    const profile = getCurrentProfile();
-    saveStoredProfile(window.localStorage, {
-      user: { email: String(values.email) },
+    const profile = getStoredProfile(storage) || {};
+    saveStoredProfile(storage, {
+      user: {
+        email: String(values.email),
+        displayName: profile.user?.displayName || getDisplayName(String(values.email)),
+      },
       address: profile.address || null,
     });
-    setFeedback(authFeedback, '登录信息已保存，地址可以继续复用。');
+
+    setFeedback(authFeedback, '登录信息已保存。');
+    renderSidebar();
+    closeAuthModal();
   });
 }
 
-if (registerPanel) {
-  registerPanel.addEventListener('submit', (event) => {
+if (registerForm) {
+  registerForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    const values = readFieldValues(registerPanel);
+    const values = readFieldValues(registerForm);
     const validation = validateRegistration(values);
 
     if (!validation.ok) {
@@ -255,29 +333,46 @@ if (registerPanel) {
       return;
     }
 
-    const profile = getCurrentProfile();
-    saveStoredProfile(window.localStorage, {
-      user: { email: String(values.email) },
+    const profile = getStoredProfile(storage) || {};
+    saveStoredProfile(storage, {
+      user: {
+        email: String(values.email),
+        displayName: String(values.displayName || getDisplayName(String(values.email))),
+      },
       address: profile.address || null,
     });
-    setFeedback(authFeedback, '注册成功，账号信息已保存到本地。');
+
+    setFeedback(authFeedback, '注册成功，账号信息已保存。');
+    renderSidebar();
+    closeAuthModal();
   });
 }
 
-if (addressForm) {
-  addressForm.addEventListener('submit', (event) => {
+if (menuOpenButton) {
+  menuOpenButton.addEventListener('click', () => {
+    openSidebar();
+    renderSidebar();
+  });
+}
+
+menuCloseButtons.forEach((button) => {
+  button.addEventListener('click', () => closeSidebar());
+});
+
+if (sidebarAddressForm) {
+  sidebarAddressForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    const values = readFieldValues(addressForm);
+    const values = readFieldValues(sidebarAddressForm);
     const validation = validateAddress(values);
 
     if (!validation.ok) {
-      setFeedback(checkoutFeedback, '请把收货人、手机号和地址信息填写完整。', true);
+      setFeedback(sidebarAddressFeedback, '请把收件人、手机号和地址信息填写完整。', true);
       return;
     }
 
-    const profile = getCurrentProfile();
-    saveStoredProfile(window.localStorage, {
-      user: profile.user,
+    const profile = getStoredProfile(storage) || {};
+    saveStoredProfile(storage, {
+      user: profile.user || { email: '', displayName: '' },
       address: {
         recipientName: String(values.recipientName),
         phone: String(values.phone),
@@ -286,23 +381,36 @@ if (addressForm) {
         detail: String(values.detail),
       },
     });
-    setFeedback(checkoutFeedback, '收货地址已保存，下次结算会自动带出。');
+
+    setFeedback(sidebarAddressFeedback, '收货地址已保存。');
+    renderSidebar();
   });
 }
 
-prefillStoredState();
+if (primaryCta) {
+  primaryCta.addEventListener('click', () => {
+    document.querySelector('#products').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
 
-primaryCta.addEventListener('click', () => {
-  document.querySelector('#products').scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
+if (secondaryCta) {
+  secondaryCta.addEventListener('click', () => {
+    document.querySelector('#collections').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
 
-secondaryCta.addEventListener('click', () => {
-  document.querySelector('#collections').scrollIntoView({ behavior: 'smooth', block: 'start' });
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeAuthModal();
+    closeSidebar();
+  }
 });
 
 window.addEventListener('scroll', scheduleHeroParallax, { passive: true });
 window.addEventListener('resize', scheduleHeroParallax);
 
+openAuthModal();
 renderHero();
 updateView();
+renderSidebar();
 updateHeroParallax();

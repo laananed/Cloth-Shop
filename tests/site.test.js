@@ -5,8 +5,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { getAuthCheckoutContract, getCollections, getPersonalCenterContract, getProducts, getSiteCopy } from '../src/content.js';
 import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
 import {
+  getStoredCart,
+  getStoredFavorites,
   getStoredProfile,
   renderOrderItems,
+  renderSavedProductItems,
+  saveStoredCart,
+  saveStoredFavorites,
   saveStoredProfile,
   validateRegistration,
 } from '../src/account-store.js';
@@ -54,6 +59,16 @@ test('shoe products keep the full shoe visible in the preview', () => {
   assert.ok(shoeProducts.every((item) => item.imageZoom === undefined));
 });
 
+test('stocking products keep the full silhouette visible in the preview', () => {
+  const products = getProducts();
+  const stockingProducts = products.filter((item) => item.category === '丝袜');
+
+  assert.equal(stockingProducts.length, 4);
+  assert.ok(stockingProducts.every((item) => item.imageFit === 'contain'));
+  assert.ok(stockingProducts.every((item) => item.imageFocus === undefined));
+  assert.ok(stockingProducts.every((item) => item.imageZoom === undefined));
+});
+
 test('product preview images are present in the workspace', () => {
   const products = getProducts();
 
@@ -72,12 +87,31 @@ test('products expose per-item sales counts', () => {
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
 });
 
-test('purchase cards expose 收藏夹 购物车 立即购买 actions', () => {
+test('all products use the split purchase card format', () => {
+  const products = getProducts();
+
+  assert.equal(products.length, 20);
+  assert.ok(products.every((item) => item.detailLayout === 'split'));
+  assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
+});
+
+test('purchase cards hide text on the icon action buttons', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
 
-  assert.ok(mainJs.includes('加入收藏夹'));
-  assert.ok(mainJs.includes('加入购物车'));
+  assert.ok(mainJs.includes('getFavoriteIcon'));
+  assert.ok(mainJs.includes('getCartIcon'));
+  assert.ok(mainJs.includes('aria-label="加入收藏夹"'));
+  assert.ok(mainJs.includes('aria-label="加入购物车"'));
+  assert.ok(!mainJs.includes('<span>加入收藏夹</span>'));
+  assert.ok(!mainJs.includes('<span>加入购物车</span>'));
   assert.ok(mainJs.includes('立即购买'));
+});
+
+test('hero background supports the page portrait overlay', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('--hero-image'));
+  assert.ok(mainJs.includes('--page-portrait'));
 });
 
 test('sales ranks are derived from the highest sales first', () => {
@@ -115,14 +149,22 @@ test('site exposes a personal sidebar shell', () => {
   const html = readFileSync('index.html', 'utf8');
 
   assert.ok(html.includes('data-sidebar'));
+  assert.ok(html.includes('data-sidebar-nav'));
+  assert.ok(html.includes('data-sidebar-panel-account'));
+  assert.ok(html.includes('data-sidebar-panel-address'));
+  assert.ok(html.includes('data-sidebar-panel-orders'));
+  assert.ok(html.includes('data-sidebar-panel-favorites'));
+  assert.ok(html.includes('data-sidebar-panel-cart'));
   assert.ok(html.includes('data-sidebar-account'));
   assert.ok(html.includes('data-sidebar-address'));
   assert.ok(html.includes('data-sidebar-orders'));
+  assert.ok(html.includes('data-sidebar-favorites'));
+  assert.ok(html.includes('data-sidebar-cart'));
   assert.ok(html.includes('data-menu-open'));
   assert.ok(html.includes('data-menu-close'));
 });
 
-test('personal data contract exposes account address and order fields', () => {
+test('personal data contract exposes account address order favorite and cart fields', () => {
   const contract = getPersonalCenterContract();
 
   assert.deepEqual(contract.account.fields, ['email', 'displayName']);
@@ -130,6 +172,8 @@ test('personal data contract exposes account address and order fields', () => {
   assert.ok(contract.orders.fields.includes('orderNo'));
   assert.ok(contract.orders.fields.includes('status'));
   assert.ok(contract.orders.fields.includes('items'));
+  assert.deepEqual(contract.favorites.fields, ['id', 'name', 'price', 'badge']);
+  assert.deepEqual(contract.cart.fields, ['id', 'name', 'price', 'quantity']);
 });
 
 test('sidebar exposes an editable address form', () => {
@@ -178,8 +222,27 @@ test('stored profile round-trips through storage', () => {
 test('orders panel renders an empty state when there are no orders', () => {
   const orders = renderOrderItems([]);
 
-  assert.equal(orders.emptyState, '暂无购买记录');
+  assert.equal(orders.emptyState, '鏆傛棤璐拱璁板綍');
   assert.deepEqual(orders.items, []);
+});
+
+test('favorite and cart shelves round-trip through storage', () => {
+  const storage = createMemoryStorage();
+  const favorites = [{ id: 'product-01', name: '示例收藏', price: 299, badge: '主推' }];
+  const cart = [{ id: 'product-02', name: '示例购物车', price: 289, quantity: 2 }];
+
+  saveStoredFavorites(storage, favorites);
+  saveStoredCart(storage, cart);
+
+  assert.deepEqual(getStoredFavorites(storage), favorites);
+  assert.deepEqual(getStoredCart(storage), cart);
+});
+
+test('saved product shelves render an empty state when there are no items', () => {
+  const rendered = renderSavedProductItems([], '暂无数据');
+
+  assert.equal(rendered.emptyState, '暂无数据');
+  assert.deepEqual(rendered.items, []);
 });
 
 function createMemoryStorage() {

@@ -13,7 +13,7 @@
   <body>
     <button class="site-menu-button" type="button" data-menu-open aria-label="打开个人中心">☰</button>
 
-    <div class="auth-modal is-open" data-auth-modal>
+    <div class="auth-modal" data-auth-modal aria-hidden="true">
       <button class="auth-modal__backdrop" type="button" data-auth-close aria-label="关闭登录弹窗"></button>
       <section class="auth-modal__panel" role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <header class="auth-modal__header">
@@ -71,52 +71,87 @@
         <header class="sidebar__header">
           <div>
             <p class="sidebar__eyebrow">个人中心</p>
-            <h2 id="sidebar-title">账号、地址、购买记录</h2>
+            <h2 id="sidebar-title" data-sidebar-title>账号信息</h2>
+            <p class="sidebar__subtitle" data-sidebar-subtitle>登录后这里会显示你的账号资料。</p>
           </div>
           <button class="sidebar__close" type="button" data-menu-close aria-label="关闭侧边栏">×</button>
         </header>
 
-        <section class="sidebar-block" data-sidebar-account>
-          <h3>登录信息</h3>
-          <div class="sidebar-account__summary">
-            <p><strong>邮箱：</strong><span data-account-email>未登录</span></p>
-            <p><strong>昵称：</strong><span data-account-display-name>未设置</span></p>
-            <p class="sidebar-account__hint">登录后这里会显示你的账号资料。</p>
+        <div class="sidebar__layout">
+          <nav class="sidebar-nav" data-sidebar-nav aria-label="个人中心切换">
+            <button class="sidebar-nav__button is-active" type="button" data-sidebar-target="account">账号信息</button>
+            <button class="sidebar-nav__button" type="button" data-sidebar-target="address">收货地址</button>
+            <button class="sidebar-nav__button" type="button" data-sidebar-target="orders">购买记录</button>
+            <button class="sidebar-nav__button" type="button" data-sidebar-target="favorites">收藏夹</button>
+            <button class="sidebar-nav__button" type="button" data-sidebar-target="cart">购物车</button>
+          </nav>
+
+          <div class="sidebar__content">
+            <section class="sidebar-view is-active" data-sidebar-panel="account" data-sidebar-panel-account data-sidebar-account>
+              <div class="sidebar-block">
+                <h3>登录信息</h3>
+                <div class="sidebar-account__summary">
+                  <p><strong>邮箱：</strong><span data-account-email>未登录</span></p>
+                  <p><strong>昵称：</strong><span data-account-display-name>未设置</span></p>
+                  <p class="sidebar-account__hint">登录后这里会显示你的账号资料。</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="sidebar-view" data-sidebar-panel="address" data-sidebar-panel-address data-sidebar-address>
+              <div class="sidebar-block">
+                <h3>收货地址</h3>
+                <form class="sidebar-form" data-sidebar-address-form>
+                  <label class="form-field">
+                    <span>收件人</span>
+                    <input type="text" name="recipientName" placeholder="请输入收件人姓名" />
+                  </label>
+                  <label class="form-field">
+                    <span>手机号</span>
+                    <input type="tel" name="phone" placeholder="请输入手机号" />
+                  </label>
+                  <label class="form-field">
+                    <span>省份</span>
+                    <input type="text" name="province" placeholder="例如：广东省" />
+                  </label>
+                  <label class="form-field">
+                    <span>城市</span>
+                    <input type="text" name="city" placeholder="例如：广州市" />
+                  </label>
+                  <label class="form-field">
+                    <span>详细地址</span>
+                    <textarea name="detail" rows="3" placeholder="街道、门牌号、楼栋等"></textarea>
+                  </label>
+                  <button class="button button--primary sidebar-form__submit" type="submit">保存地址</button>
+                </form>
+                <p class="sidebar-feedback" data-sidebar-address-feedback aria-live="polite"></p>
+              </div>
+            </section>
+
+            <section class="sidebar-view" data-sidebar-panel="orders" data-sidebar-panel-orders data-sidebar-orders>
+              <div class="sidebar-block">
+                <h3>购买记录</h3>
+                <div class="orders-list" data-orders-list></div>
+              </div>
+            </section>
+
+            <section class="sidebar-view" data-sidebar-panel="favorites" data-sidebar-panel-favorites data-sidebar-favorites>
+              <div class="sidebar-block">
+                <h3>收藏夹</h3>
+                <div class="saved-list" data-favorites-list></div>
+                <p class="sidebar-feedback" data-sidebar-favorites-feedback aria-live="polite"></p>
+              </div>
+            </section>
+
+            <section class="sidebar-view" data-sidebar-panel="cart" data-sidebar-panel-cart data-sidebar-cart>
+              <div class="sidebar-block">
+                <h3>购物车</h3>
+                <div class="saved-list" data-cart-list></div>
+                <p class="sidebar-feedback" data-sidebar-cart-feedback aria-live="polite"></p>
+              </div>
+            </section>
           </div>
-        </section>
-
-        <section class="sidebar-block" data-sidebar-address>
-          <h3>地址信息</h3>
-          <form class="sidebar-form" data-sidebar-address-form>
-            <label class="form-field">
-              <span>收件人</span>
-              <input type="text" name="recipientName" placeholder="请输入收件人姓名" />
-            </label>
-            <label class="form-field">
-              <span>手机号</span>
-              <input type="tel" name="phone" placeholder="请输入手机号" />
-            </label>
-            <label class="form-field">
-              <span>省份</span>
-              <input type="text" name="province" placeholder="例如：广东省" />
-            </label>
-            <label class="form-field">
-              <span>城市</span>
-              <input type="text" name="city" placeholder="例如：广州市" />
-            </label>
-            <label class="form-field">
-              <span>详细地址</span>
-              <textarea name="detail" rows="3" placeholder="街道、门牌号、楼栋等"></textarea>
-            </label>
-            <button class="button button--primary sidebar-form__submit" type="submit">保存地址</button>
-          </form>
-          <p class="sidebar-feedback" data-sidebar-address-feedback aria-live="polite"></p>
-        </section>
-
-        <section class="sidebar-block" data-sidebar-orders>
-          <h3>购买记录</h3>
-          <div class="orders-list" data-orders-list></div>
-        </section>
+        </div>
       </section>
     </aside>
 
@@ -185,7 +220,7 @@
           </p>
         </div>
         <div class="footer__utility">
-          <p>配送提示：现阶段为静态展示页，可后续接入真实库存与下单流程。</p>
+          <p>配送提示：当前阶段为静态展示页，可后续接入真实库存与下单流程。</p>
           <div class="footer__social" aria-label="社交链接">
             <a href="#" aria-label="小红书">小红书</a>
             <a href="#" aria-label="微博">微博</a>
@@ -195,6 +230,6 @@
       </footer>
     </main>
 
-    <script type="module" src="./src/main.js?v=20260704k"></script>
+    <script type="module" src="./src/main.js?v=20260704m"></script>
   </body>
 </html>

@@ -1,13 +1,18 @@
-﻿import { getCollections, getProducts, getSiteCopy } from './content.js?v=20260704j';
-import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704j';
+import { getCollections, getProducts, getSiteCopy } from './content.js?v=20260704l';
+import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704l';
 import {
+  getStoredCart,
+  getStoredFavorites,
   getStoredOrders,
   getStoredProfile,
   renderOrderItems,
+  renderSavedProductItems,
+  saveStoredCart,
+  saveStoredFavorites,
   saveStoredProfile,
   validateAddress,
   validateRegistration,
-} from './account-store.js?v=20260704j';
+} from './account-store.js?v=20260704l';
 
 const copy = getSiteCopy();
 const collections = getCollections();
@@ -37,18 +42,48 @@ const authFeedback = document.querySelector('[data-auth-feedback]');
 const sidebar = document.querySelector('[data-sidebar]');
 const menuOpenButton = document.querySelector('[data-menu-open]');
 const menuCloseButtons = document.querySelectorAll('[data-menu-close]');
-const sidebarAccount = document.querySelector('[data-sidebar-account]');
+const sidebarTitle = document.querySelector('[data-sidebar-title]');
+const sidebarSubtitle = document.querySelector('[data-sidebar-subtitle]');
+const sidebarNavButtons = document.querySelectorAll('[data-sidebar-target]');
+const sidebarPanels = document.querySelectorAll('[data-sidebar-panel]');
 const sidebarAddressForm = document.querySelector('[data-sidebar-address-form]');
 const sidebarAddressFeedback = document.querySelector('[data-sidebar-address-feedback]');
+const sidebarFavoritesFeedback = document.querySelector('[data-sidebar-favorites-feedback]');
+const sidebarCartFeedback = document.querySelector('[data-sidebar-cart-feedback]');
+const favoritesList = document.querySelector('[data-favorites-list]');
+const cartList = document.querySelector('[data-cart-list]');
 const ordersList = document.querySelector('[data-orders-list]');
 const accountEmail = document.querySelector('[data-account-email]');
 const accountDisplayName = document.querySelector('[data-account-display-name]');
 
 const storage = window.localStorage;
-const storedProfile = getStoredProfile(storage);
 const storedOrders = getStoredOrders(storage);
 
+const sidebarMeta = {
+  account: {
+    title: '账号信息',
+    subtitle: '登录后这里会显示你的账号资料。',
+  },
+  address: {
+    title: '收货地址',
+    subtitle: '把常用地址收进这里，查看和修改都更快。',
+  },
+  orders: {
+    title: '购买记录',
+    subtitle: '这里会按时间展示你的历史订单。',
+  },
+  favorites: {
+    title: '收藏夹',
+    subtitle: '收藏过的商品会集中显示在这里。',
+  },
+  cart: {
+    title: '购物车',
+    subtitle: '你加入购物车的商品会集中显示在这里。',
+  },
+};
+
 let activeCategory = '全部';
+let activeSidebarSection = 'account';
 let scrollFrame = 0;
 
 function formatPrice(value) {
@@ -135,7 +170,7 @@ function renderProducts() {
       const isTopSeller = salesRankMap.get(product.id) === 1;
 
       return `
-        <article class="product-card ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}">
+        <article class="product-card ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
           <div class="product-card__art" aria-hidden="true">
@@ -147,7 +182,7 @@ function renderProducts() {
             <h3>${product.name}</h3>
             ${
               isSplitDetail
-              ? `
+                ? `
             <div class="product-card__detail-grid">
               <div class="product-card__meta product-card__meta--stacked">
                 <div class="product-card__info-line">
@@ -174,10 +209,10 @@ function renderProducts() {
                 ${
                   isPurchaseUi
                     ? `
-                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入收藏夹">
+                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入收藏夹" data-sidebar-launch="favorites">
                   <span class="ghost-button__icon">${getFavoriteIcon()}</span>
                 </button>
-                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入购物车">
+                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入购物车" data-sidebar-launch="cart">
                   <span class="ghost-button__icon">${getCartIcon()}</span>
                 </button>
                 <button type="button" class="ghost-button ghost-button--solid ghost-button--buy">立即购买</button>
@@ -224,18 +259,6 @@ function closeAuthModal() {
   authModal.setAttribute('aria-hidden', 'true');
 }
 
-function openSidebar() {
-  sidebar.classList.add('is-open');
-  sidebar.setAttribute('aria-hidden', 'false');
-  document.body.classList.add('has-sidebar');
-}
-
-function closeSidebar() {
-  sidebar.classList.remove('is-open');
-  sidebar.setAttribute('aria-hidden', 'true');
-  document.body.classList.remove('has-sidebar');
-}
-
 function getDisplayName(email, fallback = '') {
   if (fallback) {
     return fallback;
@@ -244,10 +267,122 @@ function getDisplayName(email, fallback = '') {
   return email.includes('@') ? email.split('@')[0] : email;
 }
 
+function openSidebar(section = 'account') {
+  activeSidebarSection = sidebarMeta[section] ? section : 'account';
+  sidebar.classList.add('is-open');
+  sidebar.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('has-sidebar');
+  renderSidebar();
+}
+
+function closeSidebar() {
+  sidebar.classList.remove('is-open');
+  sidebar.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('has-sidebar');
+}
+
+function getStoredProductById(productId) {
+  return products.find((product) => product.id === productId) || null;
+}
+
+function upsertFavorite(product) {
+  const favorites = getStoredFavorites(storage);
+
+  if (favorites.some((item) => item.id === product.id)) {
+    return favorites;
+  }
+
+  const nextFavorites = [
+    ...favorites,
+    {
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      badge: product.badge,
+      category: product.category,
+      image: product.image,
+    },
+  ];
+
+  saveStoredFavorites(storage, nextFavorites);
+  return nextFavorites;
+}
+
+function upsertCartItem(product) {
+  const cart = getStoredCart(storage);
+  const nextCart = [...cart];
+  const existingIndex = nextCart.findIndex((item) => item.id === product.id);
+
+  if (existingIndex >= 0) {
+    nextCart[existingIndex] = {
+      ...nextCart[existingIndex],
+      quantity: Number(nextCart[existingIndex].quantity || 1) + 1,
+    };
+  } else {
+    nextCart.push({
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      badge: product.badge,
+      category: product.category,
+      image: product.image,
+      quantity: 1,
+    });
+  }
+
+  saveStoredCart(storage, nextCart);
+  return nextCart;
+}
+
+function renderProductShelf(listElement, items, emptyState, { showQuantity = false } = {}) {
+  const shelf = renderSavedProductItems(items, emptyState);
+
+  if (!listElement) {
+    return;
+  }
+
+  if (shelf.emptyState) {
+    listElement.innerHTML = `<p class="sidebar-empty">${shelf.emptyState}</p>`;
+    return;
+  }
+
+  listElement.innerHTML = shelf.items
+    .map(
+      (item) => `
+        <article class="saved-item">
+          <div class="saved-item__header">
+            <strong>${item.name}</strong>
+            <span>${item.badge}</span>
+          </div>
+          <p>${item.category}</p>
+          <p>${formatPrice(item.price)}${showQuantity ? ` × ${item.quantity}` : ''}</p>
+        </article>
+      `,
+    )
+    .join('');
+}
+
 function renderSidebar() {
   const profile = getStoredProfile(storage);
   const email = profile?.user?.email || '未登录';
   const displayName = profile?.user?.displayName || '未设置';
+  const meta = sidebarMeta[activeSidebarSection] || sidebarMeta.account;
+
+  if (sidebarTitle) {
+    sidebarTitle.textContent = meta.title;
+  }
+
+  if (sidebarSubtitle) {
+    sidebarSubtitle.textContent = meta.subtitle;
+  }
+
+  sidebarNavButtons.forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.sidebarTarget === activeSidebarSection);
+  });
+
+  sidebarPanels.forEach((panel) => {
+    panel.classList.toggle('is-active', panel.dataset.sidebarPanel === activeSidebarSection);
+  });
 
   if (accountEmail) {
     accountEmail.textContent = email;
@@ -289,6 +424,9 @@ function renderSidebar() {
         .join('');
     }
   }
+
+  renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
+  renderProductShelf(cartList, getStoredCart(storage), '暂无购物车', { showQuantity: true });
 }
 
 function updateHeroParallax() {
@@ -330,6 +468,12 @@ collectionRail.addEventListener('click', (event) => {
 
   activeCategory = button.dataset.collection;
   updateView();
+});
+
+sidebarNavButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    openSidebar(button.dataset.sidebarTarget);
+  });
 });
 
 if (authTabLogin && authTabRegister && loginForm && registerForm) {
@@ -409,8 +553,7 @@ if (registerForm) {
 
 if (menuOpenButton) {
   menuOpenButton.addEventListener('click', () => {
-    openSidebar();
-    renderSidebar();
+    openSidebar('account');
   });
 }
 
@@ -443,6 +586,36 @@ if (sidebarAddressForm) {
 
     setFeedback(sidebarAddressFeedback, '收货地址已保存。');
     renderSidebar();
+  });
+}
+
+if (productGrid) {
+  productGrid.addEventListener('click', (event) => {
+    const actionButton = event.target.closest('[data-sidebar-launch]');
+    if (!actionButton) {
+      return;
+    }
+
+    const productCard = actionButton.closest('[data-product-id]');
+    const productId = productCard?.dataset.productId;
+    const product = getStoredProductById(productId);
+
+    if (!product) {
+      return;
+    }
+
+    if (actionButton.dataset.sidebarLaunch === 'favorites') {
+      upsertFavorite(product);
+      setFeedback(sidebarFavoritesFeedback, '已加入收藏夹。');
+      openSidebar('favorites');
+      return;
+    }
+
+    if (actionButton.dataset.sidebarLaunch === 'cart') {
+      upsertCartItem(product);
+      setFeedback(sidebarCartFeedback, '已加入购物车。');
+      openSidebar('cart');
+    }
   });
 }
 

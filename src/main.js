@@ -174,13 +174,11 @@ function renderProducts() {
                 ${
                   isPurchaseUi
                     ? `
-                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline">
+                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入收藏夹">
                   <span class="ghost-button__icon">${getFavoriteIcon()}</span>
-                  <span>加入收藏夹</span>
                 </button>
-                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline">
+                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入购物车">
                   <span class="ghost-button__icon">${getCartIcon()}</span>
-                  <span>加入购物车</span>
                 </button>
                 <button type="button" class="ghost-button ghost-button--solid ghost-button--buy">立即购买</button>
                     `

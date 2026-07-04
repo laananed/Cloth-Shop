@@ -104,6 +104,17 @@ test('site exposes a personal sidebar shell', () => {
   assert.ok(html.includes('data-menu-close'));
 });
 
+test('hero background supports a first mode and a full-page comparison mode', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(mainJs.includes('Image_1779725258518.png'));
+  assert.ok(mainJs.includes('bg=page'));
+  assert.ok(styles.includes('body[data-background-mode="page"]::before'));
+  assert.ok(styles.includes('hero[data-background-mode="hero"] .hero__bg'));
+  assert.ok(styles.includes('--page-portrait-size'));
+});
+
 test('personal data contract exposes account address and order fields', () => {
   const contract = getPersonalCenterContract();
 

@@ -47,6 +47,10 @@ const accountDisplayName = document.querySelector('[data-account-display-name]')
 const storage = window.localStorage;
 const storedProfile = getStoredProfile(storage);
 const storedOrders = getStoredOrders(storage);
+const heroBackgroundUrl = 'file:///C:/Users/Free/Downloads/%E5%9B%BE%E7%89%87/Image_1779725258518.png';
+const backgroundMode = window.location.search.includes('bg=page')
+  ? 'page'
+  : 'hero';
 
 let activeCategory = '全部';
 let scrollFrame = 0;
@@ -56,9 +60,14 @@ function formatPrice(value) {
 }
 
 function renderHero() {
-  const heroImageUrl = products[0]?.image || './assets/products/product-01.png';
+  const isPageBackdropMode = backgroundMode === 'page';
+  const heroImageUrl = heroBackgroundUrl;
+  const pageBackdropUrl = heroBackgroundUrl;
+
   hero.style.setProperty('--hero-image', `url("${heroImageUrl}")`);
-  document.body.style.setProperty('--page-portrait', `url("${heroImageUrl}")`);
+  document.body.style.setProperty('--page-portrait', `url("${pageBackdropUrl}")`);
+  document.body.dataset.backgroundMode = backgroundMode;
+  hero.dataset.backgroundMode = backgroundMode;
   heroTitle.textContent = copy.brandName;
   heroSlogan.textContent = copy.slogan;
   heroIntro.textContent = copy.intro;
@@ -222,20 +231,30 @@ function updateHeroParallax() {
   const rect = hero.getBoundingClientRect();
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
   const centerRatio = Math.min(1, Math.max(0, (viewportHeight - rect.top) / (viewportHeight + rect.height)));
-  const shift = (centerRatio - 0.5) * 42;
-  const opacity = 0.2 + centerRatio * 0.18;
-  const scale = 1.06 + centerRatio * 0.07;
-  const pageShift = Math.max(-28, Math.min(28, window.scrollY * 0.02));
-  const pageScale = 1.03 + Math.min(0.06, window.scrollY * 0.00005);
-  const pageOpacity = 0.14 + Math.min(0.08, centerRatio * 0.04);
+  const isPageBackdropMode = backgroundMode === 'page';
+  const heroShift = (centerRatio - 0.5) * (isPageBackdropMode ? 28 : 40);
+  const opacity = isPageBackdropMode ? 0.22 + centerRatio * 0.1 : 0.48 + centerRatio * 0.18;
+  const scale = isPageBackdropMode ? 1.03 + centerRatio * 0.03 : 1.05 + centerRatio * 0.06;
+  const pageShift = Math.max(-18, Math.min(18, window.scrollY * 0.012));
+  const atTop = window.scrollY <= 8;
+  const pageScale = isPageBackdropMode
+    ? (atTop ? 1 : 1.01 + Math.min(0.03, window.scrollY * 0.00003))
+    : 1.01 + Math.min(0.03, window.scrollY * 0.00003);
+  const pageOpacity = isPageBackdropMode
+    ? (atTop ? 0.42 : 0.3 + Math.min(0.08, centerRatio * 0.05))
+    : 0.16 + Math.min(0.06, centerRatio * 0.03);
+  const pageSize = isPageBackdropMode && atTop ? 'contain' : 'cover';
+  const pagePosition = isPageBackdropMode && atTop ? 'center top' : 'center center';
 
-  hero.style.setProperty('--hero-bg-shift', `${shift}px`);
+  hero.style.setProperty('--hero-bg-shift', `${heroShift}px`);
   hero.style.setProperty('--hero-bg-offset', `${Math.round(centerRatio * 18)}%`);
   hero.style.setProperty('--hero-bg-opacity', `${opacity}`);
   hero.style.setProperty('--hero-bg-scale', `${scale}`);
   document.body.style.setProperty('--page-portrait-shift', `${pageShift}px`);
   document.body.style.setProperty('--page-portrait-scale', `${pageScale}`);
   document.body.style.setProperty('--page-portrait-opacity', `${pageOpacity}`);
+  document.body.style.setProperty('--page-portrait-size', pageSize);
+  document.body.style.setProperty('--page-portrait-position', pagePosition);
 }
 
 function scheduleHeroParallax() {

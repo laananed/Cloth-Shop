@@ -52,7 +52,26 @@ let activeCategory = '全部';
 let scrollFrame = 0;
 
 function formatPrice(value) {
-  return `楼${value}`;
+  return `￥${value}`;
+}
+
+function getFavoriteIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 20.4 4.9 13.7a4.9 4.9 0 0 1 0-7 4.9 4.9 0 0 1 7 0L12 7.8l.1-1.1a4.9 4.9 0 0 1 7 0 4.9 4.9 0 0 1 0 7L12 20.4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" />
+    </svg>
+  `;
+}
+
+function getCartIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3.5 4.5h2.2l2.1 9.1h9.3l1.7-6.2H7.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" />
+      <circle cx="10" cy="19.2" r="1.3" fill="currentColor" />
+      <circle cx="17.2" cy="19.2" r="1.3" fill="currentColor" />
+      <path d="M18.9 4.7v4.2m-2.1-2.1h4.2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" />
+    </svg>
+  `;
 }
 
 function getProductImageStyle(product) {
@@ -155,7 +174,12 @@ function renderProducts() {
                 ${
                   isPurchaseUi
                     ? `
-                <button type="button" class="ghost-button">加入购物车</button>
+                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入收藏夹">
+                  <span class="ghost-button__icon">${getFavoriteIcon()}</span>
+                </button>
+                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入购物车">
+                  <span class="ghost-button__icon">${getCartIcon()}</span>
+                </button>
                 <button type="button" class="ghost-button ghost-button--solid ghost-button--buy">立即购买</button>
                     `
                     : `

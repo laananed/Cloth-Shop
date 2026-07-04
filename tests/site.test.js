@@ -72,6 +72,14 @@ test('products expose per-item sales counts', () => {
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
 });
 
+test('purchase cards expose 收藏夹 购物车 立即购买 actions', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('加入收藏夹'));
+  assert.ok(mainJs.includes('加入购物车'));
+  assert.ok(mainJs.includes('立即购买'));
+});
+
 test('sales ranks are derived from the highest sales first', () => {
   const products = getProducts();
   const rankMap = getSalesRankMap(products);

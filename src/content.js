@@ -123,6 +123,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 199,
     sales: '2.05k',
+    imageFit: 'contain',
     detail: '轻薄透肤感明显，能直接强调腿部线条和整体显长效果。',
   },
   {
@@ -132,6 +133,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 189,
     sales: '1.95k',
+    imageFit: 'contain',
     detail: '深色袜面搭配蝴蝶结装饰，适合更强调腿部氛围感的图。',
   },
   {
@@ -141,6 +143,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 179,
     sales: '1.8k',
+    imageFit: 'contain',
     detail: '网纱纹理更有层次，适合在全身图里做视觉焦点。',
   },
   {
@@ -150,6 +153,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 169,
     sales: '1.7k',
+    imageFit: 'contain',
     detail: '偏基础款的百搭袜型，适合和短裙或短裤一起展示。',
   },
   {
@@ -238,6 +242,8 @@ const PRODUCT_DEFINITIONS = [
 function buildProduct(product) {
   return {
     ...product,
+    detailLayout: product.detailLayout ?? 'split',
+    purchaseLayout: product.purchaseLayout ?? 'buy',
     image: `./assets/products/${product.id}.png`,
   };
 }
@@ -273,7 +279,7 @@ export function getAuthCheckoutContract() {
       extensible: true,
     },
     sidebar: {
-      sections: ['account', 'address', 'orders'],
+      sections: ['account', 'address', 'orders', 'favorites', 'cart'],
     },
     order: {
       requiresAuth: true,
@@ -293,6 +299,12 @@ export function getPersonalCenterContract() {
     },
     orders: {
       fields: ['orderNo', 'status', 'items', 'totalPrice', 'createdAt'],
+    },
+    favorites: {
+      fields: ['id', 'name', 'price', 'badge'],
+    },
+    cart: {
+      fields: ['id', 'name', 'price', 'quantity'],
     },
   };
 }

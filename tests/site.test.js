@@ -18,23 +18,49 @@ test('site copy keeps the one-page brand-led direction', () => {
   assert.equal(typeof copy.slogan, 'string');
 });
 
-test('collections expose exactly three style entrances', () => {
+test('collections expose the expanded category rail', () => {
   const collections = getCollections();
 
-  assert.equal(collections.length, 3);
-  assert.ok(collections.every((item) => typeof item.title === 'string' && item.title.length > 0));
+  assert.equal(collections.length, 9);
+  assert.deepEqual(collections.map((item) => item.title), [
+    '鞋子',
+    '帽子',
+    '丝袜',
+    '连衣裙',
+    '上衣',
+    '短裙',
+    '首饰',
+    '头饰',
+    '包包',
+  ]);
 });
 
-test('products render a curated set of eight items', () => {
+test('products render a curated set of twenty items', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 8);
-  assert.ok(products.every((item) => item.price > 0));
+  assert.equal(products.length, 20);
+  assert.ok(products.every((item) => typeof item.price === 'number' && item.price > 0));
+  assert.equal(new Set(products.map((item) => item.category)).size, 9);
+  assert.ok(products.every((item) => typeof item.image === 'string' && item.image.startsWith('./assets/products/')));
+});
+
+test('shoe products keep the full shoe visible in the preview', () => {
+  const products = getProducts();
+  const shoeProducts = products.filter((item) => item.category === '鞋子');
+
+  assert.equal(shoeProducts.length, 4);
+  assert.ok(shoeProducts.every((item) => item.imageFit === 'contain'));
+  assert.ok(shoeProducts.every((item) => item.imageFocus === undefined));
+  assert.ok(shoeProducts.every((item) => item.imageZoom === undefined));
 });
 
 test('product preview images are present in the workspace', () => {
-  for (let index = 1; index <= 8; index += 1) {
-    const fileName = `assets/products/product-${String(index).padStart(2, '0')}.png`;
+  const products = getProducts();
+
+  assert.equal(products.length, 20);
+
+  for (const product of products) {
+    const fileName = product.image.replace(/^\.\//, '');
     assert.equal(existsSync(fileName), true, `${fileName} should exist`);
   }
 });
@@ -49,11 +75,22 @@ test('products expose per-item sales counts', () => {
 test('sales ranks are derived from the highest sales first', () => {
   const products = getProducts();
   const rankMap = getSalesRankMap(products);
+  const salesValue = (sales) => {
+    const normalized = String(sales).trim().toLowerCase();
 
-  assert.equal(rankMap.get('product-3'), 1);
-  assert.equal(rankMap.get('product-5'), 2);
-  assert.equal(rankMap.get('product-1'), 3);
-  assert.equal(formatSalesRank(rankMap.get('product-3')), '销量第1名');
+    if (normalized.endsWith('k')) {
+      return Math.round(Number.parseFloat(normalized.slice(0, -1)) * 1000);
+    }
+
+    return Number.parseInt(normalized, 10);
+  };
+  const highest = [...products].sort((left, right) => salesValue(right.sales) - salesValue(left.sales))[0];
+  const lowest = [...products].sort((left, right) => salesValue(left.sales) - salesValue(right.sales))[0];
+
+  assert.equal(rankMap.size, products.length);
+  assert.equal(rankMap.get(highest.id), 1);
+  assert.equal(rankMap.get(lowest.id), products.length);
+  assert.equal(formatSalesRank(rankMap.get(highest.id)).includes(String(rankMap.get(highest.id))), true);
 });
 
 test('auth modal opens on load and replaces the inline auth section', () => {

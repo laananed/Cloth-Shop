@@ -1,5 +1,5 @@
-import { getCollections, getProducts, getSiteCopy } from './content.js';
-import { formatSalesRank, getSalesRankMap } from './ranking.js';
+﻿import { getCollections, getProducts, getSiteCopy } from './content.js?v=20260704j';
+import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704j';
 import {
   getStoredOrders,
   getStoredProfile,
@@ -7,26 +7,12 @@ import {
   saveStoredProfile,
   validateAddress,
   validateRegistration,
-} from './account-store.js';
+} from './account-store.js?v=20260704j';
 
 const copy = getSiteCopy();
 const collections = getCollections();
 const products = getProducts();
-const productPreviewImages = [
-  './assets/products/product-01.png',
-  './assets/products/product-02.png',
-  './assets/products/product-03.png',
-  './assets/products/product-04.png',
-  './assets/products/product-05.png',
-  './assets/products/product-06.png',
-  './assets/products/product-07.png',
-  './assets/products/product-08.png',
-];
-const productsWithImages = products.map((product, index) => ({
-  ...product,
-  image: productPreviewImages[index],
-}));
-const salesRankMap = getSalesRankMap(productsWithImages);
+const salesRankMap = getSalesRankMap(products);
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -66,11 +52,30 @@ let activeCategory = '全部';
 let scrollFrame = 0;
 
 function formatPrice(value) {
-  return `¥${value}`;
+  return `楼${value}`;
+}
+
+function getProductImageStyle(product) {
+  const styles = [];
+
+  if (product.imageFit) {
+    styles.push(`object-fit: ${product.imageFit};`);
+  }
+
+  if (product.imageFocus) {
+    styles.push(`object-position: ${product.imageFocus};`);
+  }
+
+  if (product.imageZoom && product.imageZoom !== 1) {
+    styles.push(`transform: scale(${product.imageZoom});`);
+    styles.push('transform-origin: center center;');
+  }
+
+  return styles.join(' ');
 }
 
 function renderHero() {
-  const heroImageUrl = './assets/products/product-01.png';
+  const heroImageUrl = products[0]?.image || './assets/products/product-01.png';
   hero.style.setProperty('--hero-image', `url("${heroImageUrl}")`);
   document.body.style.setProperty('--page-portrait', `url("${heroImageUrl}")`);
   heroTitle.textContent = copy.brandName;
@@ -80,13 +85,12 @@ function renderHero() {
 }
 
 function renderCollections() {
-  const buttons = [{ title: '全部', summary: '浏览全部风格' }, ...collections].map((item) => {
+  const buttons = [{ title: '全部', summary: '浏览全部商品' }, ...collections].map((item) => {
     const isActive = item.title === activeCategory;
 
     return `
       <button class="collection-chip ${isActive ? 'is-active' : ''}" type="button" data-collection="${item.title}">
         <span class="collection-chip__title">${item.title}</span>
-        <span class="collection-chip__summary">${item.summary}</span>
       </button>
     `;
   });
@@ -97,8 +101,8 @@ function renderCollections() {
 
 function filteredProducts() {
   return activeCategory === '全部'
-    ? productsWithImages
-    : productsWithImages.filter((product) => product.category === activeCategory);
+    ? products
+    : products.filter((product) => product.category === activeCategory);
 }
 
 function renderProducts() {
@@ -106,34 +110,65 @@ function renderProducts() {
 
   productCountLabel.textContent = `${visibleProducts.length} 件商品`;
   productGrid.innerHTML = visibleProducts
-    .map(
-      (product) => `
-        <article class="product-card" data-category="${product.category}">
+    .map((product) => {
+      const isSplitDetail = product.detailLayout === 'split';
+      const isPurchaseUi = product.purchaseLayout === 'buy';
+      const isTopSeller = salesRankMap.get(product.id) === 1;
+
+      return `
+        <article class="product-card ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}">
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
           <div class="product-card__art" aria-hidden="true">
-            <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" loading="lazy" decoding="async" />
+            <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" style="${getProductImageStyle(product)}" loading="lazy" decoding="async" />
             <span class="product-card__art-overlay"></span>
           </div>
-          <div class="product-card__body">
+          <div class="product-card__body ${isSplitDetail ? 'product-card__body--split-detail' : ''}">
             <p class="product-card__category">${product.category}</p>
             <h3>${product.name}</h3>
-            <p class="product-card__detail">${product.detail}</p>
-            <div class="product-card__footer">
-              <div class="product-card__meta">
-                <strong>${formatPrice(product.price)}</strong>
-                <span class="product-card__rank">${formatSalesRank(salesRankMap.get(product.id))}</span>
-                <span class="product-card__sales">销量 ${product.sales}</span>
+            ${
+              isSplitDetail
+              ? `
+            <div class="product-card__detail-grid">
+              <div class="product-card__meta product-card__meta--stacked">
+                <div class="product-card__info-line">
+                  <span class="product-card__info-label">售价：</span>
+                  <strong class="product-card__info-value">${formatPrice(product.price)}</strong>
+                </div>
+                <div class="product-card__info-line">
+                  <span class="product-card__info-label">销量：</span>
+                  <strong class="product-card__info-value product-card__info-value--muted">${product.sales}</strong>
+                </div>
+                <div class="product-card__info-line">
+                  <span class="product-card__info-label">${isTopSeller ? '网站销量第一' : formatSalesRank(salesRankMap.get(product.id))}</span>
+                </div>
               </div>
-              <div class="product-card__actions">
+              <p class="product-card__detail">${product.detail}</p>
+            </div>
+                `
+                : `
+            <p class="product-card__detail">${product.detail}</p>
+                `
+            }
+            <div class="product-card__footer">
+              <div class="product-card__actions ${isPurchaseUi ? 'product-card__actions--purchase' : ''}">
+                ${
+                  isPurchaseUi
+                    ? `
+                <button type="button" class="ghost-button">加入购物车</button>
+                <button type="button" class="ghost-button ghost-button--solid ghost-button--buy">立即购买</button>
+                    `
+                    : `
                 <button type="button" class="ghost-button">加入收藏</button>
                 <button type="button" class="ghost-button ghost-button--solid">查看详情</button>
+                    `
+                }
               </div>
             </div>
           </div>
         </article>
-      `,
-    )
+      `;
+    })
     .join('');
 }
 
@@ -221,8 +256,8 @@ function renderSidebar() {
                 <strong>${order.orderNo}</strong>
                 <span>${order.status}</span>
               </div>
-              <p>${order.items.join(' · ')}</p>
-              <p>合计：¥${order.totalPrice}</p>
+              <p>${order.items.join(' 路 ')}</p>
+              <p>合计：${formatPrice(order.totalPrice)}</p>
               <p>${order.createdAt}</p>
             </article>
           `,
@@ -389,13 +424,13 @@ if (sidebarAddressForm) {
 
 if (primaryCta) {
   primaryCta.addEventListener('click', () => {
-    document.querySelector('#products').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.querySelector('#products')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 
 if (secondaryCta) {
   secondaryCta.addEventListener('click', () => {
-    document.querySelector('#collections').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.querySelector('#collections')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 

@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>蓝屿织梦 · 二次元服装售卖首页</title>
+    <title>蓝笙织梦 · 二次元服装售卖首页</title>
     <meta
       name="description"
-      content="蓝屿织梦是一页式二次元服装展示首页，主打清透海风感、轻互动和梦幻氛围。"
+      content="蓝笙织梦是一页式二次元服装展示首页，主打清透海风感、轻互动和梦幻氛围。"
     />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
@@ -15,7 +15,7 @@
       <header class="topbar">
         <div class="brand-mark">
           <span class="brand-mark__orb" aria-hidden="true"></span>
-          <span class="brand-mark__text">蓝屿织梦</span>
+          <span class="brand-mark__text">蓝笙织梦</span>
         </div>
         <div class="topbar__note">海风感 · 二次元日常 · 轻盈上新</div>
       </header>
@@ -59,7 +59,7 @@
       <section class="section" id="products" aria-labelledby="products-title">
         <div class="section__header">
           <div>
-            <h2 id="products-title">上新商品</h2>
+            <h2 id="products-title">新品商品</h2>
             <p>共 <span data-product-count>0 件商品</span>，保持轻盈但能卖。</p>
           </div>
           <p>轻互动展示，不打扰浏览。</p>
@@ -67,9 +67,94 @@
         <div class="product-grid" data-product-grid></div>
       </section>
 
+      <section class="section auth-shell" id="auth" aria-labelledby="auth-title">
+        <div class="section__header">
+          <div>
+            <h2 id="auth-title">账号登录</h2>
+            <p>邮箱登录后可保存收货地址并继续结算。</p>
+          </div>
+        </div>
+
+        <div class="auth-panel" data-auth-entry>
+          <div class="auth-panel__switch">
+            <p>已有账号就直接登录，没有账号可以先注册。</p>
+            <button class="ghost-button ghost-button--solid" type="button" data-auth-toggle>切换注册</button>
+          </div>
+
+          <form class="auth-form" data-login-panel>
+            <label class="auth-field">
+              <span>邮箱</span>
+              <input type="email" name="email" autocomplete="email" placeholder="demo@example.com" />
+            </label>
+            <label class="auth-field">
+              <span>密码</span>
+              <input type="password" name="password" autocomplete="current-password" placeholder="请输入密码" />
+            </label>
+            <button class="button button--primary auth-form__submit" type="submit">登录</button>
+          </form>
+
+          <p class="auth-feedback" data-auth-feedback aria-live="polite"></p>
+
+          <form class="auth-form is-hidden" data-register-panel>
+            <label class="auth-field">
+              <span>邮箱</span>
+              <input type="email" name="email" autocomplete="email" placeholder="demo@example.com" />
+            </label>
+            <label class="auth-field">
+              <span>密码</span>
+              <input type="password" name="password" autocomplete="new-password" placeholder="至少 6 位" />
+            </label>
+            <label class="auth-field">
+              <span>确认密码</span>
+              <input
+                type="password"
+                name="confirmPassword"
+                autocomplete="new-password"
+                placeholder="再次输入密码"
+              />
+            </label>
+            <button class="button button--primary auth-form__submit" type="submit">注册</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="section checkout-shell" id="checkout" aria-labelledby="checkout-title">
+        <div class="section__header">
+          <div>
+            <h2 id="checkout-title">独立结算</h2>
+            <p>登录后填写收货地址并提交订单。</p>
+          </div>
+        </div>
+
+        <form class="checkout-form" data-checkout-entry data-address-form>
+          <label class="checkout-field">
+            <span>收件人</span>
+            <input type="text" name="recipientName" placeholder="请输入收件人姓名" />
+          </label>
+          <label class="checkout-field">
+            <span>手机号</span>
+            <input type="tel" name="phone" placeholder="请输入手机号" />
+          </label>
+          <label class="checkout-field">
+            <span>省份</span>
+            <input type="text" name="province" placeholder="例如：广东省" />
+          </label>
+          <label class="checkout-field">
+            <span>城市</span>
+            <input type="text" name="city" placeholder="例如：广州市" />
+          </label>
+          <label class="checkout-field">
+            <span>详细地址</span>
+            <textarea name="detail" rows="4" placeholder="街道、门牌号、楼栋等"></textarea>
+          </label>
+          <button class="button button--primary checkout-form__submit" type="submit">提交订单</button>
+          <p class="checkout-feedback" data-checkout-feedback aria-live="polite"></p>
+        </form>
+      </section>
+
       <footer class="footer">
         <div class="footer__story">
-          <h2>关于蓝屿织梦</h2>
+          <h2>关于蓝笙织梦</h2>
           <p>
             我们把海天蓝、云白和浅樱粉织成一页轻盈的服装小店。这里卖的不只是衣服，
             还有那种“刚好能把今天过得更像自己”的氛围。

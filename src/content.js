@@ -1,12 +1,33 @@
 export function getSiteCopy() {
   return {
-    brandName: '蓝屿织梦',
+    brandName: '蓝笙织梦',
     slogan: '把海风、云光和二次元日常穿在身上',
     intro:
       '为喜欢轻盈、梦幻和少女感穿搭的人准备的服装小店。每一件都像从海边晴天里摘出来的灵感。',
     primaryCta: '浏览新品',
     secondaryCta: '查看风格',
     note: '轻互动展示页 · 暂无真实支付',
+  };
+}
+
+export function getAuthCheckoutContract() {
+  return {
+    auth: {
+      loginMethod: 'email-password',
+      session: 'cookie-or-token',
+    },
+    user: {
+      fields: ['email', 'password'],
+    },
+    address: {
+      mode: 'single-default',
+      fields: ['recipientName', 'phone', 'province', 'city', 'detail'],
+      extensible: true,
+    },
+    order: {
+      requiresAuth: true,
+      requiresAddress: true,
+    },
   };
 }
 
@@ -48,7 +69,7 @@ export function getProducts() {
       category: '学院风',
       price: 189,
       sales: '860',
-      detail: '肩线柔和、袖口蓬松，单穿或叠穿都很出片。',
+      detail: '肩线柔和、领口蓬松，单穿或叠穿都很出片。',
     },
     {
       id: 'product-3',
@@ -66,7 +87,7 @@ export function getProducts() {
       category: '洛丽塔',
       price: 399,
       sales: '530',
-      detail: '层叠薄纱和细边蕾丝，营造轻盈的故事感。',
+      detail: '层叠薄纱和细节蕾丝，营造轻盈的故事感。',
     },
     {
       id: 'product-5',
@@ -75,7 +96,7 @@ export function getProducts() {
       category: '洛丽塔',
       price: 329,
       sales: '1.6k',
-      detail: '适合作为造型外搭，柔雾感很强，镜头里会很亮眼。',
+      detail: '适合做造型外搭，柔雾感很强，镜头里会很亮眼。',
     },
     {
       id: 'product-6',

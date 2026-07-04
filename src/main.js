@@ -1,5 +1,11 @@
 import { getCollections, getProducts, getSiteCopy } from './content.js';
 import { formatSalesRank, getSalesRankMap } from './ranking.js';
+import {
+  loadStoredProfile,
+  saveStoredProfile,
+  validateAddress,
+  validateRegistration,
+} from './account-state.js';
 
 const copy = getSiteCopy();
 const collections = getCollections();
@@ -31,9 +37,16 @@ const productGrid = document.querySelector('[data-product-grid]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
 const productCountLabel = document.querySelector('[data-product-count]');
 const hero = document.querySelector('.hero');
+const authToggle = document.querySelector('[data-auth-toggle]');
+const loginPanel = document.querySelector('[data-login-panel]');
+const registerPanel = document.querySelector('[data-register-panel]');
+const authFeedback = document.querySelector('[data-auth-feedback]');
+const addressForm = document.querySelector('[data-address-form]');
+const checkoutFeedback = document.querySelector('[data-checkout-feedback]');
+const addressFields = addressForm ? Array.from(addressForm.querySelectorAll('input, textarea')) : [];
 
-const referenceImageUrl =
-  'file:///F:/Pictures/%E5%A3%81%E7%BA%B8/ChatGPT%20Image%202026%E5%B9%B46%E6%9C%8827%E6%97%A5%2021_34_30_16_9.png';
+const heroImageUrl = './assets/products/product-01.png';
+const storedProfile = loadStoredProfile(window.localStorage);
 
 let activeCategory = '全部';
 let scrollFrame = 0;
@@ -43,8 +56,8 @@ function formatPrice(value) {
 }
 
 function renderHero() {
-  hero.style.setProperty('--hero-image', `url("${referenceImageUrl}")`);
-  document.body.style.setProperty('--page-portrait', `url("${referenceImageUrl}")`);
+  hero.style.setProperty('--hero-image', `url("${heroImageUrl}")`);
+  document.body.style.setProperty('--page-portrait', `url("${heroImageUrl}")`);
   heroTitle.textContent = copy.brandName;
   heroSlogan.textContent = copy.slogan;
   heroIntro.textContent = copy.intro;
@@ -114,6 +127,51 @@ function updateView() {
   renderProducts();
 }
 
+function setFeedback(target, message, isError = false) {
+  if (!target) {
+    return;
+  }
+
+  target.textContent = message;
+  target.dataset.state = isError ? 'error' : 'success';
+}
+
+function readFieldValues(form) {
+  return Object.fromEntries(new FormData(form).entries());
+}
+
+function getCurrentProfile() {
+  const profile = loadStoredProfile(window.localStorage);
+  return profile || { user: null, address: null };
+}
+
+function prefillStoredState() {
+  if (!storedProfile) {
+    return;
+  }
+
+  if (storedProfile.user?.email) {
+    const emailInput = loginPanel?.querySelector('input[name="email"]');
+    const registerEmailInput = registerPanel?.querySelector('input[name="email"]');
+
+    if (emailInput) {
+      emailInput.value = storedProfile.user.email;
+    }
+
+    if (registerEmailInput) {
+      registerEmailInput.value = storedProfile.user.email;
+    }
+  }
+
+  if (storedProfile.address) {
+    addressFields.forEach((field) => {
+      if (field.name in storedProfile.address) {
+        field.value = storedProfile.address[field.name] || '';
+      }
+    });
+  }
+}
+
 function updateHeroParallax() {
   const rect = hero.getBoundingClientRect();
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
@@ -154,6 +212,85 @@ collectionRail.addEventListener('click', (event) => {
   activeCategory = button.dataset.collection;
   updateView();
 });
+
+if (authToggle && loginPanel && registerPanel) {
+  authToggle.addEventListener('click', () => {
+    loginPanel.classList.toggle('is-hidden');
+    registerPanel.classList.toggle('is-hidden');
+    setFeedback(authFeedback, '');
+  });
+}
+
+if (loginPanel) {
+  loginPanel.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const values = readFieldValues(loginPanel);
+
+    if (!values.email || !values.password) {
+      setFeedback(authFeedback, '请先填写邮箱和密码。', true);
+      return;
+    }
+
+    const profile = getCurrentProfile();
+    saveStoredProfile(window.localStorage, {
+      user: { email: String(values.email) },
+      address: profile.address || null,
+    });
+    setFeedback(authFeedback, '登录信息已保存，地址可以继续复用。');
+  });
+}
+
+if (registerPanel) {
+  registerPanel.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const values = readFieldValues(registerPanel);
+    const validation = validateRegistration(values);
+
+    if (!validation.ok) {
+      setFeedback(
+        authFeedback,
+        validation.error === 'password-mismatch' ? '两次输入的密码不一致。' : '请把注册信息填写完整。',
+        true,
+      );
+      return;
+    }
+
+    const profile = getCurrentProfile();
+    saveStoredProfile(window.localStorage, {
+      user: { email: String(values.email) },
+      address: profile.address || null,
+    });
+    setFeedback(authFeedback, '注册成功，账号信息已保存到本地。');
+  });
+}
+
+if (addressForm) {
+  addressForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const values = readFieldValues(addressForm);
+    const validation = validateAddress(values);
+
+    if (!validation.ok) {
+      setFeedback(checkoutFeedback, '请把收货人、手机号和地址信息填写完整。', true);
+      return;
+    }
+
+    const profile = getCurrentProfile();
+    saveStoredProfile(window.localStorage, {
+      user: profile.user,
+      address: {
+        recipientName: String(values.recipientName),
+        phone: String(values.phone),
+        province: String(values.province),
+        city: String(values.city),
+        detail: String(values.detail),
+      },
+    });
+    setFeedback(checkoutFeedback, '收货地址已保存，下次结算会自动带出。');
+  });
+}
+
+prefillStoredState();
 
 primaryCta.addEventListener('click', () => {
   document.querySelector('#products').scrollIntoView({ behavior: 'smooth', block: 'start' });

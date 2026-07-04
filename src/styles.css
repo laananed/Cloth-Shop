@@ -616,6 +616,135 @@ body::after {
   border: 1px solid rgba(255, 255, 255, 0.72);
 }
 
+.auth-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 18px;
+  padding: 4px 2px 0;
+}
+
+.auth-panel__switch {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.auth-panel__switch p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.auth-form.is-hidden {
+  display: none;
+}
+
+.auth-field {
+  display: grid;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.auth-field span {
+  font-size: 0.95rem;
+}
+
+.auth-field input,
+.auth-field textarea {
+  width: 100%;
+  padding: 13px 15px;
+  border-radius: 16px;
+  border: 1px solid rgba(105, 174, 230, 0.24);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+
+.auth-field input:focus,
+.auth-field textarea:focus {
+  border-color: rgba(75, 143, 223, 0.58);
+  box-shadow: 0 0 0 4px rgba(105, 174, 230, 0.12);
+}
+
+.auth-form__submit {
+  width: fit-content;
+}
+
+.auth-feedback,
+.checkout-feedback {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+
+.checkout-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.checkout-form {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.checkout-field {
+  display: grid;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.checkout-field span {
+  font-size: 0.95rem;
+}
+
+.checkout-field input,
+.checkout-field textarea {
+  width: 100%;
+  padding: 13px 15px;
+  border-radius: 16px;
+  border: 1px solid rgba(105, 174, 230, 0.24);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+
+.checkout-field input:focus,
+.checkout-field textarea:focus {
+  border-color: rgba(75, 143, 223, 0.58);
+  box-shadow: 0 0 0 4px rgba(105, 174, 230, 0.12);
+}
+
+.checkout-form__submit {
+  width: fit-content;
+}
+
 @keyframes drift {
   from {
     transform: translateY(0px) scale(1);

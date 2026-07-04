@@ -1,5 +1,7 @@
 const PROFILE_KEY = 'blue-song-profile';
 const ORDERS_KEY = 'blue-song-orders';
+const FAVORITES_KEY = 'blue-song-favorites';
+const CART_KEY = 'blue-song-cart';
 
 export function validateRegistration(input) {
   if (!input.email || !input.password || !input.confirmPassword) {
@@ -58,10 +60,46 @@ export function saveStoredOrders(storage, orders) {
   storage.setItem(ORDERS_KEY, JSON.stringify(orders));
 }
 
+export function getStoredFavorites(storage) {
+  const raw = storage.getItem(FAVORITES_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredFavorites(storage, favorites) {
+  storage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+}
+
+export function getStoredCart(storage) {
+  const raw = storage.getItem(CART_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredCart(storage, cart) {
+  storage.setItem(CART_KEY, JSON.stringify(cart));
+}
+
 export function renderOrderItems(orders) {
   if (!orders.length) {
     return {
-      emptyState: '暂无购买记录',
+      emptyState: '鏆傛棤璐拱璁板綍',
       items: [],
     };
   }
@@ -74,6 +112,28 @@ export function renderOrderItems(orders) {
       items: order.items,
       totalPrice: order.totalPrice,
       createdAt: order.createdAt,
+    })),
+  };
+}
+
+export function renderSavedProductItems(items, emptyState) {
+  if (!items.length) {
+    return {
+      emptyState,
+      items: [],
+    };
+  }
+
+  return {
+    emptyState: null,
+    items: items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      price: item.price,
+      badge: item.badge || '',
+      category: item.category || '',
+      quantity: item.quantity || 1,
+      image: item.image || '',
     })),
   };
 }

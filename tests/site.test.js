@@ -105,23 +105,57 @@ test('site exposes a personal sidebar shell', () => {
   assert.ok(html.includes('data-menu-close'));
 });
 
-test('homepage cover mode removes the dual background switch and auto-open auth modal', () => {
+test('homepage keeps a continuous background while restoring the lead-in screen', () => {
   const html = readFileSync('index.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
   const styles = readFileSync('src/styles.css', 'utf8');
 
+  assert.ok(html.includes('class="lead-screen"'));
+  assert.ok(html.includes('data-hero-section'));
   assert.ok(html.includes('data-hero-title'));
   assert.ok(html.includes('data-hero-intro'));
   assert.ok(!html.includes('class="auth-modal is-open"'));
   assert.ok(mainJs.includes('heroBackgroundUrl'));
-  assert.ok(mainJs.includes('file:///C:/Users/Free/Downloads/%E5%9B%BE%E7%89%87/Image_1779725258518.png'));
+  assert.ok(mainJs.includes("new URL('../assets/hero-background.png', import.meta.url).href"));
+  assert.equal(existsSync('assets/hero-background.png'), true);
+  assert.ok(mainJs.includes('setInitialScrollPosition'));
+  assert.ok(mainJs.includes('scrollRestoration'));
+  assert.ok(mainJs.includes('scheduleHeroScrollState'));
+  assert.ok(mainJs.includes('updateHeroScrollState'));
   assert.ok(!mainJs.includes('bg=page'));
   assert.ok(!mainJs.includes('openAuthModal();'));
   assert.ok(styles.includes('.hero {'));
+  assert.ok(styles.includes('.lead-screen'));
+  assert.ok(styles.includes('body::before'));
+  assert.ok(styles.includes('body::after'));
+  assert.ok(styles.includes('content: none;'));
   assert.ok(styles.includes('min-height: 100vh'));
   assert.ok(styles.includes('text-align: center'));
   assert.ok(styles.includes('background-size: cover'));
   assert.ok(styles.includes('.hero__content'));
+});
+
+test('homepage fades hero UI while later sections keep the pale blue wash', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(mainJs.includes('--hero-copy-opacity'));
+  assert.ok(mainJs.includes('--hero-copy-shift'));
+  assert.ok(mainJs.includes('--hero-copy-scale'));
+  assert.ok(mainJs.includes('--hero-topbar-opacity'));
+  assert.ok(mainJs.includes('--hero-topbar-shift'));
+  assert.ok(mainJs.includes('--hero-topbar-scale'));
+  assert.ok(styles.includes('opacity: var(--hero-copy-opacity'));
+  assert.ok(styles.includes('scale(var(--hero-copy-scale'));
+  assert.ok(styles.includes('translateY(var(--hero-copy-shift'));
+  assert.ok(styles.includes('opacity: var(--hero-topbar-opacity'));
+  assert.ok(styles.includes('scale(var(--hero-topbar-scale'));
+  assert.ok(styles.includes('var(--hero-topbar-shift'));
+  assert.ok(styles.includes('.section::before'));
+  assert.ok(styles.includes('rgba(220, 239, 252, 0.34)'));
+  assert.ok(styles.includes('body::before'));
+  assert.ok(styles.includes('opacity: 1;'));
+  assert.ok(!styles.includes('filter: saturate(0.84) brightness(1.12) contrast(0.96) blur(0.2px);'));
 });
 
 test('personal data contract exposes account address and order fields', () => {

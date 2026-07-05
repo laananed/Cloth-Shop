@@ -24,6 +24,7 @@ const collectionRail = document.querySelector('[data-collection-rail]');
 const productGrid = document.querySelector('[data-product-grid]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
 const productCountLabel = document.querySelector('[data-product-count]');
+const heroSection = document.querySelector('[data-hero-section]');
 const hero = document.querySelector('.hero');
 
 const authModal = document.querySelector('[data-auth-modal]');
@@ -44,16 +45,20 @@ const accountEmail = document.querySelector('[data-account-email]');
 const accountDisplayName = document.querySelector('[data-account-display-name]');
 
 const storage = window.localStorage;
-const heroBackgroundUrl = 'file:///C:/Users/Free/Downloads/%E5%9B%BE%E7%89%87/Image_1779725258518.png';
+const pageRoot = document.documentElement;
+const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 const storedOrders = getStoredOrders(storage);
 
 let activeCategory = '全部';
+let scrollFrame = 0;
 
 function formatPrice(value) {
   return `¥${value}`;
 }
 
 function renderHero() {
+  pageRoot.style.setProperty('--hero-image', `url("${heroBackgroundUrl}")`);
+
   if (hero) {
     hero.style.setProperty('--hero-image', `url("${heroBackgroundUrl}")`);
   }
@@ -73,6 +78,51 @@ function renderHero() {
   if (heroNote) {
     heroNote.textContent = copy.note;
   }
+}
+
+function updateHeroScrollState() {
+  if (!hero || !heroSection) {
+    return;
+  }
+
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const distanceToTop = Math.max(0, heroSection.offsetTop - window.scrollY);
+  const progress = Math.min(1, distanceToTop / viewportHeight);
+  const copyShift = progress * 132;
+  const copyOpacity = 1 - progress;
+  const copyScale = 1 - progress * 0.16;
+  const topbarShift = progress * -28;
+  const topbarOpacity = 1 - progress * 0.86;
+  const topbarScale = 1 - progress * 0.08;
+
+  hero.style.setProperty('--hero-copy-shift', `${copyShift}px`);
+  hero.style.setProperty('--hero-copy-opacity', `${copyOpacity}`);
+  hero.style.setProperty('--hero-copy-scale', `${copyScale}`);
+  hero.style.setProperty('--hero-topbar-shift', `${topbarShift}px`);
+  hero.style.setProperty('--hero-topbar-opacity', `${topbarOpacity}`);
+  hero.style.setProperty('--hero-topbar-scale', `${topbarScale}`);
+}
+
+function scheduleHeroScrollState() {
+  if (scrollFrame) {
+    return;
+  }
+
+  scrollFrame = window.requestAnimationFrame(() => {
+    scrollFrame = 0;
+    updateHeroScrollState();
+  });
+}
+
+function setInitialScrollPosition() {
+  if (!heroSection) {
+    return;
+  }
+
+  window.scrollTo({
+    top: heroSection.offsetTop,
+    behavior: 'auto',
+  });
 }
 
 function renderCollections() {
@@ -401,6 +451,18 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
+if ('scrollRestoration' in window.history) {
+  window.history.scrollRestoration = 'manual';
+}
+
 renderHero();
 updateView();
 renderSidebar();
+
+window.addEventListener('scroll', scheduleHeroScrollState, { passive: true });
+window.addEventListener('resize', scheduleHeroScrollState);
+
+window.requestAnimationFrame(() => {
+  setInitialScrollPosition();
+  updateHeroScrollState();
+});

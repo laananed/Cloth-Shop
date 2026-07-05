@@ -4,6 +4,7 @@ const PROFILE_KEY = 'blue-song-profile';
 const ORDERS_KEY = 'blue-song-orders';
 const FAVORITES_KEY = 'blue-song-favorites';
 const CART_KEY = 'blue-song-cart';
+const CART_SELECTIONS_KEY = 'blue-song-cart-selections';
 const ADMIN_PRODUCTS_KEY = 'blue-song-admin-products';
 const ADMIN_ORDERS_KEY = 'blue-song-admin-orders';
 
@@ -157,6 +158,25 @@ export function saveStoredCart(storage, cart) {
   storage.setItem(CART_KEY, JSON.stringify(cart));
 }
 
+export function getStoredCartSelections(storage) {
+  const raw = storage.getItem(CART_SELECTIONS_KEY);
+
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredCartSelections(storage, selectedIds) {
+  storage.setItem(CART_SELECTIONS_KEY, JSON.stringify(Array.isArray(selectedIds) ? selectedIds : []));
+}
+
 export function getCartItemTotal(item) {
   const price = Number(item?.price || 0);
   const quantity = Math.max(0, Number(item?.quantity || 0));
@@ -164,8 +184,11 @@ export function getCartItemTotal(item) {
   return price * quantity;
 }
 
-export function getCartTotals(cart) {
-  return (Array.isArray(cart) ? cart : []).reduce(
+export function getCartTotals(cart, selectedIds = null) {
+  const items = Array.isArray(cart) ? cart : [];
+  const selectedItems = Array.isArray(selectedIds) ? items.filter((item) => selectedIds.includes(item?.id)) : items;
+
+  return selectedItems.reduce(
     (totals, item) => {
       const quantity = Math.max(0, Number(item?.quantity || 0));
 

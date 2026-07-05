@@ -1,6 +1,5 @@
 ﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260704l';
 import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704l';
-import { resetScrollPositionToTop } from './sidebar-ui.js?v=20260705b';
 import {
   getCartItemTotal,
   getCartTotals,
@@ -9,6 +8,7 @@ import {
   addAdminProduct,
   getStoredAdminProducts,
   getStoredCart,
+  getStoredCartSelections,
   getStoredFavorites,
   getStoredMockOrders,
   getStoredOrders,
@@ -23,6 +23,7 @@ import {
   saveStoredFavorites,
   saveStoredMockOrders,
   saveStoredProfile,
+  saveStoredCartSelections,
   validateAddress,
   validateRegistration,
 } from './account-store.js?v=20260704l';
@@ -58,7 +59,6 @@ const menuOpenButton = document.querySelector('[data-menu-open]');
 const menuCloseButtons = document.querySelectorAll('[data-menu-close]');
 const sidebarTitle = document.querySelector('[data-sidebar-title]');
 const sidebarSubtitle = document.querySelector('[data-sidebar-subtitle]');
-const sidebarPanelShell = document.querySelector('.sidebar__panel');
 const sidebarNavButtons = document.querySelectorAll('[data-sidebar-target]');
 const sidebarPanels = document.querySelectorAll('[data-sidebar-panel]');
 const sidebarAddressForm = document.querySelector('[data-sidebar-address-form]');
@@ -405,6 +405,20 @@ function getCartPreviewImage(item) {
   return item.image || product?.image || products[0]?.image || '';
 }
 
+function isCartItemSelected(selectedIds, itemId) {
+  return Array.isArray(selectedIds) && selectedIds.includes(itemId);
+}
+
+function toggleCartSelection(itemId) {
+  const selectedIds = getStoredCartSelections(storage);
+  const nextSelectedIds = selectedIds.includes(itemId)
+    ? selectedIds.filter((id) => id !== itemId)
+    : [...selectedIds, itemId];
+
+  saveStoredCartSelections(storage, nextSelectedIds);
+  return nextSelectedIds;
+}
+
 function updateCartQuantity(itemId, delta) {
   const cart = getStoredCart(storage);
   const nextCart = cart.map((item) => {
@@ -424,7 +438,7 @@ function updateCartQuantity(itemId, delta) {
   return nextCart;
 }
 
-function renderCartShelf(listElement, items, emptyState) {
+function renderCartShelf(listElement, items, emptyState, selectedIds) {
   const cartItems = Array.isArray(items) ? items : [];
 
   if (!listElement) {
@@ -440,9 +454,23 @@ function renderCartShelf(listElement, items, emptyState) {
     .map((item) => {
       const quantity = Math.max(1, Number(item.quantity || 1));
       const subtotal = getCartItemTotal(item);
+      const isSelected = isCartItemSelected(selectedIds, item.id);
 
       return `
-        <article class="cart-item" data-cart-item-id="${item.id}">
+        <article class="cart-item ${isSelected ? 'is-selected' : ''}" data-cart-item-id="${item.id}">
+          <button
+            class="cart-item__select"
+            type="button"
+            data-cart-select-id="${item.id}"
+            aria-label="${isSelected ? '取消选择' : '选择商品'}"
+            aria-pressed="${isSelected ? 'true' : 'false'}"
+          >
+            <span class="cart-item__select-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                <path d="M5 12.5 10 17 19 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </span>
+          </button>
           <div class="cart-item__thumb-wrap">
             <img class="cart-item__thumb" src="${getCartPreviewImage(item)}" alt="${item.name} 预览图" loading="lazy" decoding="async" />
           </div>
@@ -472,12 +500,12 @@ function renderCartShelf(listElement, items, emptyState) {
     .join('');
 }
 
-function renderCartSummary(cart) {
+function renderCartSummary(cart, selectedIds) {
   if (!cartSummary) {
     return;
   }
 
-  const totals = getCartTotals(cart);
+  const totals = getCartTotals(cart, selectedIds);
 
   cartSummary.innerHTML = `
     <div class="cart-summary__meta">
@@ -489,7 +517,6 @@ function renderCartSummary(cart) {
 }
 
 function renderSidebar() {
-  resetScrollPositionToTop(sidebarPanelShell, () => {
   const profile = getStoredProfile(storage);
   const email = profile?.user?.email || '未登录';
   const displayName = profile?.user?.displayName || '未设置';
@@ -554,9 +581,9 @@ function renderSidebar() {
 
   renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
   const cart = getStoredCart(storage);
-  renderCartShelf(cartList, cart, '暂无购物车');
-  renderCartSummary(cart);
-  });
+  const selectedIds = getStoredCartSelections(storage);
+  renderCartShelf(cartList, cart, '暂无购物车', selectedIds);
+  renderCartSummary(cart, selectedIds);
 }
 
 function updateHeroParallax() {
@@ -850,6 +877,13 @@ sidebarNavButtons.forEach((button) => {
 
 if (cartList) {
   cartList.addEventListener('click', (event) => {
+    const selectButton = event.target.closest('[data-cart-select-id]');
+    if (selectButton) {
+      toggleCartSelection(selectButton.dataset.cartSelectId);
+      renderSidebar();
+      return;
+    }
+
     const quantityStep = event.target.closest('[data-cart-quantity-step]');
     if (!quantityStep) {
       return;

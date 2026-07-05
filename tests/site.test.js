@@ -4,12 +4,12 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { getAuthCheckoutContract, getCollections, getPersonalCenterContract, getProducts, getSiteCopy } from '../src/content.js';
 import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
-import { resetScrollPositionToTop } from '../src/sidebar-ui.js';
 import {
   getCartItemTotal,
   getCartTotals,
   getProductSalesRows,
   getStoredCart,
+  getStoredCartSelections,
   getStoredAdminProducts,
   getStoredFavorites,
   getStoredMockOrders,
@@ -22,6 +22,7 @@ import {
   renderOrderItems,
   renderSavedProductItems,
   saveStoredCart,
+  saveStoredCartSelections,
   saveStoredAdminProducts,
   saveStoredFavorites,
   saveStoredMockOrders,
@@ -269,6 +270,45 @@ test('cart item totals and summary totals are calculated from quantity', () => {
   assert.equal(totals.totalAmount, 896);
 });
 
+test('cart totals can be limited to selected items', () => {
+  const cart = [
+    { id: 'product-01', price: 299, quantity: 2 },
+    { id: 'product-02', price: 289, quantity: 1 },
+  ];
+
+  const selectedTotals = getCartTotals(cart, ['product-01']);
+  const emptySelectionTotals = getCartTotals(cart, []);
+
+  assert.equal(selectedTotals.distinctItems, 1);
+  assert.equal(selectedTotals.totalQuantity, 2);
+  assert.equal(selectedTotals.totalAmount, 598);
+  assert.deepEqual(emptySelectionTotals, {
+    distinctItems: 0,
+    totalQuantity: 0,
+    totalAmount: 0,
+  });
+});
+
+test('cart selections round-trip through storage', () => {
+  const storage = createMemoryStorage();
+  const selections = ['product-01', 'product-03'];
+
+  saveStoredCartSelections(storage, selections);
+
+  assert.deepEqual(getStoredCartSelections(storage), selections);
+});
+
+test('cart selection affordance is wired into the source', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const css = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(mainJs.includes('data-cart-select-id'));
+  assert.ok(mainJs.includes('getStoredCartSelections'));
+  assert.ok(mainJs.includes('saveStoredCartSelections'));
+  assert.ok(css.includes('.cart-item__select'));
+  assert.ok(css.includes('.cart-item.is-selected'));
+});
+
 test('saved product shelves render an empty state when there are no items', () => {
   const rendered = renderSavedProductItems([], '暂无数据');
 
@@ -276,22 +316,12 @@ test('saved product shelves render an empty state when there are no items', () =
   assert.deepEqual(rendered.items, []);
 });
 
-test('sidebar updates reset the scroll position to the top', () => {
-  const sidebarPanel = {
-    scrollTop: 240,
-    scrollLeft: 18,
-  };
-  let didRun = false;
+test('sidebar layout uses a fixed visual anchor across sections', () => {
+  const css = readFileSync('src/styles.css', 'utf8');
 
-  resetScrollPositionToTop(sidebarPanel, () => {
-    didRun = true;
-    sidebarPanel.scrollTop = 12;
-    sidebarPanel.scrollLeft = 3;
-  });
-
-  assert.equal(didRun, true);
-  assert.equal(sidebarPanel.scrollTop, 0);
-  assert.equal(sidebarPanel.scrollLeft, 0);
+  assert.match(css, /--sidebar-layout-anchor-offset:\s*144px;/);
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?align-content:\s*start;/);
+  assert.match(css, /\.sidebar__layout\s*\{[\s\S]*?margin-top:\s*var\(--sidebar-layout-anchor-offset\);/);
 });
 
 test('admin storage seeds mock products and mock orders', () => {

@@ -54,6 +54,9 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 299,
     sales: '3.6k',
+    detailLayout: 'price-sales-rank',
+    purchaseLayout: 'buy',
+    imageFit: 'contain',
     detail: '黑色漆皮与蝴蝶结搭扣组合，脚背线条和鞋面弧度都很清楚。',
   },
   {
@@ -63,6 +66,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 289,
     sales: '3.3k',
+    imageFit: 'contain',
     detail: '轻薄绑带搭配珍珠细节，适合夏季清爽感展示。',
   },
   {
@@ -72,6 +76,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 279,
     sales: '3.1k',
+    imageFit: 'contain',
     detail: '浅口轮廓干净利落，能很好地突出脚部比例和鞋型。',
   },
   {
@@ -81,6 +86,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 269,
     sales: '2.9k',
+    imageFit: 'contain',
     detail: '偏通勤感的轮廓配上高光漆面，适合日常搭配风格。',
   },
   {
@@ -117,6 +123,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 199,
     sales: '2.05k',
+    imageFit: 'contain',
     detail: '轻薄透肤感明显，能直接强调腿部线条和整体显长效果。',
   },
   {
@@ -126,6 +133,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 189,
     sales: '1.95k',
+    imageFit: 'contain',
     detail: '深色袜面搭配蝴蝶结装饰，适合更强调腿部氛围感的图。',
   },
   {
@@ -135,6 +143,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 179,
     sales: '1.8k',
+    imageFit: 'contain',
     detail: '网纱纹理更有层次，适合在全身图里做视觉焦点。',
   },
   {
@@ -144,6 +153,7 @@ const PRODUCT_DEFINITIONS = [
     category: '丝袜',
     price: 169,
     sales: '1.7k',
+    imageFit: 'contain',
     detail: '偏基础款的百搭袜型，适合和短裙或短裤一起展示。',
   },
   {
@@ -232,6 +242,8 @@ const PRODUCT_DEFINITIONS = [
 function buildProduct(product) {
   return {
     ...product,
+    detailLayout: product.detailLayout ?? 'split',
+    purchaseLayout: product.purchaseLayout ?? 'buy',
     image: `./assets/products/${product.id}.png`,
   };
 }
@@ -267,7 +279,7 @@ export function getAuthCheckoutContract() {
       extensible: true,
     },
     sidebar: {
-      sections: ['account', 'address', 'orders'],
+      sections: ['account', 'address', 'orders', 'favorites', 'cart'],
     },
     order: {
       requiresAuth: true,
@@ -288,5 +300,70 @@ export function getPersonalCenterContract() {
     orders: {
       fields: ['orderNo', 'status', 'items', 'totalPrice', 'createdAt'],
     },
+    favorites: {
+      fields: ['id', 'name', 'price', 'badge'],
+    },
+    cart: {
+      fields: ['id', 'name', 'price', 'quantity'],
+    },
   };
+}
+
+export function getAdminImageOptions() {
+  return getProducts().map((product) => ({
+    id: product.id,
+    label: product.name,
+    image: product.image,
+  }));
+}
+
+export function getAdminMockOrdersSeed(products = getProducts()) {
+  const byId = new Map(products.map((product) => [product.id, product]));
+  const makeLineItem = (id, quantity) => {
+    const product = byId.get(id);
+    return {
+      id,
+      name: product?.name || id,
+      category: product?.category || '未分类',
+      price: product?.price || 0,
+      quantity,
+    };
+  };
+
+  const orders = [
+    {
+      orderNo: 'MO-202607-001',
+      customerName: '林知夏',
+      status: '已发货',
+      createdAt: '2026-06-28 10:20',
+      items: [makeLineItem('product-01', 2), makeLineItem('product-05', 1)],
+    },
+    {
+      orderNo: 'MO-202607-002',
+      customerName: '周以安',
+      status: '待发货',
+      createdAt: '2026-06-29 14:05',
+      items: [makeLineItem('product-08', 3), makeLineItem('product-17', 1)],
+    },
+    {
+      orderNo: 'MO-202607-003',
+      customerName: '苏沐晴',
+      status: '已完成',
+      createdAt: '2026-06-30 09:15',
+      items: [makeLineItem('product-12', 1), makeLineItem('product-20', 2)],
+    },
+    {
+      orderNo: 'MO-202607-004',
+      customerName: '顾漫',
+      status: '已完成',
+      createdAt: '2026-07-01 18:40',
+      items: [makeLineItem('product-03', 2), makeLineItem('product-09', 1)],
+    },
+  ];
+
+  return orders.map((order) => ({
+    ...order,
+    totalPrice: order.items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    totalQuantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
+  }));
 }

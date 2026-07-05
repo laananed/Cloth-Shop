@@ -2,14 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
-import { getAuthCheckoutContract, getCollections, getPersonalCenterContract, getProducts, getSiteCopy } from '../src/content.js';
+import {
+  getAuthCheckoutContract,
+  getCollections,
+  getPersonalCenterContract,
+  getProducts,
+  getSiteCopy,
+} from '../src/content.js';
 import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
 import {
+  buildPurchaseOrder,
+  getStoredAddressBook,
   getStoredCart,
   getStoredFavorites,
   getStoredProfile,
   renderOrderItems,
   renderSavedProductItems,
+  saveStoredAddressBook,
   saveStoredCart,
   saveStoredFavorites,
   saveStoredProfile,
@@ -87,11 +96,12 @@ test('products expose per-item sales counts', () => {
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
 });
 
-test('all products use the split purchase card format', () => {
+test('first product uses the new price-sales-rank detail layout', () => {
   const products = getProducts();
 
   assert.equal(products.length, 20);
-  assert.ok(products.every((item) => item.detailLayout === 'split'));
+  assert.equal(products[0].detailLayout, 'price-sales-rank');
+  assert.ok(products.slice(1).every((item) => item.detailLayout === 'split'));
   assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
 });
 
@@ -100,8 +110,9 @@ test('purchase cards hide text on the icon action buttons', () => {
 
   assert.ok(mainJs.includes('getFavoriteIcon'));
   assert.ok(mainJs.includes('getCartIcon'));
-  assert.ok(mainJs.includes('aria-label="加入收藏夹"'));
-  assert.ok(mainJs.includes('aria-label="加入购物车"'));
+  assert.ok(mainJs.includes('data-purchase-launch'));
+  assert.ok(mainJs.includes('data-purchase-modal'));
+  assert.ok(mainJs.includes('data-purchase-total'));
   assert.ok(!mainJs.includes('<span>加入收藏夹</span>'));
   assert.ok(!mainJs.includes('<span>加入购物车</span>'));
   assert.ok(mainJs.includes('立即购买'));
@@ -112,6 +123,25 @@ test('hero background supports the page portrait overlay', () => {
 
   assert.ok(mainJs.includes('--hero-image'));
   assert.ok(mainJs.includes('--page-portrait'));
+});
+
+test('purchase flow exposes modal hooks in the source and markup', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(html.includes('data-purchase-modal'));
+  assert.ok(html.includes('data-purchase-close'));
+  assert.ok(html.includes('data-purchase-address-list'));
+  assert.ok(html.includes('data-purchase-payment-options'));
+  assert.ok(mainJs.includes('data-purchase-launch'));
+  assert.ok(mainJs.includes('data-purchase-total'));
+});
+
+test('purchase button click handling does not require a sidebar action hook', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes("event.target.closest('button')"));
+  assert.ok(mainJs.indexOf("dataset.purchaseLaunch === 'buy'") < mainJs.indexOf("dataset.sidebarLaunch === 'favorites'"));
 });
 
 test('sales ranks are derived from the highest sales first', () => {
@@ -164,6 +194,18 @@ test('site exposes a personal sidebar shell', () => {
   assert.ok(html.includes('data-menu-close'));
 });
 
+test('site exposes a purchase modal shell', () => {
+  const html = readFileSync('index.html', 'utf8');
+
+  assert.ok(html.includes('data-purchase-modal'));
+  assert.ok(html.includes('data-purchase-close'));
+  assert.ok(html.includes('data-purchase-address-list'));
+  assert.ok(html.includes('data-purchase-quantity-decrease'));
+  assert.ok(html.includes('data-purchase-quantity-increase'));
+  assert.ok(html.includes('data-purchase-payment-options'));
+  assert.ok(html.includes('data-purchase-total'));
+});
+
 test('personal data contract exposes account address order favorite and cart fields', () => {
   const contract = getPersonalCenterContract();
 
@@ -185,6 +227,92 @@ test('sidebar exposes an editable address form', () => {
   assert.ok(html.includes('name="province"'));
   assert.ok(html.includes('name="city"'));
   assert.ok(html.includes('name="detail"'));
+});
+
+test('address book migrates legacy single address into a default address entry', () => {
+  const storage = createMemoryStorage();
+
+  saveStoredProfile(storage, {
+    user: {
+      email: 'demo@example.com',
+      displayName: 'Demo User',
+    },
+    address: {
+      recipientName: 'Demo User',
+      phone: '13800000000',
+      province: 'Guangdong',
+      city: 'Guangzhou',
+      detail: 'No. 88 Example Road',
+    },
+  });
+
+  const book = getStoredAddressBook(storage);
+
+  assert.equal(book.addresses.length, 1);
+  assert.equal(book.defaultAddressId, 'address-1');
+  assert.equal(book.addresses[0].isDefault, true);
+  assert.equal(book.addresses[0].recipientName, 'Demo User');
+});
+
+test('address book round-trips multiple addresses through storage', () => {
+  const storage = createMemoryStorage();
+  const addressBook = {
+    defaultAddressId: 'address-2',
+    addresses: [
+      {
+        id: 'address-1',
+        recipientName: 'Demo A',
+        phone: '13800000000',
+        province: 'Guangdong',
+        city: 'Shenzhen',
+        detail: 'Address line 1',
+        isDefault: false,
+      },
+      {
+        id: 'address-2',
+        recipientName: 'Demo B',
+        phone: '13900000000',
+        province: 'Shanghai',
+        city: 'Shanghai',
+        detail: 'Address line 2',
+        isDefault: true,
+      },
+    ],
+  };
+
+  saveStoredAddressBook(storage, addressBook);
+
+  assert.deepEqual(getStoredAddressBook(storage), addressBook);
+});
+
+test('purchase orders capture selected address payment and total price', () => {
+  const order = buildPurchaseOrder({
+    product: {
+      id: 'product-01',
+      name: 'Sample Product',
+      price: 299,
+      badge: 'Featured',
+    },
+    quantity: 2,
+    paymentMethod: 'alipay',
+    address: {
+      id: 'address-2',
+      recipientName: 'Demo B',
+      phone: '13900000000',
+      province: 'Shanghai',
+      city: 'Shanghai',
+      detail: 'Address line 2',
+      isDefault: true,
+    },
+  });
+
+  assert.equal(order.status, '待支付');
+  assert.equal(order.paymentMethod, 'alipay');
+  assert.equal(order.quantity, 2);
+  assert.equal(order.totalPrice, 598);
+  assert.deepEqual(order.items, ['Sample Product × 2']);
+  assert.equal(order.address.recipientName, 'Demo B');
+  assert.equal(order.orderNo.startsWith('BUY-'), true);
 });
 
 test('registration validation rejects mismatched passwords', () => {
@@ -222,7 +350,7 @@ test('stored profile round-trips through storage', () => {
 test('orders panel renders an empty state when there are no orders', () => {
   const orders = renderOrderItems([]);
 
-  assert.equal(orders.emptyState, '鏆傛棤璐拱璁板綍');
+  assert.equal(orders.emptyState, '暂无购买记录');
   assert.deepEqual(orders.items, []);
 });
 

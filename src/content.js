@@ -54,7 +54,7 @@ const PRODUCT_DEFINITIONS = [
     category: '鞋子',
     price: 299,
     sales: '3.6k',
-    detailLayout: 'split',
+    detailLayout: 'price-sales-rank',
     purchaseLayout: 'buy',
     imageFit: 'contain',
     detail: '黑色漆皮与蝴蝶结搭扣组合，脚背线条和鞋面弧度都很清楚。',
@@ -274,10 +274,11 @@ export function getAuthCheckoutContract() {
       session: 'cookie-or-token',
     },
     address: {
-      mode: 'single-default',
+      mode: 'address-book',
       fields: ['recipientName', 'phone', 'province', 'city', 'detail'],
       extensible: true,
     },
+    paymentMethods: ['alipay', 'wechat', 'cod'],
     sidebar: {
       sections: ['account', 'address', 'orders', 'favorites', 'cart'],
     },

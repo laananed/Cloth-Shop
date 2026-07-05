@@ -4,14 +4,27 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { getAuthCheckoutContract, getCollections, getPersonalCenterContract, getProducts, getSiteCopy } from '../src/content.js';
 import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
+import { resetScrollPositionToTop } from '../src/sidebar-ui.js';
 import {
+  getCartItemTotal,
+  getCartTotals,
+  getProductSalesRows,
   getStoredCart,
+  getStoredAdminProducts,
   getStoredFavorites,
+  getStoredMockOrders,
   getStoredProfile,
+  getSalesSummary,
+  addAdminProduct,
+  renderAdminOrdersView,
+  renderAdminProductsView,
+  renderAdminStatsView,
   renderOrderItems,
   renderSavedProductItems,
   saveStoredCart,
+  saveStoredAdminProducts,
   saveStoredFavorites,
+  saveStoredMockOrders,
   saveStoredProfile,
   validateRegistration,
 } from '../src/account-store.js';
@@ -87,11 +100,12 @@ test('products expose per-item sales counts', () => {
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
 });
 
-test('all products use the split purchase card format', () => {
+test('first product uses the new price-sales-rank detail layout', () => {
   const products = getProducts();
 
   assert.equal(products.length, 20);
-  assert.ok(products.every((item) => item.detailLayout === 'split'));
+  assert.equal(products[0].detailLayout, 'price-sales-rank');
+  assert.ok(products.slice(1).every((item) => item.detailLayout === 'split'));
   assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
 });
 
@@ -160,6 +174,7 @@ test('site exposes a personal sidebar shell', () => {
   assert.ok(html.includes('data-sidebar-orders'));
   assert.ok(html.includes('data-sidebar-favorites'));
   assert.ok(html.includes('data-sidebar-cart'));
+  assert.ok(html.includes('data-cart-summary'));
   assert.ok(html.includes('data-menu-open'));
   assert.ok(html.includes('data-menu-close'));
 });
@@ -238,11 +253,161 @@ test('favorite and cart shelves round-trip through storage', () => {
   assert.deepEqual(getStoredCart(storage), cart);
 });
 
+test('cart item totals and summary totals are calculated from quantity', () => {
+  const cart = [
+    { id: 'product-01', price: 299, quantity: 1 },
+    { id: 'product-02', price: 199, quantity: 3 },
+  ];
+
+  assert.equal(getCartItemTotal(cart[0]), 299);
+  assert.equal(getCartItemTotal(cart[1]), 597);
+
+  const totals = getCartTotals(cart);
+
+  assert.equal(totals.distinctItems, 2);
+  assert.equal(totals.totalQuantity, 4);
+  assert.equal(totals.totalAmount, 896);
+});
+
 test('saved product shelves render an empty state when there are no items', () => {
   const rendered = renderSavedProductItems([], '暂无数据');
 
   assert.equal(rendered.emptyState, '暂无数据');
   assert.deepEqual(rendered.items, []);
+});
+
+test('sidebar updates reset the scroll position to the top', () => {
+  const sidebarPanel = {
+    scrollTop: 240,
+    scrollLeft: 18,
+  };
+  let didRun = false;
+
+  resetScrollPositionToTop(sidebarPanel, () => {
+    didRun = true;
+    sidebarPanel.scrollTop = 12;
+    sidebarPanel.scrollLeft = 3;
+  });
+
+  assert.equal(didRun, true);
+  assert.equal(sidebarPanel.scrollTop, 0);
+  assert.equal(sidebarPanel.scrollLeft, 0);
+});
+
+test('admin storage seeds mock products and mock orders', () => {
+  const storage = createMemoryStorage();
+  const products = getStoredAdminProducts(storage);
+  const orders = getStoredMockOrders(storage);
+
+  assert.ok(products.length > 0);
+  assert.ok(orders.length > 0);
+});
+
+test('sales summary aggregates total revenue and units', () => {
+  const products = [
+    { id: 'a', name: 'A', price: 100 },
+    { id: 'b', name: 'B', price: 200 },
+  ];
+  const orders = [
+    { orderNo: 'O1', items: [{ id: 'a', quantity: 2 }, { id: 'b', quantity: 1 }] },
+  ];
+
+  const summary = getSalesSummary(products, orders);
+
+  assert.equal(summary.totalRevenue, 400);
+  assert.equal(summary.totalUnitsSold, 3);
+});
+
+test('product sales rows aggregate per product sales and revenue', () => {
+  const products = [
+    { id: 'a', name: 'A', price: 100 },
+    { id: 'b', name: 'B', price: 200 },
+  ];
+  const orders = [
+    { orderNo: 'O1', items: [{ id: 'a', quantity: 2 }, { id: 'b', quantity: 1 }] },
+    { orderNo: 'O2', items: [{ id: 'a', quantity: 1 }] },
+  ];
+
+  const rows = getProductSalesRows(products, orders);
+
+  assert.deepEqual(rows.map((row) => row.id), ['a', 'b']);
+  assert.equal(rows[0].unitsSold, 3);
+  assert.equal(rows[0].revenue, 300);
+  assert.equal(rows[1].unitsSold, 1);
+  assert.equal(rows[1].revenue, 200);
+});
+
+test('admin page exposes order create and stats shells', () => {
+  const html = readFileSync('admin.html', 'utf8');
+
+  assert.ok(html.includes('data-admin-nav-orders'));
+  assert.ok(html.includes('data-admin-nav-products'));
+  assert.ok(html.includes('data-admin-nav-stats'));
+  assert.ok(html.includes('data-admin-orders-table'));
+  assert.ok(html.includes('data-admin-product-form'));
+  assert.ok(html.includes('data-admin-stats-summary'));
+});
+
+test('admin orders view prepares rows for the table shell', () => {
+  const storage = createMemoryStorage();
+  const products = getStoredAdminProducts(storage);
+  const orders = getStoredMockOrders(storage);
+
+  const rendered = renderAdminOrdersView(products, orders);
+
+  assert.ok(rendered.rows.length > 0);
+  assert.equal(typeof rendered.rows[0].orderNo, 'string');
+  assert.equal(typeof rendered.rows[0].amountLabel, 'string');
+});
+
+test('admin stats view prepares KPI cards and ranking rows', () => {
+  const rendered = renderAdminStatsView(
+    {
+      totalRevenue: 400,
+      totalOrders: 1,
+      totalProducts: 2,
+      totalUnitsSold: 3,
+    },
+    [
+      { id: 'a', name: 'A', unitsSold: 3, revenue: 300 },
+      { id: 'b', name: 'B', unitsSold: 1, revenue: 100 },
+    ],
+  );
+
+  assert.equal(rendered.kpis.length, 4);
+  assert.equal(rendered.rows.length, 2);
+  assert.equal(rendered.rows[0].barWidth, '100%');
+});
+
+test('new admin product can be appended and persisted', () => {
+  const storage = createMemoryStorage();
+  const initial = getStoredAdminProducts(storage);
+  const next = addAdminProduct(storage, {
+    name: '新款连衣裙',
+    category: '连衣裙',
+    price: 399,
+    image: './assets/products/product-12.png',
+  });
+
+  assert.equal(next.length, initial.length + 1);
+  assert.equal(getStoredAdminProducts(storage).at(-1).name, '新款连衣裙');
+});
+
+test('admin product view prepares cards for the product list', () => {
+  const storage = createMemoryStorage();
+  const products = getStoredAdminProducts(storage);
+  const rendered = renderAdminProductsView(products);
+
+  assert.ok(rendered.rows.length > 0);
+  assert.equal(typeof rendered.rows[0].name, 'string');
+  assert.equal(typeof rendered.rows[0].priceLabel, 'string');
+});
+
+test('front page exposes a visible admin entry point', () => {
+  const html = readFileSync('index.html', 'utf8');
+
+  assert.ok(html.includes('href="./admin.html"'));
+  assert.ok(html.includes('管理后台'));
 });
 
 function createMemoryStorage() {

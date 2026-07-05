@@ -1,14 +1,27 @@
-import { getCollections, getProducts, getSiteCopy } from './content.js?v=20260704l';
+﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260704l';
 import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704l';
+import { resetScrollPositionToTop } from './sidebar-ui.js?v=20260705b';
 import {
+  getCartItemTotal,
+  getCartTotals,
+  getProductSalesRows,
+  getSalesSummary,
+  addAdminProduct,
+  getStoredAdminProducts,
   getStoredCart,
   getStoredFavorites,
+  getStoredMockOrders,
   getStoredOrders,
   getStoredProfile,
+  renderAdminOrdersView,
+  renderAdminProductsView,
+  renderAdminStatsView,
   renderOrderItems,
   renderSavedProductItems,
   saveStoredCart,
+  saveStoredAdminProducts,
   saveStoredFavorites,
+  saveStoredMockOrders,
   saveStoredProfile,
   validateAddress,
   validateRegistration,
@@ -18,6 +31,7 @@ const copy = getSiteCopy();
 const collections = getCollections();
 const products = getProducts();
 const salesRankMap = getSalesRankMap(products);
+const productsById = new Map(products.map((product) => [product.id, product]));
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -44,6 +58,7 @@ const menuOpenButton = document.querySelector('[data-menu-open]');
 const menuCloseButtons = document.querySelectorAll('[data-menu-close]');
 const sidebarTitle = document.querySelector('[data-sidebar-title]');
 const sidebarSubtitle = document.querySelector('[data-sidebar-subtitle]');
+const sidebarPanelShell = document.querySelector('.sidebar__panel');
 const sidebarNavButtons = document.querySelectorAll('[data-sidebar-target]');
 const sidebarPanels = document.querySelectorAll('[data-sidebar-panel]');
 const sidebarAddressForm = document.querySelector('[data-sidebar-address-form]');
@@ -52,9 +67,11 @@ const sidebarFavoritesFeedback = document.querySelector('[data-sidebar-favorites
 const sidebarCartFeedback = document.querySelector('[data-sidebar-cart-feedback]');
 const favoritesList = document.querySelector('[data-favorites-list]');
 const cartList = document.querySelector('[data-cart-list]');
+const cartSummary = document.querySelector('[data-cart-summary]');
 const ordersList = document.querySelector('[data-orders-list]');
 const accountEmail = document.querySelector('[data-account-email]');
 const accountDisplayName = document.querySelector('[data-account-display-name]');
+const isAdminPage = Boolean(document.querySelector('[data-admin-shell]'));
 
 const storage = window.localStorage;
 const storedOrders = getStoredOrders(storage);
@@ -87,7 +104,7 @@ let activeSidebarSection = 'account';
 let scrollFrame = 0;
 
 function formatPrice(value) {
-  return `￥${value}`;
+  return `¥${Number(value || 0).toLocaleString('zh-CN')}`;
 }
 
 function getFavoriteIcon() {
@@ -165,24 +182,40 @@ function renderProducts() {
   productCountLabel.textContent = `${visibleProducts.length} 件商品`;
   productGrid.innerHTML = visibleProducts
     .map((product) => {
+      const isPrimaryDetail = product.detailLayout === 'price-sales-rank';
       const isSplitDetail = product.detailLayout === 'split';
       const isPurchaseUi = product.purchaseLayout === 'buy';
       const isTopSeller = salesRankMap.get(product.id) === 1;
+      const salesRankLabel = isTopSeller ? '网站销量第一' : formatSalesRank(salesRankMap.get(product.id));
 
       return `
-        <article class="product-card ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
+        <article class="product-card ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
           <div class="product-card__art" aria-hidden="true">
             <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" style="${getProductImageStyle(product)}" loading="lazy" decoding="async" />
             <span class="product-card__art-overlay"></span>
           </div>
-          <div class="product-card__body ${isSplitDetail ? 'product-card__body--split-detail' : ''}">
+          <div class="product-card__body ${isPrimaryDetail ? 'product-card__body--primary-detail' : ''} ${isSplitDetail ? 'product-card__body--split-detail' : ''}">
             <p class="product-card__category">${product.category}</p>
-            <h3>${product.name}</h3>
             ${
-              isSplitDetail
+              isPrimaryDetail
                 ? `
+            <div class="product-card__primary-detail">
+              <div class="product-card__primary-topline">
+                <h3>${product.name}</h3>
+                <strong class="product-card__price">${formatPrice(product.price)}</strong>
+              </div>
+              <div class="product-card__primary-subline">
+                <span class="product-card__sales-chip">销量 ${product.sales}</span>
+                <span class="product-card__sales-rank ${isTopSeller ? 'product-card__sales-rank--pill' : ''}">${salesRankLabel}</span>
+              </div>
+            </div>
+            <p class="product-card__detail">${product.detail}</p>
+                `
+                : isSplitDetail
+                  ? `
+            <h3>${product.name}</h3>
             <div class="product-card__detail-grid">
               <div class="product-card__meta product-card__meta--stacked">
                 <div class="product-card__info-line">
@@ -194,15 +227,16 @@ function renderProducts() {
                   <strong class="product-card__info-value product-card__info-value--muted">${product.sales}</strong>
                 </div>
                 <div class="product-card__info-line">
-                  <span class="product-card__info-label">${isTopSeller ? '网站销量第一' : formatSalesRank(salesRankMap.get(product.id))}</span>
+                  <span class="product-card__info-label">${salesRankLabel}</span>
                 </div>
               </div>
               <p class="product-card__detail">${product.detail}</p>
             </div>
-                `
-                : `
+                  `
+                  : `
+            <h3>${product.name}</h3>
             <p class="product-card__detail">${product.detail}</p>
-                `
+                  `
             }
             <div class="product-card__footer">
               <div class="product-card__actions ${isPurchaseUi ? 'product-card__actions--purchase' : ''}">
@@ -362,7 +396,100 @@ function renderProductShelf(listElement, items, emptyState, { showQuantity = fal
     .join('');
 }
 
+function formatCartMoney(value) {
+  return `¥${Number(value || 0).toLocaleString('zh-CN')}`;
+}
+
+function getCartPreviewImage(item) {
+  const product = productsById.get(item.id);
+  return item.image || product?.image || products[0]?.image || '';
+}
+
+function updateCartQuantity(itemId, delta) {
+  const cart = getStoredCart(storage);
+  const nextCart = cart.map((item) => {
+    if (item.id !== itemId) {
+      return item;
+    }
+
+    const nextQuantity = Math.max(1, Number(item.quantity || 1) + delta);
+
+    return {
+      ...item,
+      quantity: nextQuantity,
+    };
+  });
+
+  saveStoredCart(storage, nextCart);
+  return nextCart;
+}
+
+function renderCartShelf(listElement, items, emptyState) {
+  const cartItems = Array.isArray(items) ? items : [];
+
+  if (!listElement) {
+    return;
+  }
+
+  if (!cartItems.length) {
+    listElement.innerHTML = `<p class="sidebar-empty sidebar-empty--cart">${emptyState}</p>`;
+    return;
+  }
+
+  listElement.innerHTML = cartItems
+    .map((item) => {
+      const quantity = Math.max(1, Number(item.quantity || 1));
+      const subtotal = getCartItemTotal(item);
+
+      return `
+        <article class="cart-item" data-cart-item-id="${item.id}">
+          <div class="cart-item__thumb-wrap">
+            <img class="cart-item__thumb" src="${getCartPreviewImage(item)}" alt="${item.name} 预览图" loading="lazy" decoding="async" />
+          </div>
+          <div class="cart-item__content">
+            <div class="cart-item__topline">
+              <div class="cart-item__title-block">
+                <h4 class="cart-item__title">${item.name}</h4>
+                <p class="cart-item__meta">${item.category || '商品'}</p>
+              </div>
+              <strong class="cart-item__subtotal">${formatCartMoney(subtotal)}</strong>
+            </div>
+            <div class="cart-item__bottomline">
+              <span class="cart-item__unit-price">${formatCartMoney(item.price)} / 件</span>
+              <div class="cart-item__quantity-zone">
+                <span class="cart-item__quantity-label">x${quantity}</span>
+                <div class="cart-item__stepper">
+                  <button class="cart-item__stepper-button" type="button" data-cart-quantity-step="-1" data-cart-item-id="${item.id}" aria-label="减少数量">-</button>
+                  <span class="cart-item__quantity-value">${quantity}</span>
+                  <button class="cart-item__stepper-button" type="button" data-cart-quantity-step="1" data-cart-item-id="${item.id}" aria-label="增加数量">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+function renderCartSummary(cart) {
+  if (!cartSummary) {
+    return;
+  }
+
+  const totals = getCartTotals(cart);
+
+  cartSummary.innerHTML = `
+    <div class="cart-summary__meta">
+      <span>共 ${totals.totalQuantity} 件</span>
+      <strong>${formatCartMoney(totals.totalAmount)}</strong>
+    </div>
+    <button class="cart-summary__checkout" type="button" ${totals.totalQuantity ? '' : 'disabled'}>结算</button>
+  `;
+}
+
 function renderSidebar() {
+  resetScrollPositionToTop(sidebarPanelShell, () => {
   const profile = getStoredProfile(storage);
   const email = profile?.user?.email || '未登录';
   const displayName = profile?.user?.displayName || '未设置';
@@ -426,7 +553,10 @@ function renderSidebar() {
   }
 
   renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
-  renderProductShelf(cartList, getStoredCart(storage), '暂无购物车', { showQuantity: true });
+  const cart = getStoredCart(storage);
+  renderCartShelf(cartList, cart, '暂无购物车');
+  renderCartSummary(cart);
+  });
 }
 
 function updateHeroParallax() {
@@ -460,6 +590,248 @@ function scheduleHeroParallax() {
   });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case '\'':
+        return '&#39;';
+      default:
+        return character;
+    }
+  });
+}
+
+function initAdminPage() {
+  const shell = document.querySelector('[data-admin-shell]');
+  if (!shell) {
+    return;
+  }
+
+  const storage = window.localStorage;
+  const navButtons = shell.querySelectorAll('[data-admin-nav-target]');
+  const panels = shell.querySelectorAll('[data-admin-panel]');
+  const ordersBody = shell.querySelector('[data-admin-orders-body]');
+  const statsSummary = shell.querySelector('[data-admin-stats-summary]');
+  const statsRows = shell.querySelector('[data-admin-stats-rows]');
+  const productList = shell.querySelector('[data-admin-products-list]');
+  const productSummary = shell.querySelector('[data-admin-product-summary]');
+  const productForm = shell.querySelector('[data-admin-product-form]');
+  const productFeedback = shell.querySelector('[data-admin-product-feedback]');
+  const imageSelect = shell.querySelector('[data-admin-image-select]');
+  let activePanel = 'orders';
+  let products = [];
+  let orders = [];
+  let summary = null;
+  let productRows = [];
+  let renderedOrders = null;
+  let renderedStats = null;
+  let renderedProducts = null;
+
+  function refreshAdminData() {
+    products = getStoredAdminProducts(storage);
+    orders = getStoredMockOrders(storage);
+    summary = getSalesSummary(products, orders);
+    productRows = getProductSalesRows(products, orders);
+    renderedOrders = renderAdminOrdersView(products, orders);
+    renderedStats = renderAdminStatsView(summary, productRows);
+    renderedProducts = renderAdminProductsView(products);
+  }
+
+  function renderOrders() {
+    if (!ordersBody) {
+      return;
+    }
+
+    if (!renderedOrders || renderedOrders.emptyState) {
+      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(renderedOrders.emptyState)}</div></td></tr>`;
+      return;
+    }
+
+    ordersBody.innerHTML = renderedOrders.rows
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.orderNo)}</td>
+            <td>${escapeHtml(row.customerName)}</td>
+            <td>${escapeHtml(row.itemsLabel)}</td>
+            <td>${escapeHtml(row.amountLabel)}</td>
+            <td>${escapeHtml(row.status)}</td>
+            <td>${escapeHtml(row.createdAt)}</td>
+          </tr>
+        `,
+      )
+      .join('');
+  }
+
+  function renderStats() {
+    if (statsSummary) {
+      if (!renderedStats) {
+        statsSummary.innerHTML = '';
+      } else {
+      statsSummary.innerHTML = renderedStats.kpis
+        .map(
+          (item) => `
+            <article class="admin-kpi">
+              <strong>${escapeHtml(item.value)}</strong>
+              <span>${escapeHtml(item.label)}</span>
+              <span>${escapeHtml(item.detail)}</span>
+            </article>
+          `,
+        )
+        .join('');
+      }
+    }
+
+    if (statsRows) {
+      if (!renderedStats) {
+        statsRows.innerHTML = '';
+      } else {
+      statsRows.innerHTML = renderedStats.rows
+        .map(
+          (row) => `
+            <article class="admin-row">
+              <div class="admin-row__header">
+                <strong>${escapeHtml(row.name)}</strong>
+                <span>${escapeHtml(row.unitsLabel)} · ${escapeHtml(row.revenueLabel)}</span>
+              </div>
+              <div class="admin-row__bar" aria-hidden="true">
+                <span style="width: ${escapeHtml(row.barWidth)}"></span>
+              </div>
+              <span>${escapeHtml(row.category)}</span>
+            </article>
+          `,
+        )
+        .join('');
+      }
+    }
+  }
+
+  function renderProducts() {
+    if (productSummary) {
+      const newestProduct = products.at(-1);
+      productSummary.innerHTML = `
+        <p><strong>${products.length}</strong> 件商品正在管理中</p>
+        <p>${newestProduct ? `最新上架：${escapeHtml(newestProduct.name)}` : '暂无商品'}</p>
+      `;
+    }
+
+    if (!productList) {
+      return;
+    }
+
+    if (!renderedProducts || renderedProducts.emptyState) {
+      productList.innerHTML = `<div class="admin-empty">${escapeHtml(renderedProducts?.emptyState || '暂无商品数据')}</div>`;
+      return;
+    }
+
+    productList.innerHTML = renderedProducts.rows
+      .map(
+        (row) => `
+          <article class="admin-row">
+            <div class="admin-row__header">
+              <strong>${escapeHtml(row.name)}</strong>
+              <span>${escapeHtml(row.priceLabel)}</span>
+            </div>
+            <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
+            <span>${escapeHtml(row.status)} · ${escapeHtml(row.imageLabel)}</span>
+          </article>
+        `,
+      )
+      .join('');
+  }
+
+  function populateImageSelect() {
+    if (!imageSelect) {
+      return;
+    }
+
+    const options = getAdminImageOptions();
+    imageSelect.innerHTML = options
+      .map(
+        (option, index) => `
+          <option value="${escapeHtml(option.image)}">${escapeHtml(option.label)} (${index + 1})</option>
+        `,
+      )
+      .join('');
+    if (options.length > 0) {
+      imageSelect.value = options[0].image;
+    }
+  }
+
+  function syncPanels() {
+    navButtons.forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.adminNavTarget === activePanel);
+      button.setAttribute('aria-pressed', String(button.dataset.adminNavTarget === activePanel));
+    });
+
+    panels.forEach((panel) => {
+      panel.classList.toggle('is-active', panel.dataset.adminPanel === activePanel);
+    });
+  }
+
+  refreshAdminData();
+  populateImageSelect();
+  navButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      activePanel = button.dataset.adminNavTarget || 'orders';
+      syncPanels();
+    });
+  });
+
+  if (productForm) {
+    productForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(productForm).entries());
+      const name = String(values.name || '').trim();
+      const category = String(values.category || '').trim();
+      const image = String(values.image || '').trim();
+      const price = Number(values.price || 0);
+
+      if (!name || !category || !image || !Number.isFinite(price) || price <= 0) {
+        setFeedback(productFeedback, '请完整填写商品名称、分类、价格和图片。', true);
+        return;
+      }
+
+      addAdminProduct(storage, {
+        name,
+        category,
+        price,
+        badge: String(values.badge || '新品'),
+        image,
+        detail: String(values.detail || '').trim(),
+      });
+
+      setFeedback(productFeedback, '新品已上架并保存到本地。');
+      productForm.reset();
+      if (imageSelect?.options.length) {
+        imageSelect.selectedIndex = 0;
+      }
+
+      refreshAdminData();
+      syncPanels();
+      renderOrders();
+      renderStats();
+      renderProducts();
+    });
+  }
+
+  syncPanels();
+  renderOrders();
+  renderStats();
+  renderProducts();
+}
+
+if (isAdminPage) {
+  initAdminPage();
+} else {
 collectionRail.addEventListener('click', (event) => {
   const button = event.target.closest('[data-collection]');
   if (!button) {
@@ -475,6 +847,25 @@ sidebarNavButtons.forEach((button) => {
     openSidebar(button.dataset.sidebarTarget);
   });
 });
+
+if (cartList) {
+  cartList.addEventListener('click', (event) => {
+    const quantityStep = event.target.closest('[data-cart-quantity-step]');
+    if (!quantityStep) {
+      return;
+    }
+
+    const itemId = quantityStep.dataset.cartItemId;
+    const delta = Number(quantityStep.dataset.cartQuantityStep || 0);
+
+    if (!itemId || !delta) {
+      return;
+    }
+
+    updateCartQuantity(itemId, delta);
+    renderSidebar();
+  });
+}
 
 if (authTabLogin && authTabRegister && loginForm && registerForm) {
   authTabLogin.addEventListener('click', () => {
@@ -646,3 +1037,5 @@ renderHero();
 updateView();
 renderSidebar();
 updateHeroParallax();
+}
+

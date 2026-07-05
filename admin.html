@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>蓝绒织梦 · 管理后台</title>
+    <meta name="description" content="服装店管理后台，用于查看订单、上架新品和统计销量与营业额。" />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body class="admin-page">
+    <main class="admin-shell" data-admin-shell>
+      <header class="admin-topbar">
+        <div class="admin-brand">
+          <span class="admin-brand__orb" aria-hidden="true"></span>
+          <div>
+            <p class="admin-brand__eyebrow">管理后台</p>
+            <h1>蓝绒织梦</h1>
+          </div>
+        </div>
+        <a class="admin-home-link" href="./index.html">返回前台</a>
+      </header>
+
+      <div class="admin-layout">
+        <aside class="admin-nav" aria-label="后台导航">
+          <button class="admin-nav__button is-active" type="button" data-admin-nav-target="orders" data-admin-nav-orders>订单查看</button>
+          <button class="admin-nav__button" type="button" data-admin-nav-target="products" data-admin-nav-products>上架新品</button>
+          <button class="admin-nav__button" type="button" data-admin-nav-target="stats" data-admin-nav-stats>销量统计</button>
+        </aside>
+
+        <section class="admin-panels">
+          <section class="admin-panel is-active" data-admin-panel="orders">
+            <div class="admin-panel__header">
+              <div>
+                <p class="admin-panel__eyebrow">订单查看</p>
+                <h2>用户下单记录</h2>
+              </div>
+              <p class="admin-panel__note">这里先接虚拟数据，后续可平滑替换真实接口。</p>
+            </div>
+            <div class="admin-table-shell" data-admin-orders-table>
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>订单号</th>
+                    <th>用户</th>
+                    <th>商品</th>
+                    <th>金额</th>
+                    <th>状态</th>
+                    <th>下单时间</th>
+                  </tr>
+                </thead>
+                <tbody data-admin-orders-body></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="admin-panel" data-admin-panel="products">
+            <div class="admin-panel__header">
+              <div>
+                <p class="admin-panel__eyebrow">上架新品</p>
+                <h2>新增商品</h2>
+              </div>
+              <p class="admin-panel__note">图片从预设图库中选择，不做真实上传。</p>
+            </div>
+            <div class="admin-grid">
+              <form class="admin-form" data-admin-product-form>
+                <label class="admin-field">
+                  <span>商品名称</span>
+                  <input type="text" name="name" placeholder="例如：海盐泡泡袖连衣裙" />
+                </label>
+                <label class="admin-field">
+                  <span>分类</span>
+                  <input type="text" name="category" placeholder="例如：连衣裙" />
+                </label>
+                <label class="admin-field">
+                  <span>价格</span>
+                  <input type="number" name="price" min="0" step="1" placeholder="399" />
+                </label>
+                <label class="admin-field">
+                  <span>标签</span>
+                  <input type="text" name="badge" placeholder="新品 / 热卖 / 推荐" />
+                </label>
+                <label class="admin-field">
+                  <span>图片</span>
+                  <select name="image" data-admin-image-select></select>
+                </label>
+                <label class="admin-field">
+                  <span>商品描述</span>
+                  <textarea name="detail" rows="4" placeholder="简单描述商品卖点"></textarea>
+                </label>
+                <button class="admin-submit" type="submit">上架新品</button>
+                <p class="admin-feedback" data-admin-product-feedback aria-live="polite"></p>
+              </form>
+
+              <div class="admin-panel__stack">
+                <div class="admin-summary" data-admin-product-summary>
+                  <p>商品会在这里实时出现在管理列表中。</p>
+                </div>
+                <div class="admin-list" data-admin-products-list></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="admin-panel" data-admin-panel="stats">
+            <div class="admin-panel__header">
+              <div>
+                <p class="admin-panel__eyebrow">销量统计</p>
+                <h2>销售概览</h2>
+              </div>
+              <p class="admin-panel__note">按产品聚合销量和营业额，默认使用本地 mock 数据。</p>
+            </div>
+            <div class="admin-summary-grid" data-admin-stats-summary></div>
+            <div class="admin-stats-body" data-admin-stats-rows></div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <script type="module" src="./src/main.js?v=20260705-admin"></script>
+  </body>
+</html>

@@ -48,6 +48,7 @@ const collectionRail = document.querySelector('[data-collection-rail]');
 const productGrid = document.querySelector('[data-product-grid]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
 const productCountLabel = document.querySelector('[data-product-count]');
+const heroSection = document.querySelector('[data-hero-section]');
 const hero = document.querySelector('.hero');
 
 const authModal = document.querySelector('[data-auth-modal]');
@@ -96,6 +97,8 @@ const accountDisplayName = document.querySelector('[data-account-display-name]')
 const isAdminPage = Boolean(document.querySelector('[data-admin-shell]'));
 
 const storage = window.localStorage;
+const pageRoot = document.documentElement;
+const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
@@ -177,16 +180,79 @@ function getProductImageStyle(product) {
 }
 
 function renderHero() {
-  const heroImageUrl = products[0]?.image || './assets/products/product-01.png';
-  hero.style.setProperty('--hero-image', `url("${heroImageUrl}")`);
-  document.body.style.setProperty('--page-portrait', `url("${heroImageUrl}")`);
-  heroTitle.textContent = copy.brandName;
-  heroSlogan.textContent = copy.slogan;
-  heroIntro.textContent = copy.intro;
-  heroNote.textContent = copy.note;
+  pageRoot.style.setProperty('--hero-image', `url("${heroBackgroundUrl}")`);
+
+  if (hero) {
+    hero.style.setProperty('--hero-image', `url("${heroBackgroundUrl}")`);
+  }
+
+  if (heroTitle) {
+    heroTitle.textContent = copy.brandName;
+  }
+
+  if (heroSlogan) {
+    heroSlogan.textContent = copy.slogan;
+  }
+
+  if (heroIntro) {
+    heroIntro.textContent = copy.intro;
+  }
+
+  if (heroNote) {
+    heroNote.textContent = copy.note;
+  }
+}
+
+function updateHeroScrollState() {
+  if (!hero || !heroSection) {
+    return;
+  }
+
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const distanceToTop = Math.max(0, heroSection.offsetTop - window.scrollY);
+  const progress = Math.min(1, distanceToTop / viewportHeight);
+  const copyShift = progress * 132;
+  const copyOpacity = 1 - progress;
+  const copyScale = 1 - progress * 0.16;
+  const topbarShift = progress * -28;
+  const topbarOpacity = 1 - progress * 0.86;
+  const topbarScale = 1 - progress * 0.08;
+
+  hero.style.setProperty('--hero-copy-shift', `${copyShift}px`);
+  hero.style.setProperty('--hero-copy-opacity', `${copyOpacity}`);
+  hero.style.setProperty('--hero-copy-scale', `${copyScale}`);
+  hero.style.setProperty('--hero-topbar-shift', `${topbarShift}px`);
+  hero.style.setProperty('--hero-topbar-opacity', `${topbarOpacity}`);
+  hero.style.setProperty('--hero-topbar-scale', `${topbarScale}`);
+}
+
+function scheduleHeroScrollState() {
+  if (scrollFrame) {
+    return;
+  }
+
+  scrollFrame = window.requestAnimationFrame(() => {
+    scrollFrame = 0;
+    updateHeroScrollState();
+  });
+}
+
+function setInitialScrollPosition() {
+  if (!heroSection) {
+    return;
+  }
+
+  window.scrollTo({
+    top: heroSection.offsetTop,
+    behavior: 'auto',
+  });
 }
 
 function renderCollections() {
+  if (!collectionRail || !activeCollectionLabel) {
+    return;
+  }
+
   const buttons = [{ title: '全部', summary: '浏览全部商品' }, ...collections].map((item) => {
     const isActive = item.title === activeCategory;
 
@@ -208,6 +274,10 @@ function filteredProducts() {
 }
 
 function renderProducts() {
+  if (!productGrid || !productCountLabel) {
+    return;
+  }
+
   const visibleProducts = filteredProducts();
 
   productCountLabel.textContent = `${visibleProducts.length} 件商品`;
@@ -315,11 +385,19 @@ function readFieldValues(form) {
 }
 
 function openAuthModal() {
+  if (!authModal) {
+    return;
+  }
+
   authModal.classList.add('is-open');
   authModal.setAttribute('aria-hidden', 'false');
 }
 
 function closeAuthModal() {
+  if (!authModal) {
+    return;
+  }
+
   authModal.classList.remove('is-open');
   authModal.setAttribute('aria-hidden', 'true');
 }
@@ -854,6 +932,20 @@ function scheduleHeroParallax() {
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = 0;
     updateHeroParallax();
+    updateHeroScrollState();
+  });
+}
+
+if (collectionRail) {
+  collectionRail.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-collection]');
+
+    if (!button) {
+      return;
+    }
+
+    activeCategory = button.dataset.collection;
+    updateView();
   });
 }
 
@@ -1400,13 +1492,22 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
-window.addEventListener('scroll', scheduleHeroParallax, { passive: true });
-window.addEventListener('resize', scheduleHeroParallax);
+if ('scrollRestoration' in window.history) {
+  window.history.scrollRestoration = 'manual';
+}
 
-openAuthModal();
 renderHero();
 updateView();
 renderSidebar();
 updateHeroParallax();
-}
+updateHeroScrollState();
 
+window.addEventListener('scroll', scheduleHeroParallax, { passive: true });
+window.addEventListener('resize', scheduleHeroParallax);
+
+window.requestAnimationFrame(() => {
+  setInitialScrollPosition();
+  updateHeroParallax();
+  updateHeroScrollState();
+});
+}

@@ -274,10 +274,11 @@ export function getAuthCheckoutContract() {
       session: 'cookie-or-token',
     },
     address: {
-      mode: 'single-default',
+      mode: 'address-book',
       fields: ['recipientName', 'phone', 'province', 'city', 'detail'],
       extensible: true,
     },
+    paymentMethods: ['alipay', 'wechat', 'cod'],
     sidebar: {
       sections: ['account', 'address', 'orders', 'favorites', 'cart'],
     },

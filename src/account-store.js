@@ -65,6 +65,81 @@ function getNextAdminProductId(products) {
   return `admin-product-${String(nextIndex).padStart(3, '0')}`;
 }
 
+function createAddressId(index) {
+  return `address-${index + 1}`;
+}
+
+function normalizeAddressEntry(entry, index, defaultAddressId = '') {
+  const id = String(entry?.id || createAddressId(index));
+
+  return {
+    id,
+    recipientName: String(entry?.recipientName || ''),
+    phone: String(entry?.phone || ''),
+    province: String(entry?.province || ''),
+    city: String(entry?.city || ''),
+    detail: String(entry?.detail || ''),
+    isDefault: Boolean(entry?.isDefault || id === defaultAddressId),
+  };
+}
+
+function normalizeAddressList(addresses = [], defaultAddressId = '') {
+  const normalized = addresses.map((address, index) => normalizeAddressEntry(address, index, defaultAddressId));
+  const resolvedDefaultId =
+    defaultAddressId || normalized.find((address) => address.isDefault)?.id || normalized[0]?.id || '';
+
+  return {
+    addresses: normalized.map((address) => ({
+      ...address,
+      isDefault: address.id === resolvedDefaultId,
+    })),
+    defaultAddressId: resolvedDefaultId,
+  };
+}
+
+function stripAddressFlags(address) {
+  if (!address) {
+    return null;
+  }
+
+  const { isDefault, ...rest } = address;
+  return rest;
+}
+
+function formatOrderTimestamp(date) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function getLegacyAddressBook(profile) {
+  if (!profile?.address) {
+    return {
+      addresses: [],
+      defaultAddressId: '',
+    };
+  }
+
+  const legacyAddress = normalizeAddressEntry(
+    {
+      id: 'address-1',
+      ...profile.address,
+      isDefault: true,
+    },
+    0,
+    'address-1',
+  );
+
+  return {
+    addresses: [legacyAddress],
+    defaultAddressId: legacyAddress.id,
+  };
+}
+
 export function validateRegistration(input) {
   if (!input.email || !input.password || !input.confirmPassword) {
     return { ok: false, error: 'missing-fields' };
@@ -102,6 +177,41 @@ export function getStoredProfile(storage) {
 
 export function saveStoredProfile(storage, profile) {
   storage.setItem(PROFILE_KEY, JSON.stringify(profile));
+}
+
+export function getStoredAddressBook(storage) {
+  const profile = getStoredProfile(storage);
+
+  if (!profile) {
+    return {
+      addresses: [],
+      defaultAddressId: '',
+    };
+  }
+
+  if (Array.isArray(profile.addresses) && profile.addresses.length > 0) {
+    return normalizeAddressList(profile.addresses, profile.defaultAddressId || '');
+  }
+
+  return getLegacyAddressBook(profile);
+}
+
+export function saveStoredAddressBook(storage, addressBook) {
+  const profile = getStoredProfile(storage) || {};
+  const normalized = normalizeAddressList(addressBook.addresses || [], addressBook.defaultAddressId || '');
+  const selectedAddress =
+    normalized.addresses.find((address) => address.id === normalized.defaultAddressId) ||
+    normalized.addresses[0] ||
+    null;
+
+  saveStoredProfile(storage, {
+    ...profile,
+    addresses: normalized.addresses,
+    defaultAddressId: normalized.defaultAddressId,
+    address: stripAddressFlags(selectedAddress),
+  });
+
+  return normalized;
 }
 
 export function getStoredOrders(storage) {
@@ -397,10 +507,31 @@ export function renderAdminProductsView(products) {
   };
 }
 
+export function buildPurchaseOrder({ product, quantity, paymentMethod, address }) {
+  const safeQuantity = Math.max(1, Number(quantity) || 1);
+  const unitPrice = Number(product?.price || 0);
+  const totalPrice = unitPrice * safeQuantity;
+  const now = new Date();
+
+  return {
+    orderNo: `BUY-${now.getTime()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    status: '待支付',
+    productId: product?.id || '',
+    productName: product?.name || '',
+    badge: product?.badge || '',
+    quantity: safeQuantity,
+    paymentMethod,
+    address: address ? { ...address } : null,
+    totalPrice,
+    items: [`${product?.name || '商品'} × ${safeQuantity}`],
+    createdAt: formatOrderTimestamp(now),
+  };
+}
+
 export function renderOrderItems(orders) {
   if (!orders.length) {
     return {
-      emptyState: '鏆傛棤璐拱璁板綍',
+      emptyState: '暂无购买记录',
       items: [],
     };
   }

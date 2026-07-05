@@ -65,6 +65,63 @@
       </section>
     </div>
 
+    <div class="purchase-modal" data-purchase-modal aria-hidden="true">
+      <button class="purchase-modal__backdrop" type="button" data-purchase-close aria-label="关闭购买弹层"></button>
+      <section class="purchase-modal__panel" role="dialog" aria-modal="true" aria-labelledby="purchase-title">
+        <header class="purchase-modal__header">
+          <div>
+            <p class="purchase-modal__eyebrow">立即购买</p>
+            <h2 id="purchase-title" data-purchase-title>立即购买</h2>
+          </div>
+          <button class="purchase-modal__close" type="button" data-purchase-close aria-label="关闭">脳</button>
+        </header>
+
+        <div class="purchase-modal__summary">
+          <img class="purchase-modal__image" data-purchase-image alt="" />
+          <div class="purchase-modal__meta">
+            <p data-purchase-category>商品信息</p>
+            <h3 data-purchase-badge>精选</h3>
+            <p data-purchase-sales>请选择商品</p>
+            <strong class="purchase-modal__price" data-purchase-price>￥0</strong>
+          </div>
+        </div>
+
+        <section class="purchase-modal__section">
+          <div class="purchase-modal__section-header">
+            <h3>收货地址</h3>
+            <button class="ghost-button ghost-button--small" type="button" data-purchase-manage-address>管理地址</button>
+          </div>
+          <div class="purchase-address-list" data-purchase-address-list></div>
+        </section>
+
+        <section class="purchase-modal__section">
+          <div class="purchase-modal__quantity">
+            <h3>购买数量</h3>
+            <div class="purchase-modal__stepper">
+              <button type="button" data-purchase-quantity-decrease aria-label="减少数量">-</button>
+              <span data-purchase-quantity-value>1</span>
+              <button type="button" data-purchase-quantity-increase aria-label="增加数量">+</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="purchase-modal__section">
+          <div class="purchase-modal__section-header">
+            <h3>支付方式</h3>
+          </div>
+          <div class="purchase-payment-options" data-purchase-payment-options></div>
+        </section>
+
+        <div class="purchase-modal__total">
+          <span>合计</span>
+          <strong data-purchase-total>￥0</strong>
+        </div>
+
+        <p class="purchase-feedback" data-purchase-feedback aria-live="polite"></p>
+        <button class="button button--primary purchase-form__submit" type="button" data-purchase-submit>立即支付 ￥0</button>
+      </section>
+    </div>
+
     <aside class="sidebar" data-sidebar aria-hidden="true">
       <div class="sidebar__scrim" data-menu-close></div>
       <section class="sidebar__panel" aria-labelledby="sidebar-title">
@@ -101,6 +158,7 @@
             <section class="sidebar-view" data-sidebar-panel="address" data-sidebar-panel-address data-sidebar-address>
               <div class="sidebar-block">
                 <h3>收货地址</h3>
+                <div class="sidebar-address-list" data-sidebar-address-list></div>
                 <form class="sidebar-form" data-sidebar-address-form>
                   <label class="form-field">
                     <span>收件人</span>
@@ -121,6 +179,10 @@
                   <label class="form-field">
                     <span>详细地址</span>
                     <textarea name="detail" rows="3" placeholder="街道、门牌号、楼栋等"></textarea>
+                  </label>
+                  <label class="form-field form-field--inline">
+                    <input type="checkbox" name="isDefault" value="true" />
+                    <span>设为默认地址</span>
                   </label>
                   <button class="button button--primary sidebar-form__submit" type="submit">保存地址</button>
                 </form>

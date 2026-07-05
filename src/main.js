@@ -1,12 +1,14 @@
 ﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260704l';
 import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704l';
 import {
+  buildPurchaseOrder,
   getCartItemTotal,
   getCartTotals,
   getProductSalesRows,
   getSalesSummary,
   addAdminProduct,
   getStoredAdminProducts,
+  getStoredAddressBook,
   getStoredCart,
   getStoredCartSelections,
   getStoredFavorites,
@@ -22,7 +24,9 @@ import {
   saveStoredAdminProducts,
   saveStoredFavorites,
   saveStoredMockOrders,
+  saveStoredOrders,
   saveStoredProfile,
+  saveStoredAddressBook,
   saveStoredCartSelections,
   validateAddress,
   validateRegistration,
@@ -54,6 +58,23 @@ const loginForm = document.querySelector('[data-auth-login-form]');
 const registerForm = document.querySelector('[data-auth-register-form]');
 const authFeedback = document.querySelector('[data-auth-feedback]');
 
+const purchaseModal = document.querySelector('[data-purchase-modal]');
+const purchaseCloseButtons = document.querySelectorAll('[data-purchase-close]');
+const purchaseTitle = document.querySelector('[data-purchase-title]');
+const purchaseCategory = document.querySelector('[data-purchase-category]');
+const purchaseBadge = document.querySelector('[data-purchase-badge]');
+const purchasePrice = document.querySelector('[data-purchase-price]');
+const purchaseSales = document.querySelector('[data-purchase-sales]');
+const purchaseImage = document.querySelector('[data-purchase-image]');
+const purchaseAddressList = document.querySelector('[data-purchase-address-list]');
+const purchaseQuantityValue = document.querySelector('[data-purchase-quantity-value]');
+const purchaseQuantityDecrease = document.querySelector('[data-purchase-quantity-decrease]');
+const purchaseQuantityIncrease = document.querySelector('[data-purchase-quantity-increase]');
+const purchasePaymentOptions = document.querySelector('[data-purchase-payment-options]');
+const purchaseTotal = document.querySelector('[data-purchase-total]');
+const purchaseSubmit = document.querySelector('[data-purchase-submit]');
+const purchaseFeedback = document.querySelector('[data-purchase-feedback]');
+
 const sidebar = document.querySelector('[data-sidebar]');
 const menuOpenButton = document.querySelector('[data-menu-open]');
 const menuCloseButtons = document.querySelectorAll('[data-menu-close]');
@@ -61,6 +82,7 @@ const sidebarTitle = document.querySelector('[data-sidebar-title]');
 const sidebarSubtitle = document.querySelector('[data-sidebar-subtitle]');
 const sidebarNavButtons = document.querySelectorAll('[data-sidebar-target]');
 const sidebarPanels = document.querySelectorAll('[data-sidebar-panel]');
+const sidebarAddressList = document.querySelector('[data-sidebar-address-list]');
 const sidebarAddressForm = document.querySelector('[data-sidebar-address-form]');
 const sidebarAddressFeedback = document.querySelector('[data-sidebar-address-feedback]');
 const sidebarFavoritesFeedback = document.querySelector('[data-sidebar-favorites-feedback]');
@@ -74,7 +96,16 @@ const accountDisplayName = document.querySelector('[data-account-display-name]')
 const isAdminPage = Boolean(document.querySelector('[data-admin-shell]'));
 
 const storage = window.localStorage;
-const storedOrders = getStoredOrders(storage);
+let activePurchaseProduct = null;
+let activePurchaseQuantity = 1;
+let activePurchasePaymentMethod = 'alipay';
+let activePurchaseAddressId = '';
+
+const purchasePaymentMethods = [
+  { value: 'alipay', label: '支付宝' },
+  { value: 'wechat', label: '微信支付' },
+  { value: 'cod', label: '先用后付' },
+];
 
 const sidebarMeta = {
   account: {
@@ -249,7 +280,7 @@ function renderProducts() {
                 <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入购物车" data-sidebar-launch="cart">
                   <span class="ghost-button__icon">${getCartIcon()}</span>
                 </button>
-                <button type="button" class="ghost-button ghost-button--solid ghost-button--buy">立即购买</button>
+                <button type="button" class="ghost-button ghost-button--solid ghost-button--buy" data-purchase-launch="buy">立即购买</button>
                     `
                     : `
                 <button type="button" class="ghost-button">加入收藏</button>
@@ -299,6 +330,223 @@ function getDisplayName(email, fallback = '') {
   }
 
   return email.includes('@') ? email.split('@')[0] : email;
+}
+
+function getPrimaryAddress(addressBook) {
+  if (!addressBook?.addresses?.length) {
+    return null;
+  }
+
+  return (
+    addressBook.addresses.find((address) => address.id === addressBook.defaultAddressId) ||
+    addressBook.addresses.find((address) => address.isDefault) ||
+    addressBook.addresses[0] ||
+    null
+  );
+}
+
+function getPurchaseAddress(addressBook, addressId) {
+  if (!addressBook?.addresses?.length) {
+    return null;
+  }
+
+  return addressBook.addresses.find((address) => address.id === addressId) || getPrimaryAddress(addressBook);
+}
+
+function renderSidebarAddressBook(addressBook) {
+  if (!sidebarAddressList) {
+    return;
+  }
+
+  if (!addressBook.addresses.length) {
+    sidebarAddressList.innerHTML = '<p class="sidebar-empty">还没有收货地址，先添加一个吧。</p>';
+    return;
+  }
+
+  sidebarAddressList.innerHTML = addressBook.addresses
+    .map(
+      (address) => `
+        <article class="address-card ${address.id === addressBook.defaultAddressId ? 'is-active' : ''}" data-sidebar-address-item="${address.id}">
+          <div class="address-card__header">
+            <strong>${address.recipientName || '未命名地址'}</strong>
+            ${address.id === addressBook.defaultAddressId ? '<span>默认</span>' : ''}
+          </div>
+          <p>${address.phone}</p>
+          <p>${address.province} ${address.city}</p>
+          <p>${address.detail}</p>
+          <button type="button" class="ghost-button ghost-button--small" data-sidebar-address-default="${address.id}">设为默认</button>
+        </article>
+      `,
+    )
+    .join('');
+}
+
+function renderPurchaseModal() {
+  if (!purchaseModal) {
+    return;
+  }
+
+  const addressBook = getStoredAddressBook(storage);
+  const selectedAddress = getPurchaseAddress(addressBook, activePurchaseAddressId) || getPrimaryAddress(addressBook);
+
+  if (selectedAddress) {
+    activePurchaseAddressId = selectedAddress.id;
+  }
+
+  const product = activePurchaseProduct;
+  const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
+  const total = product ? product.price * quantity : 0;
+
+  if (purchaseTitle) {
+    purchaseTitle.textContent = product?.name || '立即购买';
+  }
+
+  if (purchaseCategory) {
+    purchaseCategory.textContent = product?.category || '商品信息';
+  }
+
+  if (purchaseBadge) {
+    purchaseBadge.textContent = product?.badge || '精选';
+  }
+
+  if (purchasePrice) {
+    purchasePrice.textContent = formatPrice(product?.price || 0);
+  }
+
+  if (purchaseSales) {
+    purchaseSales.textContent = product ? `销量 ${product.sales}` : '请选择商品';
+  }
+
+  if (purchaseImage) {
+    if (product) {
+      purchaseImage.src = product.image;
+      purchaseImage.alt = `${product.name} 预览`;
+    }
+  }
+
+  if (purchaseQuantityValue) {
+    purchaseQuantityValue.textContent = String(quantity);
+  }
+
+  if (purchaseTotal) {
+    purchaseTotal.textContent = formatPrice(total);
+  }
+
+  if (purchaseAddressList) {
+    if (!addressBook.addresses.length) {
+      purchaseAddressList.innerHTML = '<p class="purchase-empty">暂无收货地址，请先到个人中心添加。</p>';
+    } else {
+      purchaseAddressList.innerHTML = addressBook.addresses
+        .map(
+          (address) => `
+            <button
+              type="button"
+              class="purchase-address ${address.id === activePurchaseAddressId ? 'is-active' : ''}"
+              data-purchase-address-id="${address.id}"
+            >
+              <span class="purchase-address__name">${address.recipientName || '未命名地址'}</span>
+              <span class="purchase-address__phone">${address.phone || ''}</span>
+              <span class="purchase-address__detail">${address.province} ${address.city} ${address.detail}</span>
+            </button>
+          `,
+        )
+        .join('');
+    }
+  }
+
+  if (purchasePaymentOptions) {
+    purchasePaymentOptions.innerHTML = purchasePaymentMethods
+      .map(
+        (method) => `
+          <button
+            type="button"
+            class="purchase-payment ${method.value === activePurchasePaymentMethod ? 'is-active' : ''}"
+            data-purchase-payment-method="${method.value}"
+          >
+            ${method.label}
+          </button>
+        `,
+      )
+      .join('');
+  }
+
+  if (purchaseSubmit) {
+    purchaseSubmit.disabled = !product || !selectedAddress;
+    purchaseSubmit.textContent = product ? `立即支付 ${formatPrice(total)}` : '请选择商品';
+  }
+
+  if (purchaseFeedback) {
+    purchaseFeedback.textContent = selectedAddress ? '' : '请先添加并选择收货地址。';
+    purchaseFeedback.dataset.state = selectedAddress ? 'success' : 'error';
+  }
+}
+
+function openPurchaseModal(product) {
+  activePurchaseProduct = product;
+  activePurchaseQuantity = 1;
+  activePurchasePaymentMethod = 'alipay';
+
+  const addressBook = getStoredAddressBook(storage);
+  activePurchaseAddressId = getPrimaryAddress(addressBook)?.id || '';
+
+  renderPurchaseModal();
+  purchaseModal?.classList.add('is-open');
+  purchaseModal?.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('has-modal');
+}
+
+function closePurchaseModal() {
+  if (!purchaseModal) {
+    return;
+  }
+
+  purchaseModal.classList.remove('is-open');
+  purchaseModal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('has-modal');
+}
+
+function setPurchaseQuantity(nextQuantity) {
+  activePurchaseQuantity = Math.min(99, Math.max(1, Number(nextQuantity) || 1));
+  renderPurchaseModal();
+}
+
+function setPurchasePaymentMethod(method) {
+  activePurchasePaymentMethod = method;
+  renderPurchaseModal();
+}
+
+function setPurchaseAddress(addressId) {
+  activePurchaseAddressId = addressId;
+  renderPurchaseModal();
+}
+
+function submitPurchaseOrder() {
+  if (!activePurchaseProduct) {
+    return;
+  }
+
+  const addressBook = getStoredAddressBook(storage);
+  const selectedAddress = getPurchaseAddress(addressBook, activePurchaseAddressId);
+
+  if (!selectedAddress) {
+    renderPurchaseModal();
+    return;
+  }
+
+  const nextOrders = [
+    buildPurchaseOrder({
+      product: activePurchaseProduct,
+      quantity: activePurchaseQuantity,
+      paymentMethod: activePurchasePaymentMethod,
+      address: selectedAddress,
+    }),
+    ...getStoredOrders(storage),
+  ];
+
+  saveStoredOrders(storage, nextOrders);
+  renderSidebar();
+  closePurchaseModal();
+  openSidebar('orders');
 }
 
 function openSidebar(section = 'account') {
@@ -546,17 +794,9 @@ function renderSidebar() {
     accountDisplayName.textContent = displayName;
   }
 
-  const address = profile?.address || {};
-  if (sidebarAddressForm) {
-    Object.entries(address).forEach(([key, value]) => {
-      const field = sidebarAddressForm.elements.namedItem(key);
-      if (field) {
-        field.value = value || '';
-      }
-    });
-  }
+  renderSidebarAddressBook(getStoredAddressBook(storage));
 
-  const orderView = renderOrderItems(storedOrders);
+  const orderView = renderOrderItems(getStoredOrders(storage));
   if (ordersList) {
     if (orderView.emptyState) {
       ordersList.innerHTML = `<p class="orders-empty">${orderView.emptyState}</p>`;
@@ -931,13 +1171,15 @@ if (loginForm) {
       return;
     }
 
-    const profile = getStoredProfile(storage) || {};
+    const addressBook = getStoredAddressBook(storage);
     saveStoredProfile(storage, {
       user: {
         email: String(values.email),
-        displayName: profile.user?.displayName || getDisplayName(String(values.email)),
+        displayName: getDisplayName(String(values.email)),
       },
-      address: profile.address || null,
+      addresses: addressBook.addresses,
+      defaultAddressId: addressBook.defaultAddressId,
+      address: getPrimaryAddress(addressBook),
     });
 
     setFeedback(authFeedback, '登录信息已保存。');
@@ -961,13 +1203,15 @@ if (registerForm) {
       return;
     }
 
-    const profile = getStoredProfile(storage) || {};
+    const addressBook = getStoredAddressBook(storage);
     saveStoredProfile(storage, {
       user: {
         email: String(values.email),
         displayName: String(values.displayName || getDisplayName(String(values.email))),
       },
-      address: profile.address || null,
+      addresses: addressBook.addresses,
+      defaultAddressId: addressBook.defaultAddressId,
+      address: getPrimaryAddress(addressBook),
     });
 
     setFeedback(authFeedback, '注册成功，账号信息已保存。');
@@ -986,6 +1230,51 @@ menuCloseButtons.forEach((button) => {
   button.addEventListener('click', () => closeSidebar());
 });
 
+purchaseCloseButtons.forEach((button) => {
+  button.addEventListener('click', () => closePurchaseModal());
+});
+
+if (purchaseModal) {
+  purchaseModal.addEventListener('click', (event) => {
+    const quantityDecrease = event.target.closest('[data-purchase-quantity-decrease]');
+    const quantityIncrease = event.target.closest('[data-purchase-quantity-increase]');
+    const addressButton = event.target.closest('[data-purchase-address-id]');
+    const paymentButton = event.target.closest('[data-purchase-payment-method]');
+    const manageAddressButton = event.target.closest('[data-purchase-manage-address]');
+    const submitButton = event.target.closest('[data-purchase-submit]');
+
+    if (quantityDecrease) {
+      setPurchaseQuantity(activePurchaseQuantity - 1);
+      return;
+    }
+
+    if (quantityIncrease) {
+      setPurchaseQuantity(activePurchaseQuantity + 1);
+      return;
+    }
+
+    if (addressButton) {
+      setPurchaseAddress(addressButton.dataset.purchaseAddressId);
+      return;
+    }
+
+    if (paymentButton) {
+      setPurchasePaymentMethod(paymentButton.dataset.purchasePaymentMethod);
+      return;
+    }
+
+    if (manageAddressButton) {
+      closePurchaseModal();
+      openSidebar('address');
+      return;
+    }
+
+    if (submitButton) {
+      submitPurchaseOrder();
+    }
+  });
+}
+
 if (sidebarAddressForm) {
   sidebarAddressForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -997,26 +1286,68 @@ if (sidebarAddressForm) {
       return;
     }
 
-    const profile = getStoredProfile(storage) || {};
-    saveStoredProfile(storage, {
-      user: profile.user || { email: '', displayName: '' },
-      address: {
-        recipientName: String(values.recipientName),
-        phone: String(values.phone),
-        province: String(values.province),
-        city: String(values.city),
-        detail: String(values.detail),
-      },
+    const addressBook = getStoredAddressBook(storage);
+    const nextAddressId = `address-${addressBook.addresses.length + 1}`;
+    const shouldBeDefault = Boolean(values.isDefault) || addressBook.addresses.length === 0;
+    const nextAddresses = addressBook.addresses.map((address) => ({
+      ...address,
+      isDefault: false,
+    }));
+
+    nextAddresses.push({
+      id: nextAddressId,
+      recipientName: String(values.recipientName),
+      phone: String(values.phone),
+      province: String(values.province),
+      city: String(values.city),
+      detail: String(values.detail),
+      isDefault: shouldBeDefault,
     });
+
+    saveStoredAddressBook(storage, {
+      addresses: nextAddresses,
+      defaultAddressId: shouldBeDefault ? nextAddressId : addressBook.defaultAddressId || nextAddressId,
+    });
+
+    sidebarAddressForm.reset();
 
     setFeedback(sidebarAddressFeedback, '收货地址已保存。');
     renderSidebar();
+    renderPurchaseModal();
+  });
+}
+
+if (sidebarAddressList) {
+  sidebarAddressList.addEventListener('click', (event) => {
+    const defaultButton = event.target.closest('[data-sidebar-address-default]');
+
+    if (!defaultButton) {
+      return;
+    }
+
+    const addressId = defaultButton.dataset.sidebarAddressDefault;
+    const addressBook = getStoredAddressBook(storage);
+
+    if (!addressBook.addresses.length) {
+      return;
+    }
+
+    saveStoredAddressBook(storage, {
+      addresses: addressBook.addresses.map((address) => ({
+        ...address,
+        isDefault: address.id === addressId,
+      })),
+      defaultAddressId: addressId,
+    });
+
+    renderSidebar();
+    renderPurchaseModal();
   });
 }
 
 if (productGrid) {
   productGrid.addEventListener('click', (event) => {
-    const actionButton = event.target.closest('[data-sidebar-launch]');
+    const actionButton = event.target.closest('button');
     if (!actionButton) {
       return;
     }
@@ -1026,6 +1357,11 @@ if (productGrid) {
     const product = getStoredProductById(productId);
 
     if (!product) {
+      return;
+    }
+
+    if (actionButton.dataset.purchaseLaunch === 'buy') {
+      openPurchaseModal(product);
       return;
     }
 
@@ -1060,6 +1396,7 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     closeAuthModal();
     closeSidebar();
+    closePurchaseModal();
   }
 });
 

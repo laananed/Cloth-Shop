@@ -83,13 +83,14 @@ test('sales ranks are derived from the highest sales first', () => {
   assert.equal(formatSalesRank(rankMap.get(highest.id)).includes(String(rankMap.get(highest.id))), true);
 });
 
-test('auth modal opens on load and replaces the inline auth section', () => {
+test('auth modal shell stays closed on load', () => {
   const html = readFileSync('index.html', 'utf8');
 
   assert.ok(html.includes('data-auth-modal'));
   assert.ok(html.includes('data-auth-tab-login'));
   assert.ok(html.includes('data-auth-tab-register'));
   assert.ok(html.includes('data-auth-close'));
+  assert.ok(!html.includes('class="auth-modal is-open"'));
   assert.ok(!html.includes('data-auth-entry'));
 });
 
@@ -104,15 +105,23 @@ test('site exposes a personal sidebar shell', () => {
   assert.ok(html.includes('data-menu-close'));
 });
 
-test('hero background supports a first mode and a full-page comparison mode', () => {
+test('homepage cover mode removes the dual background switch and auto-open auth modal', () => {
+  const html = readFileSync('index.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
   const styles = readFileSync('src/styles.css', 'utf8');
 
-  assert.ok(mainJs.includes('Image_1779725258518.png'));
-  assert.ok(mainJs.includes('bg=page'));
-  assert.ok(styles.includes('body[data-background-mode="page"]::before'));
-  assert.ok(styles.includes('hero[data-background-mode="hero"] .hero__bg'));
-  assert.ok(styles.includes('--page-portrait-size'));
+  assert.ok(html.includes('data-hero-title'));
+  assert.ok(html.includes('data-hero-intro'));
+  assert.ok(!html.includes('class="auth-modal is-open"'));
+  assert.ok(mainJs.includes('heroBackgroundUrl'));
+  assert.ok(mainJs.includes('file:///C:/Users/Free/Downloads/%E5%9B%BE%E7%89%87/Image_1779725258518.png'));
+  assert.ok(!mainJs.includes('bg=page'));
+  assert.ok(!mainJs.includes('openAuthModal();'));
+  assert.ok(styles.includes('.hero {'));
+  assert.ok(styles.includes('min-height: 100vh'));
+  assert.ok(styles.includes('text-align: center'));
+  assert.ok(styles.includes('background-size: cover'));
+  assert.ok(styles.includes('.hero__content'));
 });
 
 test('personal data contract exposes account address and order fields', () => {

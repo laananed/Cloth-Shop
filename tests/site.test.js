@@ -98,12 +98,11 @@ test('products expose per-item sales counts', () => {
   assert.equal(new Set(products.map((item) => item.sales)).size, products.length);
 });
 
-test('first product uses the new price-sales-rank detail layout', () => {
+test('all products use the new price-sales-rank detail layout', () => {
   const products = getProducts();
 
   assert.equal(products.length, 16);
-  assert.equal(products[0].detailLayout, 'price-sales-rank');
-  assert.ok(products.slice(1).every((item) => item.detailLayout === 'split'));
+  assert.ok(products.every((item) => item.detailLayout === 'price-sales-rank'));
   assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
 });
 

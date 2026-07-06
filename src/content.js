@@ -183,7 +183,7 @@ const PRODUCT_DEFINITIONS = [
 function buildProduct(product) {
   return {
     ...product,
-    detailLayout: product.detailLayout ?? 'split',
+    detailLayout: product.detailLayout ?? 'price-sales-rank',
     purchaseLayout: product.purchaseLayout ?? 'buy',
     image: `./assets/products/${product.id}.png`,
   };

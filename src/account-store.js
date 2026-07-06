@@ -8,7 +8,7 @@ const CART_SELECTIONS_KEY = 'blue-song-cart-selections';
 const ADMIN_PRODUCTS_KEY = 'blue-song-admin-products';
 const ADMIN_ORDERS_KEY = 'blue-song-admin-orders';
 const ADMIN_CATALOG_VERSION_KEY = 'blue-song-admin-catalog-version';
-const ADMIN_CATALOG_VERSION = '20260706-catalog-16';
+const ADMIN_CATALOG_VERSION = '20260706-catalog-17';
 
 function readJsonList(storage, key, fallbackFactory) {
   const raw = storage.getItem(key);

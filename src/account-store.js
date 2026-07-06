@@ -1,4 +1,4 @@
-import { getAdminMockOrdersSeed, getProducts } from './content.js?v=20260704l';
+﻿import { getAdminMockOrdersSeed, getProducts } from './content.js?v=20260705a';
 
 const PROFILE_KEY = 'blue-song-profile';
 const ORDERS_KEY = 'blue-song-orders';
@@ -7,6 +7,8 @@ const CART_KEY = 'blue-song-cart';
 const CART_SELECTIONS_KEY = 'blue-song-cart-selections';
 const ADMIN_PRODUCTS_KEY = 'blue-song-admin-products';
 const ADMIN_ORDERS_KEY = 'blue-song-admin-orders';
+const ADMIN_CATALOG_VERSION_KEY = 'blue-song-admin-catalog-version';
+const ADMIN_CATALOG_VERSION = '20260705-catalog-19';
 
 function readJsonList(storage, key, fallbackFactory) {
   const raw = storage.getItem(key);
@@ -43,6 +45,20 @@ function normalizeAdminProduct(product, index = 0) {
 
 function getProductLookup(products) {
   return new Map(products.map((product) => [product.id, product]));
+}
+
+function seedAdminProducts(storage) {
+  const seededProducts = getProducts().map(normalizeAdminProduct);
+  storage.setItem(ADMIN_PRODUCTS_KEY, JSON.stringify(seededProducts));
+  storage.setItem(ADMIN_CATALOG_VERSION_KEY, ADMIN_CATALOG_VERSION);
+  return seededProducts;
+}
+
+function hasCurrentCatalogProducts(products) {
+  const defaultIds = new Set(getProducts().map((product) => product.id));
+  const storedIds = new Set(products.map((product) => product?.id).filter(Boolean));
+
+  return [...defaultIds].every((id) => storedIds.has(id));
 }
 
 function getOrderItems(order) {
@@ -316,19 +332,36 @@ export function getCartTotals(cart, selectedIds = null) {
 }
 
 export function getStoredAdminProducts(storage) {
-  return readJsonList(storage, ADMIN_PRODUCTS_KEY, () => getProducts().map(normalizeAdminProduct));
+  const products = readJsonList(storage, ADMIN_PRODUCTS_KEY, () => getProducts().map(normalizeAdminProduct)).map(normalizeAdminProduct);
+  const catalogVersion = storage.getItem(ADMIN_CATALOG_VERSION_KEY);
+
+  if (catalogVersion !== ADMIN_CATALOG_VERSION || !hasCurrentCatalogProducts(products)) {
+    return seedAdminProducts(storage);
+  }
+
+  return products;
 }
 
 export function saveStoredAdminProducts(storage, products) {
   storage.setItem(ADMIN_PRODUCTS_KEY, JSON.stringify(products));
+  storage.setItem(ADMIN_CATALOG_VERSION_KEY, ADMIN_CATALOG_VERSION);
 }
 
 export function getStoredMockOrders(storage) {
+  const catalogVersion = storage.getItem(ADMIN_CATALOG_VERSION_KEY);
+
+  if (catalogVersion !== ADMIN_CATALOG_VERSION) {
+    const seededOrders = getAdminMockOrdersSeed(getStoredAdminProducts(storage));
+    storage.setItem(ADMIN_ORDERS_KEY, JSON.stringify(seededOrders));
+    return seededOrders;
+  }
+
   return readJsonList(storage, ADMIN_ORDERS_KEY, () => getAdminMockOrdersSeed(getStoredAdminProducts(storage)));
 }
 
 export function saveStoredMockOrders(storage, orders) {
   storage.setItem(ADMIN_ORDERS_KEY, JSON.stringify(orders));
+  storage.setItem(ADMIN_CATALOG_VERSION_KEY, ADMIN_CATALOG_VERSION);
 }
 
 export function getSalesSummary(products, orders) {
@@ -386,7 +419,7 @@ export function getProductSalesRows(products, orders) {
         name: product.name,
         category: product.category,
         price: Number(product.price) || 0,
-        badge: product.badge || '',
+        badge: product.badge || '新品',
         image: product.image || '',
         unitsSold: current.unitsSold,
         revenue: current.revenue,
@@ -569,3 +602,4 @@ export function renderSavedProductItems(items, emptyState) {
     })),
   };
 }
+

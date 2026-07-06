@@ -1,5 +1,5 @@
-﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260704l';
-import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260704l';
+﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260705a';
+import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260705a';
 import {
   buildPurchaseOrder,
   getCartItemTotal,
@@ -30,7 +30,7 @@ import {
   saveStoredCartSelections,
   validateAddress,
   validateRegistration,
-} from './account-store.js?v=20260704l';
+} from './account-store.js?v=20260705a';
 
 const copy = getSiteCopy();
 const collections = getCollections();
@@ -1511,3 +1511,4 @@ window.requestAnimationFrame(() => {
   updateHeroScrollState();
 });
 }
+

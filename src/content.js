@@ -11,7 +11,7 @@
   },
   {
     title: '东风和韵',
-    summary: '和服与浴衣保留节庆与柔和气质，用更安静的色彩撑住一整套氛围。',
+    summary: '和服主题保留节庆与柔和气质，用更安静的色彩撑住一整套氛围。',
     accent: '花见金',
   },
   {
@@ -26,13 +26,8 @@
   },
   {
     title: '海岛假日',
-    summary: '海边连衣裙与泳衣系列主打度假、清凉和风感，更适合做夏日橱窗主推。',
+    summary: '海边连衣裙主打度假、清凉和风感，更适合做夏日橱窗主推。',
     accent: '潮汐蓝',
-  },
-  {
-    title: '居家轻眠',
-    summary: '睡衣单独成组，强调私享、柔软和陪伴感，适合补足店铺节奏。',
-    accent: '暖杏粉',
   },
 ];
 
@@ -183,33 +178,6 @@ const PRODUCT_DEFINITIONS = [
     sales: '1.32k',
     detail: '圣诞帽、斗篷和暖色背景足够应景，适合在节日档期做限定曝光。',
   },
-  {
-    id: 'product-17',
-    badge: '私享',
-    name: '晨醒缎带睡裙',
-    category: '居家轻眠',
-    price: 159,
-    sales: '1.08k',
-    detail: '白色睡裙和卧室场景自带亲密与柔软感，适合补齐居家线氛围。',
-  },
-  {
-    id: 'product-18',
-    badge: '海风',
-    name: '薄荷海盐轻纱泳衣',
-    category: '海岛假日',
-    price: 329,
-    sales: '920',
-    detail: '薄荷色荷叶边和草帽披肩很适合夏日宣传，整体观感明亮又轻盈。',
-  },
-  {
-    id: 'product-19',
-    badge: '雅韵',
-    name: '绀紫花冠晨光浴衣',
-    category: '东风和韵',
-    price: 289,
-    sales: '760',
-    detail: '花冠、湿发和浴衣氛围更偏柔和私语感，适合做安静收尾的压轴图。',
-  },
 ];
 
 function buildProduct(product) {
@@ -225,10 +193,10 @@ export function getSiteCopy() {
   return {
     brandName: '汐雾衣橱',
     slogan: '把轻甜、海风和角色感都挂进同一面橱窗。',
-    intro: '围绕同一位白发精灵主角重构的 19 件图像型商品，用更强氛围和更统一的宣传图来带动点击。',
+    intro: '围绕同一位白发精灵主角重构的 16 件图像型商品，用更强氛围和更统一的宣传图来带动点击。',
     primaryCta: '浏览新目录',
     secondaryCta: '查看分区',
-    note: '19 个商品 · 图像重做 · 轻裁展示',
+    note: '16 个商品 · 图像重做 · 轻裁展示',
   };
 }
 
@@ -323,14 +291,14 @@ export function getAdminMockOrdersSeed(products = getProducts()) {
       customerName: '苏沐晴',
       status: '已完成',
       createdAt: '2026-06-30 09:15',
-      items: [makeLineItem('product-09', 1), makeLineItem('product-18', 1)],
+      items: [makeLineItem('product-09', 1), makeLineItem('product-10', 1)],
     },
     {
       orderNo: 'MO-202607-004',
       customerName: '顾漫',
       status: '已完成',
       createdAt: '2026-07-01 18:40',
-      items: [makeLineItem('product-04', 1), makeLineItem('product-19', 1), makeLineItem('product-12', 1)],
+      items: [makeLineItem('product-04', 1), makeLineItem('product-12', 1)],
     },
   ];
 

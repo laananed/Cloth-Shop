@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
+  getAdminImageOptions,
   getAuthCheckoutContract,
   getCollections,
   getPersonalCenterContract,
@@ -46,20 +47,22 @@ test('site copy keeps the one-page brand-led direction', () => {
   assert.equal(typeof copy.slogan, 'string');
 });
 
-test('collections expose the remixed seven-theme rail', () => {
+test('collections expose the remixed six-theme rail without the removed sleepwear section', () => {
   const collections = getCollections();
 
-  assert.equal(collections.length, 7);
-  assert.deepEqual(collections.map((item) => item.title), ['日常轻搭', '幻夜出行', '东风和韵', '纯白礼赞', '主题限定', '海岛假日', '居家轻眠']);
+  assert.equal(collections.length, 6);
+  assert.deepEqual(collections.map((item) => item.title), ['日常轻搭', '幻夜出行', '东风和韵', '纯白礼赞', '主题限定', '海岛假日']);
 });
 
-test('products render a curated set of nineteen image-led items', () => {
+test('products render a curated set of sixteen image-led items after unsafe listings are removed', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 19);
+  assert.equal(products.length, 16);
   assert.ok(products.every((item) => typeof item.price === 'number' && item.price > 0));
-  assert.equal(new Set(products.map((item) => item.category)).size, 7);
+  assert.equal(new Set(products.map((item) => item.category)).size, 6);
   assert.ok(products.every((item) => typeof item.image === 'string' && item.image.startsWith('./assets/products/')));
+  assert.equal(products.some((item) => ['product-17', 'product-18', 'product-19'].includes(item.id)), false);
+  assert.equal(products.some((item) => /睡衣|泳衣|浴衣/.test(item.name)), false);
 });
 
 test('theme-limited products keep curated promo badges', () => {
@@ -70,16 +73,17 @@ test('theme-limited products keep curated promo badges', () => {
   assert.ok(themedProducts.every((item) => typeof item.badge === 'string' && item.badge.length > 0));
 });
 
-test('site copy reflects the new nineteen-product catalog', () => {
+test('site copy reflects the new sixteen-product catalog', () => {
   const copy = getSiteCopy();
 
-  assert.match(copy.note, /19/);
+  assert.match(copy.note, /16/);
+  assert.match(copy.intro, /16/);
 });
 
 test('product preview images are present in the workspace', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 19);
+  assert.equal(products.length, 16);
 
   for (const product of products) {
     const fileName = product.image.replace(/^\.\//, '');
@@ -97,10 +101,18 @@ test('products expose per-item sales counts', () => {
 test('first product uses the new price-sales-rank detail layout', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 19);
+  assert.equal(products.length, 16);
   assert.equal(products[0].detailLayout, 'price-sales-rank');
   assert.ok(products.slice(1).every((item) => item.detailLayout === 'split'));
   assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
+});
+
+test('admin seed data no longer references removed products in image options or mock orders', () => {
+  const imageOptions = getAdminImageOptions();
+  const orders = getStoredMockOrders(createMemoryStorage());
+
+  assert.equal(imageOptions.some((item) => ['product-17', 'product-18', 'product-19'].includes(item.id)), false);
+  assert.equal(orders.some((order) => order.items.some((item) => ['product-17', 'product-18', 'product-19'].includes(item.id))), false);
 });
 
 test('purchase cards hide text on the icon action buttons', () => {

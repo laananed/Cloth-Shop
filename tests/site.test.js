@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -46,56 +46,40 @@ test('site copy keeps the one-page brand-led direction', () => {
   assert.equal(typeof copy.slogan, 'string');
 });
 
-test('collections expose the expanded category rail', () => {
+test('collections expose the remixed seven-theme rail', () => {
   const collections = getCollections();
 
-  assert.equal(collections.length, 9);
-  assert.deepEqual(collections.map((item) => item.title), [
-    '鞋子',
-    '帽子',
-    '丝袜',
-    '连衣裙',
-    '上衣',
-    '短裙',
-    '首饰',
-    '头饰',
-    '包包',
-  ]);
+  assert.equal(collections.length, 7);
+  assert.deepEqual(collections.map((item) => item.title), ['日常轻搭', '幻夜出行', '东风和韵', '纯白礼赞', '主题限定', '海岛假日', '居家轻眠']);
 });
 
-test('products render a curated set of twenty items', () => {
+test('products render a curated set of nineteen image-led items', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 20);
+  assert.equal(products.length, 19);
   assert.ok(products.every((item) => typeof item.price === 'number' && item.price > 0));
-  assert.equal(new Set(products.map((item) => item.category)).size, 9);
+  assert.equal(new Set(products.map((item) => item.category)).size, 7);
   assert.ok(products.every((item) => typeof item.image === 'string' && item.image.startsWith('./assets/products/')));
 });
 
-test('shoe products keep the full shoe visible in the preview', () => {
+test('theme-limited products keep curated promo badges', () => {
   const products = getProducts();
-  const shoeProducts = products.filter((item) => item.category === '鞋子');
+  const themedProducts = products.filter((item) => item.category === '主题限定');
 
-  assert.equal(shoeProducts.length, 4);
-  assert.ok(shoeProducts.every((item) => item.imageFit === 'contain'));
-  assert.ok(shoeProducts.every((item) => item.imageFocus === undefined));
-  assert.ok(shoeProducts.every((item) => item.imageZoom === undefined));
+  assert.equal(themedProducts.length, 3);
+  assert.ok(themedProducts.every((item) => typeof item.badge === 'string' && item.badge.length > 0));
 });
 
-test('stocking products keep the full silhouette visible in the preview', () => {
-  const products = getProducts();
-  const stockingProducts = products.filter((item) => item.category === '丝袜');
+test('site copy reflects the new nineteen-product catalog', () => {
+  const copy = getSiteCopy();
 
-  assert.equal(stockingProducts.length, 4);
-  assert.ok(stockingProducts.every((item) => item.imageFit === 'contain'));
-  assert.ok(stockingProducts.every((item) => item.imageFocus === undefined));
-  assert.ok(stockingProducts.every((item) => item.imageZoom === undefined));
+  assert.match(copy.note, /19/);
 });
 
 test('product preview images are present in the workspace', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 20);
+  assert.equal(products.length, 19);
 
   for (const product of products) {
     const fileName = product.image.replace(/^\.\//, '');
@@ -113,7 +97,7 @@ test('products expose per-item sales counts', () => {
 test('first product uses the new price-sales-rank detail layout', () => {
   const products = getProducts();
 
-  assert.equal(products.length, 20);
+  assert.equal(products.length, 19);
   assert.equal(products[0].detailLayout, 'price-sales-rank');
   assert.ok(products.slice(1).every((item) => item.detailLayout === 'split'));
   assert.ok(products.every((item) => item.purchaseLayout === 'buy'));
@@ -273,6 +257,22 @@ test('homepage fades hero UI while later sections keep the pale blue wash', () =
   assert.ok(styles.includes('body::before'));
   assert.ok(styles.includes('opacity: 1;'));
   assert.ok(!styles.includes('filter: saturate(0.84) brightness(1.12) contrast(0.96) blur(0.2px);'));
+});
+
+test('product shelf uses adaptive desktop columns instead of restoring four narrow cards', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(styles, /\.product-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*320px\),\s*1fr\)\);/);
+  assert.match(styles, /@media \(min-width:\s*1280px\)\s*\{[\s\S]*?\.product-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/);
+  assert.doesNotMatch(styles, /\.product-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/);
+});
+
+test('product card copy protects readable wrapping on desktop and mobile', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(styles, /\.product-card h3\s*\{[\s\S]*-webkit-line-clamp:\s*2;[\s\S]*overflow:\s*hidden;/);
+  assert.match(styles, /\.product-card__detail\s*\{[\s\S]*overflow-wrap:\s*break-word;[\s\S]*word-break:\s*normal;/);
+  assert.match(styles, /@media \(max-width:\s*1024px\)\s*\{[\s\S]*?\.product-card__detail-grid\s*\{[\s\S]*?grid-template-columns:\s*1fr;/);
 });
 
 test('personal data contract exposes account address order favorite and cart fields', () => {
@@ -636,3 +636,4 @@ function createMemoryStorage() {
     },
   };
 }
+

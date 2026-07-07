@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+import json
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from pymysql.err import MySQLError
@@ -34,6 +35,11 @@ class CartAddRequest(BaseModel):
 class OrderFromCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
+
+class OrderFromSelectedCartRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="收货地址ID")
+    cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
 
 class PayOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
@@ -362,6 +368,151 @@ def create_order_from_cart(req: OrderFromCartRequest):
         raise HTTPException(
             status_code=400,
             detail=f"从购物车创建订单失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/orders/from-cart-selected")
+def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
+    """
+    从购物车中选中的商品创建订单。
+    调用新增存储过程 sp_create_order_from_selected_cart_items。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        CALL sp_create_order_from_selected_cart_items(
+                            %s,
+                            %s,
+                            %s,
+                            @selected_order_id,
+                            @selected_order_no
+                        )
+                        """,
+                        (
+                            req.user_id,
+                            req.address_id,
+                            json.dumps(req.cart_item_ids)
+                        )
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                    cursor.execute(
+                        """
+                        SELECT
+                            @selected_order_id AS order_id,
+                            @selected_order_no AS order_no
+                        """
+                    )
+                    order_result = cursor.fetchone()
+
+                conn.commit()
+
+                order_id = order_result["order_id"]
+                order_no = order_result["order_no"]
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            order_id,
+                            order_no,
+                            user_id,
+                            email,
+                            status,
+                            total_amount,
+                            item_kind_count,
+                            total_quantity,
+                            item_total_amount,
+                            created_at,
+                            updated_at
+                        FROM v_order_summary
+                        WHERE order_id = %s
+                        """,
+                        (order_id,)
+                    )
+                    order_summary = cursor.fetchone()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            user_id,
+                            email,
+                            order_id,
+                            order_no,
+                            order_status,
+                            total_amount,
+                            order_created_at,
+                            recipient_name,
+                            phone,
+                            address_detail,
+                            order_item_id,
+                            product_id,
+                            product_name,
+                            sku_id,
+                            sku_name,
+                            quantity,
+                            price,
+                            item_amount,
+                            pay_method,
+                            pay_status,
+                            pay_amount,
+                            pay_created_at
+                        FROM v_user_order_detail
+                        WHERE order_id = %s
+                        ORDER BY order_item_id
+                        """,
+                        (order_id,)
+                    )
+                    order_items = cursor.fetchall()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            sku_id,
+                            change_type,
+                            change_qty,
+                            ref_no,
+                            created_at
+                        FROM inventory_log
+                        WHERE ref_no = %s
+                        ORDER BY id
+                        """,
+                        (order_no,)
+                    )
+                    inventory_logs = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "从购物车选中商品创建订单成功",
+            "order_id": order_id,
+            "order_no": order_no,
+            "order_summary": jsonable_encoder(order_summary),
+            "order_items": jsonable_encoder(order_items),
+            "inventory_logs": jsonable_encoder(inventory_logs)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"从购物车选中商品创建订单失败：{error_message}"
         )
 
     except Exception as e:

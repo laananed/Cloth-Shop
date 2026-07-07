@@ -300,6 +300,8 @@ function convertApiCartRows(apiRows) {
       productId: Number(row.product_id),
       skuId: Number(row.sku_id),
 
+      cartItemId: Number(row.cart_item_id),
+
       name: `${row.product_name} / ${row.sku_name}`,
       category: matchedProduct?.category || "商品",
       badge: "数据库购物车",
@@ -481,8 +483,53 @@ async function createOrderFromCartFromApi(paymentMethod = "alipay") {
   };
 }
 
+async function createOrderFromSelectedCartFromApi(cartItemIds, paymentMethod = "alipay") {
+  const response = await fetch(`${API_BASE_URL}/orders/from-cart-selected`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      address_id: CURRENT_ADDRESS_ID,
+      cart_item_ids: cartItemIds,
+    }),
+  });
+
+  const orderResult = await response.json();
+
+  if (!response.ok || !orderResult.success) {
+    throw new Error(orderResult.detail || "从购物车选中商品创建订单失败");
+  }
+
+  console.log("从购物车选中商品创建订单成功：", orderResult);
+
+  const payResult = await payOrderFromApi(orderResult.order_id, paymentMethod);
+
+  return {
+    order: orderResult,
+    payment: payResult,
+  };
+}
+
+function getSelectedCartItemIds(cart, selectedIds) {
+  return cart
+    .filter((item) => selectedIds.includes(item.id))
+    .map((item) => Number(item.cartItemId))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 async function submitCartCheckout() {
   if (isCartCheckoutSubmitting) {
+    return;
+  }
+
+  const cart = getStoredCart(storage);
+  const selectedIds = getStoredCartSelections(storage);
+  const selectedCartItemIds = getSelectedCartItemIds(cart, selectedIds);
+
+  if (!selectedCartItemIds.length) {
+    setFeedback(sidebarCartFeedback, "请先勾选要结算的商品。", true);
     return;
   }
 
@@ -490,23 +537,27 @@ async function submitCartCheckout() {
     isCartCheckoutSubmitting = true;
     renderSidebar();
 
-    setFeedback(sidebarCartFeedback, "正在从数据库购物车创建订单，请稍候...");
+    setFeedback(sidebarCartFeedback, "正在从数据库购物车中创建选中商品订单，请稍候...");
 
-    const result = await createOrderFromCartFromApi(activeCartPaymentMethod);
+    const result = await createOrderFromSelectedCartFromApi(
+      selectedCartItemIds,
+      activeCartPaymentMethod
+    );
 
     const orderNo =
       result.order?.order_no ||
       result.payment?.order_summary?.order_no ||
       "未知订单号";
 
-    console.log("购物车结算完整流程成功：", result);
+    console.log("购物车选中商品结算完整流程成功：", result);
 
-  setFeedback(
-    sidebarCartFeedback,
-    `购物车结算并支付成功！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${CURRENT_ADDRESS_ID}`
-  );
+    setFeedback(
+      sidebarCartFeedback,
+      `选中商品结算并支付成功！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${CURRENT_ADDRESS_ID}`
+    );
 
     await syncCartFromApi(CURRENT_USER_ID);
+    saveStoredCartSelections(storage, []);
     renderSidebar();
 
     await refreshOrdersFromApi();
@@ -515,8 +566,8 @@ async function submitCartCheckout() {
       openSidebar("orders");
     }, 800);
   } catch (error) {
-    console.error("购物车结算失败：", error);
-    setFeedback(sidebarCartFeedback, `购物车结算失败：${error.message}`, true);
+    console.error("购物车选中商品结算失败：", error);
+    setFeedback(sidebarCartFeedback, `购物车选中商品结算失败：${error.message}`, true);
   } finally {
     isCartCheckoutSubmitting = false;
     renderSidebar();
@@ -1311,15 +1362,18 @@ function renderCartSummary(cart, selectedIds) {
     return;
   }
 
-  // 当前后端 /orders/from-cart 是“整车结算”，所以这里先按整个数据库购物车计算
-  const totals = getCartTotals(cart, null);
+  const cartItems = Array.isArray(cart) ? cart : [];
+  const safeSelectedIds = Array.isArray(selectedIds) ? selectedIds : [];
+  const selectedTotals = getCartTotals(cartItems, safeSelectedIds);
+  const allTotals = getCartTotals(cartItems, null);
   const paymentLabel = getPaymentMethodLabel(activeCartPaymentMethod);
+  const hasSelectedItems = selectedTotals.totalQuantity > 0;
 
   cartSummary.innerHTML = `
     <div class="cart-summary__checkout-panel">
       <div class="cart-summary__meta">
-        <span>当前为整车结算，共 ${totals.totalQuantity} 件</span>
-        <strong>${formatCartMoney(totals.totalAmount)}</strong>
+        <span>购物车共 ${allTotals.totalQuantity} 件，已选 ${selectedTotals.totalQuantity} 件</span>
+        <strong>${formatCartMoney(selectedTotals.totalAmount)}</strong>
       </div>
 
       <div class="cart-summary__address">
@@ -1351,9 +1405,15 @@ function renderCartSummary(cart, selectedIds) {
         class="cart-summary__checkout"
         type="button"
         data-cart-checkout
-        ${totals.totalQuantity && !isCartCheckoutSubmitting ? '' : 'disabled'}
+        ${hasSelectedItems && !isCartCheckoutSubmitting ? '' : 'disabled'}
       >
-        ${isCartCheckoutSubmitting ? '结算中...' : `使用${paymentLabel}结算全部商品`}
+        ${
+          isCartCheckoutSubmitting
+            ? '结算中...'
+            : hasSelectedItems
+              ? `使用${paymentLabel}结算已选商品`
+              : '请先勾选商品'
+        }
       </button>
     </div>
   `;

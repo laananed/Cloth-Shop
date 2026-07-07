@@ -399,15 +399,17 @@ function normalizePayMethod(method) {
   return payMethodMap[method] || "ALIPAY";
 }
 
-async function payOrderFromApi(orderId, paymentMethod) {
+async function payOrderFromApi(orderId, paymentMethod, payPassword) {
   const response = await fetch(`${API_BASE_URL}/orders/pay`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
       order_id: orderId,
       pay_method: normalizePayMethod(paymentMethod),
+      pay_password: payPassword,
     }),
   });
 
@@ -421,7 +423,86 @@ async function payOrderFromApi(orderId, paymentMethod) {
   return result;
 }
 
-async function createDirectOrderFromApi(product, quantity = 1, paymentMethod = "alipay") {
+function promptPayPassword() {
+  const password = window.prompt(
+    "订单已创建，状态为待支付。\n请输入 6 位支付密码完成支付。\n测试支付密码：123456\n\n点击取消或留空，则订单保留为待支付。"
+  );
+
+  if (password === null) {
+    return null;
+  }
+
+  const trimmedPassword = password.trim();
+
+  if (!trimmedPassword) {
+    return null;
+  }
+
+  return trimmedPassword;
+}
+
+async function payOrderWithPasswordPrompt(orderId, paymentMethod, feedbackTarget) {
+  const payPassword = promptPayPassword();
+
+  if (!payPassword) {
+    setFeedback(
+      feedbackTarget,
+      `订单 ${orderId} 已创建，当前状态为待支付。你可以在购买记录中继续支付或取消订单。`
+    );
+    return {
+      paid: false,
+      reason: "skip",
+    };
+  }
+
+  if (!/^\d{6}$/.test(payPassword)) {
+    setFeedback(
+      feedbackTarget,
+      `支付密码必须是 6 位数字。订单 ${orderId} 已保留为待支付。`,
+      true
+    );
+    return {
+      paid: false,
+      reason: "invalid_password_format",
+    };
+  }
+
+  const payResult = await payOrderFromApi(orderId, paymentMethod, payPassword);
+
+  return {
+    paid: true,
+    payment: payResult,
+  };
+}
+
+function promptPaymentMethod(defaultMethod = "alipay") {
+  const input = window.prompt(
+    "请选择支付方式：\n1 = 支付宝\n2 = 微信支付\n3 = 先用后付\n\n直接回车默认使用支付宝。",
+    "1"
+  );
+
+  if (input === null) {
+    return null;
+  }
+
+  const value = input.trim();
+
+  if (value === "2") {
+    return "wechat";
+  }
+
+  if (value === "3") {
+    return "cod";
+  }
+
+  if (value === "1" || value === "") {
+    return defaultMethod || "alipay";
+  }
+
+  return defaultMethod || "alipay";
+}
+
+async function createDirectOrderFromApi(product, quantity = 1) {
   const skuId = product.defaultSkuId || product.skuId;
 
   if (!skuId) {
@@ -447,17 +528,12 @@ async function createDirectOrderFromApi(product, quantity = 1, paymentMethod = "
     throw new Error(orderResult.detail || "直接下单失败");
   }
 
-  console.log("直接下单成功：", orderResult);
+  console.log("直接下单成功，订单处于待支付状态：", orderResult);
 
-  const payResult = await payOrderFromApi(orderResult.order_id, paymentMethod);
-
-  return {
-    order: orderResult,
-    payment: payResult,
-  };
+  return orderResult;
 }
 
-async function createOrderFromCartFromApi(paymentMethod = "alipay") {
+async function createOrderFromCartFromApi() {
   const response = await fetch(`${API_BASE_URL}/orders/from-cart`, {
     method: "POST",
     headers: {
@@ -475,17 +551,12 @@ async function createOrderFromCartFromApi(paymentMethod = "alipay") {
     throw new Error(orderResult.detail || "从购物车创建订单失败");
   }
 
-  console.log("从购物车创建订单成功：", orderResult);
+  console.log("从购物车创建订单成功，订单处于待支付状态：", orderResult);
 
-  const payResult = await payOrderFromApi(orderResult.order_id, paymentMethod);
-
-  return {
-    order: orderResult,
-    payment: payResult,
-  };
+  return orderResult;
 }
 
-async function createOrderFromSelectedCartFromApi(cartItemIds, paymentMethod = "alipay") {
+async function createOrderFromSelectedCartFromApi(cartItemIds) {
   const response = await fetch(`${API_BASE_URL}/orders/from-cart-selected`, {
     method: "POST",
     headers: {
@@ -504,14 +575,9 @@ async function createOrderFromSelectedCartFromApi(cartItemIds, paymentMethod = "
     throw new Error(orderResult.detail || "从购物车选中商品创建订单失败");
   }
 
-  console.log("从购物车选中商品创建订单成功：", orderResult);
+  console.log("从购物车选中商品创建订单成功，订单处于待支付状态：", orderResult);
 
-  const payResult = await payOrderFromApi(orderResult.order_id, paymentMethod);
-
-  return {
-    order: orderResult,
-    payment: payResult,
-  };
+  return orderResult;
 }
 
 function getSelectedCartItemIds(cart, selectedIds) {
@@ -531,7 +597,7 @@ async function submitCartCheckout() {
   const selectedCartItemIds = getSelectedCartItemIds(cart, selectedIds);
 
   if (!selectedCartItemIds.length) {
-    setFeedback(sidebarCartFeedback, "请先勾选要结算的商品。", true);
+    setFeedback(sidebarCartFeedback, "请先勾选要提交订单的商品。", true);
     return;
   }
 
@@ -539,28 +605,37 @@ async function submitCartCheckout() {
     isCartCheckoutSubmitting = true;
     renderSidebar();
 
-    setFeedback(sidebarCartFeedback, "正在从数据库购物车中创建选中商品订单，请稍候...");
+    setFeedback(sidebarCartFeedback, "正在从数据库购物车中创建待支付订单，请稍候...");
 
-    const result = await createOrderFromSelectedCartFromApi(
-      selectedCartItemIds,
-      activeCartPaymentMethod
-    );
+    const orderResult = await createOrderFromSelectedCartFromApi(selectedCartItemIds);
 
-    const orderNo =
-      result.order?.order_no ||
-      result.payment?.order_summary?.order_no ||
-      "未知订单号";
+    const orderNo = orderResult.order_no || "未知订单号";
 
-    console.log("购物车选中商品结算完整流程成功：", result);
+    console.log("购物车选中商品提交订单成功：", orderResult);
 
     setFeedback(
       sidebarCartFeedback,
-      `选中商品结算并支付成功！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${CURRENT_ADDRESS_ID}`
+      `选中商品订单已提交！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${CURRENT_ADDRESS_ID}，当前状态：待支付。`
     );
 
     await syncCartFromApi(CURRENT_USER_ID);
     saveStoredCartSelections(storage, []);
     renderSidebar();
+
+    const payResult = await payOrderWithPasswordPrompt(
+      orderResult.order_id,
+      activeCartPaymentMethod,
+      sidebarCartFeedback
+    );
+
+    if (payResult.paid) {
+      setFeedback(
+        sidebarCartFeedback,
+        `选中商品支付成功！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}。`
+      );
+
+      await loadProductsFromApi();
+    }
 
     await refreshOrdersFromApi();
 
@@ -568,8 +643,8 @@ async function submitCartCheckout() {
       openSidebar("orders");
     }, 800);
   } catch (error) {
-    console.error("购物车选中商品结算失败：", error);
-    setFeedback(sidebarCartFeedback, `购物车选中商品结算失败：${error.message}`, true);
+    console.error("购物车提交订单或支付失败：", error);
+    setFeedback(sidebarCartFeedback, `购物车提交订单或支付失败：${error.message}`, true);
   } finally {
     isCartCheckoutSubmitting = false;
     renderSidebar();
@@ -801,6 +876,37 @@ async function showOrderDetail(orderId) {
   }
 }
 
+async function handlePayPendingOrder(orderId) {
+  const paymentMethod = promptPaymentMethod("alipay");
+
+  if (!paymentMethod) {
+    return;
+  }
+
+  try {
+    const payResult = await payOrderWithPasswordPrompt(
+      orderId,
+      paymentMethod,
+      null
+    );
+
+    if (!payResult.paid) {
+      await refreshOrdersFromApi();
+      await showOrderDetail(orderId);
+      return;
+    }
+
+    console.log("待支付订单继续支付成功：", payResult);
+
+    await loadProductsFromApi();
+    await refreshOrdersFromApi();
+    await showOrderDetail(orderId);
+  } catch (error) {
+    console.error("继续支付失败：", error);
+    window.alert(`继续支付失败：${error.message}`);
+  }
+}
+
 async function handleCancelOrder(orderId) {
   if (cancellingOrderIds.has(orderId)) {
     return;
@@ -870,6 +976,20 @@ function renderApiOrders(orders) {
             >
               查看详情
             </button>
+
+            ${
+              order.status === "PENDING_PAYMENT"
+                ? `
+                  <button
+                    class="ghost-button ghost-button--small ghost-button--solid"
+                    type="button"
+                    data-order-pay-id="${order.order_id}"
+                  >
+                    去支付
+                  </button>
+                `
+                : ""
+            }
 
             ${
               cancellable
@@ -1321,7 +1441,7 @@ function renderPurchaseModal() {
 
   if (purchaseSubmit) {
     purchaseSubmit.disabled = !product;
-    purchaseSubmit.textContent = product ? `立即支付 ${formatPrice(total)}` : '请选择商品';
+    purchaseSubmit.textContent = product ? `提交订单 ${formatPrice(total)}` : '请选择商品';
   }
 
   if (purchaseFeedback) {
@@ -1380,45 +1500,50 @@ async function submitPurchaseOrder() {
   try {
     if (purchaseSubmit) {
       purchaseSubmit.disabled = true;
-      purchaseSubmit.textContent = "正在创建订单...";
+      purchaseSubmit.textContent = "正在提交订单...";
     }
 
     setFeedback(purchaseFeedback, "正在创建待支付订单，请稍候...");
 
-    const result = await createDirectOrderFromApi(
+    const orderResult = await createDirectOrderFromApi(
       activePurchaseProduct,
-      quantity,
-      activePurchasePaymentMethod
+      quantity
     );
 
-    const orderNo =
-      result.order?.order_no ||
-      result.payment?.order_summary?.order_no ||
-      "未知订单号";
+    const orderNo = orderResult.order_no || "未知订单号";
 
     setFeedback(
       purchaseFeedback,
-      `支付成功！订单号：${orderNo}，金额：${formatPrice(total)}。`
+      `订单已提交，订单号：${orderNo}，金额：${formatPrice(total)}，当前状态：待支付。`
     );
 
-    console.log("直接购买完整流程成功：", result);
+    const payResult = await payOrderWithPasswordPrompt(
+      orderResult.order_id,
+      activePurchasePaymentMethod,
+      purchaseFeedback
+    );
 
-    // 支付成功后重新拉商品，刷新库存和销量展示
-    await loadProductsFromApi();
+    if (payResult.paid) {
+      setFeedback(
+        purchaseFeedback,
+        `支付成功！订单号：${orderNo}，金额：${formatPrice(total)}。`
+      );
 
-    // 暂时打开购买记录侧边栏，后面下一步再把它接到 GET /orders/user/{user_id}
+      await loadProductsFromApi();
+    }
+
     setTimeout(() => {
       closePurchaseModal();
       openSidebar("orders");
       refreshOrdersFromApi();
     }, 800);
   } catch (error) {
-    console.error("立即支付失败：", error);
-    setFeedback(purchaseFeedback, `立即支付失败：${error.message}`, true);
+    console.error("提交订单或支付失败：", error);
+    setFeedback(purchaseFeedback, `提交订单或支付失败：${error.message}`, true);
   } finally {
     if (purchaseSubmit) {
       purchaseSubmit.disabled = false;
-      purchaseSubmit.textContent = `立即支付 ${formatPrice(total)}`;
+      purchaseSubmit.textContent = `提交订单 ${formatPrice(total)}`;
     }
   }
 }
@@ -1742,7 +1867,7 @@ function renderCartSummary(cart, selectedIds) {
           isCartCheckoutSubmitting
             ? '结算中...'
             : hasSelectedItems
-              ? `使用${paymentLabel}结算已选商品`
+              ? `使用${paymentLabel}提交已选商品订单`
               : '请先勾选商品'
         }
       </button>
@@ -2123,15 +2248,15 @@ sidebarNavButtons.forEach((button) => {
 
 if (ordersList) {
   ordersList.addEventListener("click", (event) => {
-    const cancelButton = event.target.closest("[data-order-cancel-id]");
-    if (cancelButton) {
-      const orderId = Number(cancelButton.dataset.orderCancelId);
+    const payButton = event.target.closest("[data-order-pay-id]");
+    if (payButton) {
+      const orderId = Number(payButton.dataset.orderPayId);
 
       if (!Number.isInteger(orderId) || orderId <= 0) {
         return;
       }
 
-      handleCancelOrder(orderId);
+      handlePayPendingOrder(orderId);
       return;
     }
 

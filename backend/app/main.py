@@ -47,8 +47,10 @@ class OrderFromSelectedCartRequest(BaseModel):
     cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
 
 class PayOrderRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
     order_id: int = Field(..., gt=0, description="订单ID")
-    pay_method: str = Field("ALIPAY", description="支付方式，例如 ALIPAY / WECHAT")
+    pay_method: str = Field(..., description="支付方式：ALIPAY / WECHAT / COD")
+    pay_password: str = Field(..., min_length=6, max_length=6, description="6位支付密码")
 
 class DirectOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
@@ -606,25 +608,61 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
 def pay_order(req: PayOrderRequest):
     """
     支付订单。
-    调用已有存储过程 sp_pay_order。
+    先校验用户、订单归属和支付密码，校验通过后调用 sp_pay_order。
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 调用支付订单存储过程
+                    # 1. 校验支付密码
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM `user`
+                        WHERE id = %s
+                          AND is_deleted = 0
+                          AND pay_password_hash = SHA2(%s, 256)
+                        """,
+                        (req.user_id, req.pay_password)
+                    )
+                    password_check = cursor.fetchone()
+
+                    if not password_check or password_check["cnt"] == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="支付密码错误"
+                        )
+
+                    # 2. 校验订单是否属于当前用户
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM order_main
+                        WHERE id = %s
+                          AND user_id = %s
+                        """,
+                        (req.order_id, req.user_id)
+                    )
+                    order_check = cursor.fetchone()
+
+                    if not order_check or order_check["cnt"] == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="订单不存在或不属于当前用户"
+                        )
+
+                    # 3. 调用原有支付存储过程
                     cursor.execute(
                         "CALL sp_pay_order(%s, %s)",
                         (req.order_id, req.pay_method)
                     )
 
-                    # 2. 清理可能存在的结果集
                     while cursor.nextset():
                         pass
 
                 conn.commit()
 
-                # 3. 查询订单汇总
+                # 4. 查询支付后的订单概要
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -647,7 +685,6 @@ def pay_order(req: PayOrderRequest):
                     )
                     order_summary = cursor.fetchone()
 
-                # 4. 查询支付记录
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -666,24 +703,9 @@ def pay_order(req: PayOrderRequest):
                     )
                     payment_records = cursor.fetchall()
 
-                # 5. 查询订单状态日志
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            id,
-                            order_id,
-                            from_status,
-                            to_status,
-                            remark,
-                            created_at
-                        FROM order_status_log
-                        WHERE order_id = %s
-                        ORDER BY id
-                        """,
-                        (req.order_id,)
-                    )
-                    status_logs = cursor.fetchall()
+            except HTTPException:
+                conn.rollback()
+                raise
 
             except Exception:
                 conn.rollback()
@@ -694,15 +716,17 @@ def pay_order(req: PayOrderRequest):
             "message": "订单支付成功",
             "order_id": req.order_id,
             "order_summary": jsonable_encoder(order_summary),
-            "payment_records": jsonable_encoder(payment_records),
-            "status_logs": jsonable_encoder(status_logs)
+            "payment_records": jsonable_encoder(payment_records)
         }
+
+    except HTTPException:
+        raise
 
     except MySQLError as e:
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
-            detail=f"支付订单失败：{error_message}"
+            detail=f"订单支付失败：{error_message}"
         )
 
     except Exception as e:

@@ -1751,6 +1751,65 @@ async function updateCartQuantityToApi(itemId, delta) {
   }
 }
 
+async function deleteCartItemFromApi(itemId) {
+  const cart = getStoredCart(storage);
+  const item = cart.find((cartItem) => cartItem.id === itemId);
+
+  if (!item) {
+    setFeedback(sidebarCartFeedback, "删除失败：没有找到购物车商品。", true);
+    return;
+  }
+
+  const cartItemId = Number(item.cartItemId);
+  if (!Number.isInteger(cartItemId) || cartItemId <= 0) {
+    setFeedback(sidebarCartFeedback, "删除失败：缺少数据库购物车明细ID。", true);
+    return;
+  }
+
+  const confirmed = window.confirm(`确定要从购物车删除「${item.name}」吗？`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    setFeedback(sidebarCartFeedback, "正在删除购物车商品...");
+
+    const response = await fetch(`${API_BASE_URL}/cart/delete-item`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: CURRENT_USER_ID,
+        cart_item_id: cartItemId,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.detail || "删除购物车商品失败");
+    }
+
+    console.log("删除购物车商品成功：", result);
+
+    const selectedIds = getStoredCartSelections(storage);
+    saveStoredCartSelections(
+      storage,
+      selectedIds.filter((selectedId) => selectedId !== itemId)
+    );
+
+    await syncCartFromApi(CURRENT_USER_ID);
+    renderSidebar();
+
+    setFeedback(sidebarCartFeedback, "已从购物车删除该商品。");
+  } catch (error) {
+    console.error("删除购物车商品失败：", error);
+    setFeedback(sidebarCartFeedback, `删除购物车商品失败：${error.message}`, true);
+  }
+}
+
 function renderCartShelf(listElement, items, emptyState, selectedIds) {
   const cartItems = Array.isArray(items) ? items : [];
 
@@ -1793,7 +1852,17 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                 <h4 class="cart-item__title">${item.name}</h4>
                 <p class="cart-item__meta">${item.category || '商品'}</p>
               </div>
-              <strong class="cart-item__subtotal">${formatCartMoney(subtotal)}</strong>
+              <div class="cart-item__right-actions">
+                <strong class="cart-item__subtotal">${formatCartMoney(subtotal)}</strong>
+                <button
+                  class="cart-item__delete"
+                  type="button"
+                  data-cart-delete-id="${item.id}"
+                  aria-label="删除购物车商品"
+                >
+                  删除
+                </button>
+              </div>
             </div>
             <div class="cart-item__bottomline">
               <span class="cart-item__unit-price">${formatCartMoney(item.price)} / 件</span>
@@ -2277,6 +2346,12 @@ if (ordersList) {
 
 if (cartList) {
   cartList.addEventListener('click', (event) => {
+    const deleteButton = event.target.closest('[data-cart-delete-id]');
+    if (deleteButton) {
+      deleteCartItemFromApi(deleteButton.dataset.cartDeleteId);
+      return;
+    }
+
     const selectButton = event.target.closest('[data-cart-select-id]');
     if (selectButton) {
       toggleCartSelection(selectButton.dataset.cartSelectId);

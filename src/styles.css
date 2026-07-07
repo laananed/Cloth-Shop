@@ -2506,6 +2506,28 @@ body::after {
     align-items: flex-start;
   }
 
+  .cart-item__right-actions {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.cart-item__delete {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #c83f3f;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.cart-item__delete:hover {
+  text-decoration: underline;
+}
+
   .cart-item__quantity-zone {
     justify-items: start;
   }

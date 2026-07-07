@@ -32,6 +32,11 @@ class CartAddRequest(BaseModel):
     sku_id: int = Field(..., gt=0, description="SKU ID")
     quantity: int = Field(..., gt=0, description="加入购物车数量")
 
+class CartUpdateQuantityRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    cart_item_id: int = Field(..., gt=0, description="购物车明细ID")
+    quantity: int = Field(..., gt=0, description="修改后的购物车商品数量")
+
 class OrderFromCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
@@ -249,6 +254,81 @@ def add_to_cart(req: CartAddRequest):
             detail=f"服务器错误：{str(e)}"
         )
 
+
+@app.post("/cart/update-quantity")
+def update_cart_quantity(req: CartUpdateQuantityRequest):
+    """
+    修改购物车商品数量。
+    调用存储过程 sp_update_cart_item_quantity。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_update_cart_item_quantity(%s, %s, %s)",
+                        (req.user_id, req.cart_item_id, req.quantity)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            user_id,
+                            email,
+                            cart_id,
+                            cart_item_id,
+                            product_id,
+                            product_name,
+                            sku_id,
+                            sku_name,
+                            price,
+                            quantity,
+                            item_amount,
+                            available_stock,
+                            cart_status,
+                            created_at,
+                            updated_at
+                        FROM v_user_cart_detail
+                        WHERE user_id = %s
+                        ORDER BY cart_item_id
+                        """,
+                        (req.user_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        total_amount = sum(float(row["item_amount"]) for row in rows)
+
+        return {
+            "success": True,
+            "message": "修改购物车数量成功",
+            "user_id": req.user_id,
+            "count": len(rows),
+            "cart_total_amount": total_amount,
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"修改购物车数量失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
 
 @app.post("/orders/from-cart")
 def create_order_from_cart(req: OrderFromCartRequest):

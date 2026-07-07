@@ -118,6 +118,7 @@ let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = '';
 let activeCartPaymentMethod = 'alipay';
 let isCartCheckoutSubmitting = false;
+let isCartQuantityUpdating = false;
 
 const purchasePaymentMethods = [
   { value: 'alipay', label: '支付宝' },
@@ -1295,6 +1296,68 @@ function updateCartQuantity(itemId, delta) {
   return nextCart;
 }
 
+async function updateCartQuantityToApi(itemId, delta) {
+  if (isCartQuantityUpdating) {
+    return;
+  }
+
+  const cart = getStoredCart(storage);
+  const item = cart.find((cartItem) => cartItem.id === itemId);
+
+  if (!item) {
+    setFeedback(sidebarCartFeedback, "修改数量失败：没有找到购物车商品。", true);
+    return;
+  }
+
+  const cartItemId = Number(item.cartItemId);
+  if (!Number.isInteger(cartItemId) || cartItemId <= 0) {
+    setFeedback(sidebarCartFeedback, "修改数量失败：缺少数据库购物车明细ID。", true);
+    return;
+  }
+
+  const currentQuantity = Math.max(1, Number(item.quantity || 1));
+  const nextQuantity = Math.max(1, currentQuantity + Number(delta || 0));
+
+  if (nextQuantity === currentQuantity) {
+    return;
+  }
+
+  try {
+    isCartQuantityUpdating = true;
+    setFeedback(sidebarCartFeedback, "正在同步购物车数量...");
+
+    const response = await fetch(`${API_BASE_URL}/cart/update-quantity`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: CURRENT_USER_ID,
+        cart_item_id: cartItemId,
+        quantity: nextQuantity,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.detail || "修改购物车数量失败");
+    }
+
+    console.log("修改购物车数量成功：", result);
+
+    await syncCartFromApi(CURRENT_USER_ID);
+    renderSidebar();
+
+    setFeedback(sidebarCartFeedback, "购物车数量已同步数据库。");
+  } catch (error) {
+    console.error("修改购物车数量失败：", error);
+    setFeedback(sidebarCartFeedback, `修改购物车数量失败：${error.message}`, true);
+  } finally {
+    isCartQuantityUpdating = false;
+  }
+}
+
 function renderCartShelf(listElement, items, emptyState, selectedIds) {
   const cartItems = Array.isArray(items) ? items : [];
 
@@ -1809,8 +1872,7 @@ if (cartList) {
       return;
     }
 
-    updateCartQuantity(itemId, delta);
-    renderSidebar();
+    updateCartQuantityToApi(itemId, delta);
   });
 }
 

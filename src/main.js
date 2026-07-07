@@ -34,6 +34,9 @@ import {
 
 const API_BASE_URL = "http://127.0.0.1:8050";
 
+const CURRENT_USER_ID = 2;
+const CURRENT_ADDRESS_ID = 3;
+
 const copy = getSiteCopy();
 const collections = getCollections();
 // const products = getProducts();
@@ -159,41 +162,84 @@ async function testLoadProductsFromApi() {
 }
 
 function convertApiProducts(apiRows) {
-  return apiRows.map((row, index) => {
-    // 用原来静态商品的图片做兜底，避免数据库没有图片字段时页面没图
-    const imageSource = staticProducts[(Number(row.product_id || index + 1) - 1) % staticProducts.length] || staticProducts[0];
+  const productMap = new Map();
 
-    return {
-      // 前端卡片用 sku_id 做唯一 id，因为后端返回的是 SKU 级别数据
-      id: Number(row.sku_id),
-      productId: Number(row.product_id),
-      skuId: Number(row.sku_id),
+  apiRows.forEach((row, index) => {
+    const productId = Number(row.product_id);
+    const skuId = Number(row.sku_id);
 
-      name: `${row.product_name} / ${row.sku_name}`,
-      category: row.category_name,
-      badge: row.sku_status === "ON_SALE" ? "数据库商品" : row.sku_status,
+    if (!productMap.has(productId)) {
+      const imageSource =
+        staticProducts[(productId - 1) % staticProducts.length] ||
+        staticProducts[index % staticProducts.length] ||
+        staticProducts[0];
 
+      productMap.set(productId, {
+        // 前端原有 ranking.js 需要 id 是字符串
+        id: `product-${productId}`,
+
+        // 数据库字段
+        productId,
+        skuId,
+        defaultSkuId: skuId,
+
+        name: row.product_name,
+        category: row.category_name,
+        badge: "数据库商品",
+
+        price: Number(row.price || 0),
+        sales: Number(row.total_sold_count || 0),
+
+        availableStock: Number(row.available_stock || 0),
+        lockedStock: Number(row.locked_stock || 0),
+
+        skuList: [
+          {
+            skuId,
+            skuName: row.sku_name,
+            price: Number(row.price || 0),
+            availableStock: Number(row.available_stock || 0),
+            lockedStock: Number(row.locked_stock || 0),
+          },
+        ],
+
+        detail: "",
+
+        // 继续复用原来的图片
+        image: imageSource.image,
+        imageFit: imageSource.imageFit,
+        imageFocus: imageSource.imageFocus,
+        imageZoom: imageSource.imageZoom,
+
+        detailLayout: imageSource.detailLayout || "price-sales-rank",
+        purchaseLayout: imageSource.purchaseLayout || "buy",
+      });
+
+      return;
+    }
+
+    const product = productMap.get(productId);
+
+    product.skuList.push({
+      skuId,
+      skuName: row.sku_name,
       price: Number(row.price || 0),
-      sales: Number(row.total_sold_count || 0),
-
-      detail: `库存 ${row.available_stock ?? 0} 件，锁定 ${row.locked_stock ?? 0} 件。SKU：${row.sku_name}`,
-
-      image: imageSource.image,
-      imageFit: imageSource.imageFit,
-      imageFocus: imageSource.imageFocus,
-      imageZoom: imageSource.imageZoom,
-
-      // 保持原来卡片样式
-      detailLayout: imageSource.detailLayout || "price-sales-rank",
-      purchaseLayout: imageSource.purchaseLayout || "buy",
-
-      // 后面接购物车、直接下单时会用
       availableStock: Number(row.available_stock || 0),
       lockedStock: Number(row.locked_stock || 0),
-    };
+    });
+
+    product.price = Math.min(product.price, Number(row.price || 0));
+    product.sales += Number(row.total_sold_count || 0);
+    product.availableStock += Number(row.available_stock || 0);
+    product.lockedStock += Number(row.locked_stock || 0);
+  });
+
+  return Array.from(productMap.values()).map((product) => {
+    product.detail = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
+    product.skuId = product.defaultSkuId;
+    return product;
   });
 }
-
 
 async function loadProductsFromApi() {
   try {
@@ -227,6 +273,236 @@ async function loadProductsFromApi() {
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
     updateView();
+  }
+}
+
+function convertApiCartRows(apiRows) {
+  return apiRows.map((row) => {
+    const matchedProduct =
+      products.find((product) => product.productId === Number(row.product_id)) ||
+      products.find((product) => product.skuId === Number(row.sku_id)) ||
+      products[0];
+
+    return {
+      id: `sku-${row.sku_id}`,
+      productId: Number(row.product_id),
+      skuId: Number(row.sku_id),
+
+      name: `${row.product_name} / ${row.sku_name}`,
+      category: matchedProduct?.category || "商品",
+      badge: "数据库购物车",
+      image: matchedProduct?.image || staticProducts[0]?.image || "",
+
+      price: Number(row.price || 0),
+      quantity: Number(row.quantity || 1),
+    };
+  });
+}
+
+
+async function syncCartFromApi(userId = CURRENT_USER_ID) {
+  const response = await fetch(`${API_BASE_URL}/cart/${userId}`);
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const result = await response.json();
+
+  if (!result.success || !Array.isArray(result.data)) {
+    throw new Error("后端购物车返回格式不正确");
+  }
+
+  const cartItems = convertApiCartRows(result.data);
+
+  // 暂时仍然复用原前端购物车展示逻辑，但数据来源改成后端
+  saveStoredCart(storage, cartItems);
+
+  console.log("已同步后端购物车：", {
+    count: cartItems.length,
+    cartItems,
+  });
+
+  return cartItems;
+}
+
+
+async function addCartToApi(product) {
+  const skuId = product.defaultSkuId || product.skuId;
+
+  if (!skuId) {
+    setFeedback(sidebarCartFeedback, "加入购物车失败：当前商品没有 SKU。", true);
+    openSidebar("cart");
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/cart/add`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: CURRENT_USER_ID,
+        sku_id: skuId,
+        quantity: 1,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.detail || "加入购物车失败");
+    }
+
+    await syncCartFromApi(CURRENT_USER_ID);
+
+    setFeedback(sidebarCartFeedback, "已加入数据库购物车。");
+    openSidebar("cart");
+
+    console.log("加入购物车成功：", result);
+  } catch (error) {
+    console.error("加入购物车失败：", error);
+
+    setFeedback(
+      sidebarCartFeedback,
+      `加入购物车失败：${error.message}`,
+      true
+    );
+    openSidebar("cart");
+  }
+}
+
+function normalizePayMethod(method) {
+  const payMethodMap = {
+    alipay: "ALIPAY",
+    wechat: "WECHAT",
+    cod: "COD",
+  };
+
+  return payMethodMap[method] || "ALIPAY";
+}
+
+async function payOrderFromApi(orderId, paymentMethod) {
+  const response = await fetch(`${API_BASE_URL}/orders/pay`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      order_id: orderId,
+      pay_method: normalizePayMethod(paymentMethod),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "支付订单失败");
+  }
+
+  console.log("订单支付成功：", result);
+  return result;
+}
+
+async function createDirectOrderFromApi(product, quantity = 1, paymentMethod = "alipay") {
+  const skuId = product.defaultSkuId || product.skuId;
+
+  if (!skuId) {
+    throw new Error("当前商品没有 SKU，不能直接下单。");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/orders/direct`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      address_id: CURRENT_ADDRESS_ID,
+      sku_id: skuId,
+      quantity: Math.max(1, Number(quantity) || 1),
+    }),
+  });
+
+  const orderResult = await response.json();
+
+  if (!response.ok || !orderResult.success) {
+    throw new Error(orderResult.detail || "直接下单失败");
+  }
+
+  console.log("直接下单成功：", orderResult);
+
+  const payResult = await payOrderFromApi(orderResult.order_id, paymentMethod);
+
+  return {
+    order: orderResult,
+    payment: payResult,
+  };
+}
+
+function formatOrderStatus(status) {
+  const statusMap = {
+    PENDING_PAYMENT: "待支付",
+    PAID: "已支付",
+    CANCELLED: "已取消",
+    SHIPPED: "已发货",
+    COMPLETED: "已完成",
+  };
+
+  return statusMap[status] || status || "未知状态";
+}
+
+async function loadOrdersFromApi(userId = CURRENT_USER_ID) {
+  const response = await fetch(`${API_BASE_URL}/orders/user/${userId}`);
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "查询订单列表失败");
+  }
+
+  console.log("已加载数据库订单列表：", result);
+
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+function renderApiOrders(orders) {
+  if (!ordersList) {
+    return;
+  }
+
+  if (!orders.length) {
+    ordersList.innerHTML = `<p class="orders-empty">暂无购买记录</p>`;
+    return;
+  }
+
+  ordersList.innerHTML = orders
+    .map((order) => `
+      <article class="order-card">
+        <div class="order-card__header">
+          <strong>${order.order_no}</strong>
+          <span>${formatOrderStatus(order.status)}</span>
+        </div>
+        <p>订单ID：${order.order_id}</p>
+        <p>商品种类：${order.item_kind_count} 类，数量：${order.total_quantity} 件</p>
+        <p>合计：${formatPrice(order.total_amount)}</p>
+        <p>创建时间：${order.created_at}</p>
+      </article>
+    `)
+    .join("");
+}
+
+async function refreshOrdersFromApi() {
+  try {
+    const orders = await loadOrdersFromApi(CURRENT_USER_ID);
+    renderApiOrders(orders);
+  } catch (error) {
+    console.error("刷新订单列表失败：", error);
+
+    if (ordersList) {
+      ordersList.innerHTML = `<p class="orders-empty">加载订单失败：${error.message}</p>`;
+    }
   }
 }
 
@@ -642,13 +918,13 @@ function renderPurchaseModal() {
   }
 
   if (purchaseSubmit) {
-    purchaseSubmit.disabled = !product || !selectedAddress;
+    purchaseSubmit.disabled = !product;
     purchaseSubmit.textContent = product ? `立即支付 ${formatPrice(total)}` : '请选择商品';
   }
 
   if (purchaseFeedback) {
-    purchaseFeedback.textContent = selectedAddress ? '' : '请先添加并选择收货地址。';
-    purchaseFeedback.dataset.state = selectedAddress ? 'success' : 'error';
+    purchaseFeedback.textContent = '演示模式：使用数据库测试用户 2 和地址 3。';
+    purchaseFeedback.dataset.state = 'success';
   }
 }
 
@@ -691,33 +967,58 @@ function setPurchaseAddress(addressId) {
   renderPurchaseModal();
 }
 
-function submitPurchaseOrder() {
+async function submitPurchaseOrder() {
   if (!activePurchaseProduct) {
     return;
   }
 
-  const addressBook = getStoredAddressBook(storage);
-  const selectedAddress = getPurchaseAddress(addressBook, activePurchaseAddressId);
+  const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
+  const total = Number(activePurchaseProduct.price || 0) * quantity;
 
-  if (!selectedAddress) {
-    renderPurchaseModal();
-    return;
+  try {
+    if (purchaseSubmit) {
+      purchaseSubmit.disabled = true;
+      purchaseSubmit.textContent = "正在创建订单...";
+    }
+
+    setFeedback(purchaseFeedback, "正在创建待支付订单，请稍候...");
+
+    const result = await createDirectOrderFromApi(
+      activePurchaseProduct,
+      quantity,
+      activePurchasePaymentMethod
+    );
+
+    const orderNo =
+      result.order?.order_no ||
+      result.payment?.order_summary?.order_no ||
+      "未知订单号";
+
+    setFeedback(
+      purchaseFeedback,
+      `支付成功！订单号：${orderNo}，金额：${formatPrice(total)}。`
+    );
+
+    console.log("直接购买完整流程成功：", result);
+
+    // 支付成功后重新拉商品，刷新库存和销量展示
+    await loadProductsFromApi();
+
+    // 暂时打开购买记录侧边栏，后面下一步再把它接到 GET /orders/user/{user_id}
+    setTimeout(() => {
+      closePurchaseModal();
+      openSidebar("orders");
+      refreshOrdersFromApi();
+    }, 800);
+  } catch (error) {
+    console.error("立即支付失败：", error);
+    setFeedback(purchaseFeedback, `立即支付失败：${error.message}`, true);
+  } finally {
+    if (purchaseSubmit) {
+      purchaseSubmit.disabled = false;
+      purchaseSubmit.textContent = `立即支付 ${formatPrice(total)}`;
+    }
   }
-
-  const nextOrders = [
-    buildPurchaseOrder({
-      product: activePurchaseProduct,
-      quantity: activePurchaseQuantity,
-      paymentMethod: activePurchasePaymentMethod,
-      address: selectedAddress,
-    }),
-    ...getStoredOrders(storage),
-  ];
-
-  saveStoredOrders(storage, nextOrders);
-  renderSidebar();
-  closePurchaseModal();
-  openSidebar('orders');
 }
 
 function openSidebar(section = 'account') {
@@ -726,6 +1027,10 @@ function openSidebar(section = 'account') {
   sidebar.setAttribute('aria-hidden', 'false');
   document.body.classList.add('has-sidebar');
   renderSidebar();
+
+  if (activeSidebarSection === "orders") {
+    refreshOrdersFromApi();
+  }
 }
 
 function closeSidebar() {
@@ -967,27 +1272,31 @@ function renderSidebar() {
 
   renderSidebarAddressBook(getStoredAddressBook(storage));
 
-  const orderView = renderOrderItems(getStoredOrders(storage));
+  // const orderView = renderOrderItems(getStoredOrders(storage));
+  // if (ordersList) {
+  //   if (orderView.emptyState) {
+  //     ordersList.innerHTML = `<p class="orders-empty">${orderView.emptyState}</p>`;
+  //   } else {
+  //     ordersList.innerHTML = orderView.items
+  //       .map(
+  //         (order) => `
+  //           <article class="order-card">
+  //             <div class="order-card__header">
+  //               <strong>${order.orderNo}</strong>
+  //               <span>${order.status}</span>
+  //             </div>
+  //             <p>${order.items.join(' 路 ')}</p>
+  //             <p>合计：${formatPrice(order.totalPrice)}</p>
+  //             <p>${order.createdAt}</p>
+  //           </article>
+  //         `,
+  //       )
+  //       .join('');
+  //   }
+  // }
+
   if (ordersList) {
-    if (orderView.emptyState) {
-      ordersList.innerHTML = `<p class="orders-empty">${orderView.emptyState}</p>`;
-    } else {
-      ordersList.innerHTML = orderView.items
-        .map(
-          (order) => `
-            <article class="order-card">
-              <div class="order-card__header">
-                <strong>${order.orderNo}</strong>
-                <span>${order.status}</span>
-              </div>
-              <p>${order.items.join(' 路 ')}</p>
-              <p>合计：${formatPrice(order.totalPrice)}</p>
-              <p>${order.createdAt}</p>
-            </article>
-          `,
-        )
-        .join('');
-    }
+    ordersList.innerHTML = `<p class="orders-empty">正在加载数据库订单...</p>`;
   }
 
   renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
@@ -1557,11 +1866,19 @@ if (productGrid) {
       return;
     }
 
+    // if (actionButton.dataset.sidebarLaunch === 'cart') {
+    //   upsertCartItem(product);
+    //   setFeedback(sidebarCartFeedback, '已加入购物车。');
+    //   openSidebar('cart');
+    // }
+
     if (actionButton.dataset.sidebarLaunch === 'cart') {
-      upsertCartItem(product);
-      setFeedback(sidebarCartFeedback, '已加入购物车。');
-      openSidebar('cart');
-    }
+        addCartToApi(product);
+      }
+
+      if (actionButton.dataset.sidebarLaunch === 'checkout') {
+        createDirectOrderFromApi(product);
+      }
   });
 }
 

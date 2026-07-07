@@ -119,6 +119,7 @@ let activePurchaseAddressId = '';
 let activeCartPaymentMethod = 'alipay';
 let isCartCheckoutSubmitting = false;
 let isCartQuantityUpdating = false;
+const cancellingOrderIds = new Set();
 
 const purchasePaymentMethods = [
   { value: 'alipay', label: '支付宝' },
@@ -601,6 +602,59 @@ async function loadOrdersFromApi(userId = CURRENT_USER_ID) {
   return Array.isArray(result.data) ? result.data : [];
 }
 
+async function cancelOrderFromApi(orderId, remark = "用户在前端取消订单") {
+  const response = await fetch(`${API_BASE_URL}/orders/cancel`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      order_id: orderId,
+      remark,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "取消订单失败");
+  }
+
+  console.log("取消订单成功：", result);
+  return result;
+}
+
+function canCancelOrder(status) {
+  return status === "PENDING_PAYMENT";
+}
+
+function getOrderCancelHint(status) {
+  if (status === "PENDING_PAYMENT") {
+    return "";
+  }
+
+  if (status === "PAID") {
+    return "已支付订单不可取消";
+  }
+
+  if (status === "CANCELLED") {
+    return "订单已取消";
+  }
+
+  return "当前状态不可取消";
+}
+
+function setOrderActionFeedback(orderId, message, isError = false) {
+  const target = ordersList?.querySelector(`[data-order-action-feedback="${orderId}"]`);
+
+  if (!target) {
+    return;
+  }
+
+  target.textContent = message;
+  target.dataset.state = isError ? "error" : "success";
+}
+
 async function loadOrderDetailFromApi(orderId) {
   const response = await fetch(`${API_BASE_URL}/orders/${orderId}`);
   const result = await response.json();
@@ -747,6 +801,39 @@ async function showOrderDetail(orderId) {
   }
 }
 
+async function handleCancelOrder(orderId) {
+  if (cancellingOrderIds.has(orderId)) {
+    return;
+  }
+
+  const confirmed = window.confirm("确定要取消这个订单吗？取消后会释放锁定库存。");
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    cancellingOrderIds.add(orderId);
+    setOrderActionFeedback(orderId, "正在取消订单，请稍候...");
+
+    const result = await cancelOrderFromApi(orderId, "用户在前端订单列表取消订单");
+
+    console.log("订单取消完整流程成功：", result);
+
+    await refreshOrdersFromApi();
+
+    // 刷新列表后，自动展开刚取消的订单详情，方便查看状态日志和库存流水
+    await showOrderDetail(orderId);
+
+    await loadProductsFromApi();
+  } catch (error) {
+    console.error("取消订单失败：", error);
+    setOrderActionFeedback(orderId, `取消订单失败：${error.message}`, true);
+  } finally {
+    cancellingOrderIds.delete(orderId);
+  }
+}
+
 function renderApiOrders(orders) {
   if (!ordersList) {
     return;
@@ -758,26 +845,53 @@ function renderApiOrders(orders) {
   }
 
   ordersList.innerHTML = orders
-    .map((order) => `
-      <article class="order-card" data-order-id="${order.order_id}">
-        <div class="order-card__header">
-          <strong>${escapeHtml(order.order_no || "未知订单号")}</strong>
-          <span>${formatOrderStatus(order.status)}</span>
-        </div>
-        <p>订单ID：${order.order_id}</p>
-        <p>商品种类：${order.item_kind_count} 类，数量：${order.total_quantity} 件</p>
-        <p>合计：${formatPrice(order.total_amount)}</p>
-        <p>创建时间：${renderOrderDetailValue(order.created_at)}</p>
-        <button
-          class="ghost-button ghost-button--small"
-          type="button"
-          data-order-detail-id="${order.order_id}"
-        >
-          查看详情
-        </button>
-        <div data-order-detail-container="${order.order_id}"></div>
-      </article>
-    `)
+    .map((order) => {
+      const orderId = Number(order.order_id);
+      const isCancelling = cancellingOrderIds.has(orderId);
+      const cancellable = canCancelOrder(order.status);
+      const cancelHint = getOrderCancelHint(order.status);
+
+      return `
+        <article class="order-card" data-order-id="${order.order_id}">
+          <div class="order-card__header">
+            <strong>${escapeHtml(order.order_no || "未知订单号")}</strong>
+            <span>${formatOrderStatus(order.status)}</span>
+          </div>
+          <p>订单ID：${order.order_id}</p>
+          <p>商品种类：${order.item_kind_count} 类，数量：${order.total_quantity} 件</p>
+          <p>合计：${formatPrice(order.total_amount)}</p>
+          <p>创建时间：${renderOrderDetailValue(order.created_at)}</p>
+
+          <div class="order-card__actions">
+            <button
+              class="ghost-button ghost-button--small"
+              type="button"
+              data-order-detail-id="${order.order_id}"
+            >
+              查看详情
+            </button>
+
+            ${
+              cancellable
+                ? `
+                  <button
+                    class="ghost-button ghost-button--small ghost-button--danger"
+                    type="button"
+                    data-order-cancel-id="${order.order_id}"
+                    ${isCancelling ? "disabled" : ""}
+                  >
+                    ${isCancelling ? "取消中..." : "取消订单"}
+                  </button>
+                `
+                : `<span class="order-card__hint">${escapeHtml(cancelHint)}</span>`
+            }
+          </div>
+
+          <p class="order-card__action-feedback" data-order-action-feedback="${order.order_id}"></p>
+          <div data-order-detail-container="${order.order_id}"></div>
+        </article>
+      `;
+    })
     .join("");
 }
 
@@ -2009,8 +2123,19 @@ sidebarNavButtons.forEach((button) => {
 
 if (ordersList) {
   ordersList.addEventListener("click", (event) => {
-    const detailButton = event.target.closest("[data-order-detail-id]");
+    const cancelButton = event.target.closest("[data-order-cancel-id]");
+    if (cancelButton) {
+      const orderId = Number(cancelButton.dataset.orderCancelId);
 
+      if (!Number.isInteger(orderId) || orderId <= 0) {
+        return;
+      }
+
+      handleCancelOrder(orderId);
+      return;
+    }
+
+    const detailButton = event.target.closest("[data-order-detail-id]");
     if (!detailButton) {
       return;
     }

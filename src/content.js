@@ -46,11 +46,11 @@ const PRODUCT_DEFINITIONS = [
   {
     id: 'product-02',
     badge: '热卖',
-    name: '夜海巡礼过膝袜套装',
+    name: '白色过膝袜连衣裙',
     category: '幻夜出行',
     price: 259,
     sales: '4.8k',
-    detail: '披风、过膝袜和法杖元素一起拉出强烈舞台感，视觉记忆点非常集中。',
+    detail: '更新后的白色连衣裙搭配过膝袜更显轻盈，保留了原本的舞台感和辨识度。',
   },
   {
     id: 'product-03',
@@ -178,12 +178,21 @@ const PRODUCT_DEFINITIONS = [
     sales: '1.32k',
     detail: '圣诞帽、斗篷和暖色背景足够应景，适合在节日档期做限定曝光。',
   },
+  {
+    id: 'product-17',
+    badge: '高光',
+    name: '黑曜夜宴露肩长裙',
+    category: '幻夜出行',
+    price: 419,
+    sales: '1.08k',
+    detail: '黑色露肩长裙把线条感和气场拉满，适合做新增的高辨识度主视觉。',
+  },
 ];
 
 function buildProduct(product) {
   return {
     ...product,
-    detailLayout: product.detailLayout ?? 'split',
+    detailLayout: product.detailLayout ?? 'price-sales-rank',
     purchaseLayout: product.purchaseLayout ?? 'buy',
     image: `./assets/products/${product.id}.png`,
   };
@@ -193,10 +202,10 @@ export function getSiteCopy() {
   return {
     brandName: '汐雾衣橱',
     slogan: '把轻甜、海风和角色感都挂进同一面橱窗。',
-    intro: '围绕同一位白发精灵主角重构的 16 件图像型商品，用更强氛围和更统一的宣传图来带动点击。',
+    intro: '围绕同一位白发精灵主角重构的 17 件图像型商品，用更强氛围和更统一的宣传图来带动点击。',
     primaryCta: '浏览新目录',
     secondaryCta: '查看分区',
-    note: '16 个商品 · 图像重做 · 轻裁展示',
+    note: '17 个商品 · 图像重做 · 轻裁展示',
   };
 }
 

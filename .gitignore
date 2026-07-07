@@ -30,3 +30,7 @@ coverage/
 .git-blocked/
 .git-data/
 .git-staging/
+
+# Python caches
+__pycache__/
+*.pyc

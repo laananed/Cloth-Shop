@@ -601,6 +601,152 @@ async function loadOrdersFromApi(userId = CURRENT_USER_ID) {
   return Array.isArray(result.data) ? result.data : [];
 }
 
+async function loadOrderDetailFromApi(orderId) {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}`);
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "查询订单详情失败");
+  }
+
+  console.log("已加载订单详情：", result);
+
+  return result;
+}
+
+function renderOrderDetailValue(value, fallback = "暂无") {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+
+  return String(value);
+}
+
+function renderApiOrderDetail(detail) {
+  const summary = detail.order_summary || {};
+  const items = Array.isArray(detail.order_items) ? detail.order_items : [];
+  const payments = Array.isArray(detail.payment_records) ? detail.payment_records : [];
+  const logs = Array.isArray(detail.status_logs) ? detail.status_logs : [];
+  const inventoryLogs = Array.isArray(detail.inventory_logs) ? detail.inventory_logs : [];
+
+  return `
+    <div class="order-detail">
+      <section class="order-detail__section">
+        <h4>订单概要</h4>
+        <p>订单ID：${renderOrderDetailValue(summary.order_id)}</p>
+        <p>订单号：${renderOrderDetailValue(summary.order_no)}</p>
+        <p>订单状态：${formatOrderStatus(summary.status)}</p>
+        <p>订单金额：${formatPrice(summary.total_amount)}</p>
+        <p>商品种类：${renderOrderDetailValue(summary.item_kind_count)} 类</p>
+        <p>商品数量：${renderOrderDetailValue(summary.total_quantity)} 件</p>
+        <p>创建时间：${renderOrderDetailValue(summary.created_at)}</p>
+      </section>
+
+      <section class="order-detail__section">
+        <h4>商品明细</h4>
+        ${
+          items.length
+            ? items
+                .map(
+                  (item) => `
+                    <article class="order-detail__row">
+                      <strong>${escapeHtml(item.product_name || "未知商品")}</strong>
+                      <p>规格：${escapeHtml(item.sku_name || "默认规格")}</p>
+                      <p>数量：${renderOrderDetailValue(item.quantity)} 件</p>
+                      <p>单价：${formatPrice(item.price)}</p>
+                      <p>小计：${formatPrice(item.item_amount)}</p>
+                      <p>收货人：${escapeHtml(item.recipient_name || "暂无")}</p>
+                      <p>手机号：${escapeHtml(item.phone || "暂无")}</p>
+                      <p>地址：${escapeHtml(item.address_detail || "暂无")}</p>
+                    </article>
+                  `,
+                )
+                .join("")
+            : '<p class="order-detail__empty">暂无商品明细</p>'
+        }
+      </section>
+
+      <section class="order-detail__section">
+        <h4>支付记录</h4>
+        ${
+          payments.length
+            ? payments
+                .map(
+                  (payment) => `
+                    <article class="order-detail__row">
+                      <p>支付方式：${escapeHtml(payment.pay_method || "暂无")}</p>
+                      <p>支付状态：${escapeHtml(payment.pay_status || "暂无")}</p>
+                      <p>支付金额：${formatPrice(payment.pay_amount)}</p>
+                      <p>支付时间：${renderOrderDetailValue(payment.created_at)}</p>
+                    </article>
+                  `,
+                )
+                .join("")
+            : '<p class="order-detail__empty">暂无支付记录</p>'
+        }
+      </section>
+
+      <section class="order-detail__section">
+        <h4>状态日志</h4>
+        ${
+          logs.length
+            ? logs
+                .map(
+                  (log) => `
+                    <article class="order-detail__row">
+                      <p>${escapeHtml(log.from_status || "NULL")} → ${escapeHtml(log.to_status || "未知状态")}</p>
+                      <p>说明：${escapeHtml(log.remark || "暂无")}</p>
+                      <p>时间：${renderOrderDetailValue(log.created_at)}</p>
+                    </article>
+                  `,
+                )
+                .join("")
+            : '<p class="order-detail__empty">暂无状态日志</p>'
+        }
+      </section>
+
+      <section class="order-detail__section">
+        <h4>库存流水</h4>
+        ${
+          inventoryLogs.length
+            ? inventoryLogs
+                .map(
+                  (log) => `
+                    <article class="order-detail__row">
+                      <p>SKU ID：${renderOrderDetailValue(log.sku_id)}</p>
+                      <p>变化类型：${escapeHtml(log.change_type || "暂无")}</p>
+                      <p>变化数量：${renderOrderDetailValue(log.change_qty)}</p>
+                      <p>关联单号：${escapeHtml(log.ref_no || "暂无")}</p>
+                      <p>时间：${renderOrderDetailValue(log.created_at)}</p>
+                    </article>
+                  `,
+                )
+                .join("")
+            : '<p class="order-detail__empty">暂无库存流水</p>'
+        }
+      </section>
+    </div>
+  `;
+}
+
+async function showOrderDetail(orderId) {
+  const container = ordersList?.querySelector(`[data-order-detail-container="${orderId}"]`);
+
+  if (!container) {
+    return;
+  }
+
+  try {
+    container.innerHTML = '<p class="order-detail__loading">正在加载订单详情...</p>';
+
+    const detail = await loadOrderDetailFromApi(orderId);
+    container.innerHTML = renderApiOrderDetail(detail);
+  } catch (error) {
+    console.error("加载订单详情失败：", error);
+    container.innerHTML = `<p class="order-detail__empty">加载订单详情失败：${escapeHtml(error.message)}</p>`;
+  }
+}
+
 function renderApiOrders(orders) {
   if (!ordersList) {
     return;
@@ -613,15 +759,23 @@ function renderApiOrders(orders) {
 
   ordersList.innerHTML = orders
     .map((order) => `
-      <article class="order-card">
+      <article class="order-card" data-order-id="${order.order_id}">
         <div class="order-card__header">
-          <strong>${order.order_no}</strong>
+          <strong>${escapeHtml(order.order_no || "未知订单号")}</strong>
           <span>${formatOrderStatus(order.status)}</span>
         </div>
         <p>订单ID：${order.order_id}</p>
         <p>商品种类：${order.item_kind_count} 类，数量：${order.total_quantity} 件</p>
         <p>合计：${formatPrice(order.total_amount)}</p>
-        <p>创建时间：${order.created_at}</p>
+        <p>创建时间：${renderOrderDetailValue(order.created_at)}</p>
+        <button
+          class="ghost-button ghost-button--small"
+          type="button"
+          data-order-detail-id="${order.order_id}"
+        >
+          查看详情
+        </button>
+        <div data-order-detail-container="${order.order_id}"></div>
       </article>
     `)
     .join("");
@@ -1500,6 +1654,8 @@ function renderSidebar() {
     button.classList.toggle('is-active', button.dataset.sidebarTarget === activeSidebarSection);
   });
 
+  
+
   sidebarPanels.forEach((panel) => {
     panel.classList.toggle('is-active', panel.dataset.sidebarPanel === activeSidebarSection);
   });
@@ -1850,6 +2006,24 @@ sidebarNavButtons.forEach((button) => {
     openSidebar(button.dataset.sidebarTarget);
   });
 });
+
+if (ordersList) {
+  ordersList.addEventListener("click", (event) => {
+    const detailButton = event.target.closest("[data-order-detail-id]");
+
+    if (!detailButton) {
+      return;
+    }
+
+    const orderId = Number(detailButton.dataset.orderDetailId);
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return;
+    }
+
+    showOrderDetail(orderId);
+  });
+}
 
 if (cartList) {
   cartList.addEventListener('click', (event) => {

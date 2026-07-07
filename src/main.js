@@ -32,11 +32,21 @@ import {
   validateRegistration,
 } from './account-store.js?v=20260705a';
 
+const API_BASE_URL = "http://127.0.0.1:8050";
+
 const copy = getSiteCopy();
 const collections = getCollections();
-const products = getProducts();
-const salesRankMap = getSalesRankMap(products);
-const productsById = new Map(products.map((product) => [product.id, product]));
+// const products = getProducts();
+// const salesRankMap = getSalesRankMap(products);
+// const productsById = new Map(products.map((product) => [product.id, product]));
+
+// 先保留原来的静态商品，用它提供图片、样式等前端展示信息
+const staticProducts = getProducts();
+
+// products 改成 let，后面会用数据库商品替换
+let products = staticProducts;
+let salesRankMap = getSalesRankMap(products);
+let productsById = new Map(products.map((product) => [product.id, product]));
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -136,6 +146,89 @@ const sidebarMeta = {
 let activeCategory = '全部';
 let activeSidebarSection = 'account';
 let scrollFrame = 0;
+
+async function testLoadProductsFromApi() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/products`);
+    const result = await response.json();
+
+    console.log("后端商品接口返回：", result);
+  } catch (error) {
+    console.error("请求后端商品接口失败：", error);
+  }
+}
+
+function convertApiProducts(apiRows) {
+  return apiRows.map((row, index) => {
+    // 用原来静态商品的图片做兜底，避免数据库没有图片字段时页面没图
+    const imageSource = staticProducts[(Number(row.product_id || index + 1) - 1) % staticProducts.length] || staticProducts[0];
+
+    return {
+      // 前端卡片用 sku_id 做唯一 id，因为后端返回的是 SKU 级别数据
+      id: Number(row.sku_id),
+      productId: Number(row.product_id),
+      skuId: Number(row.sku_id),
+
+      name: `${row.product_name} / ${row.sku_name}`,
+      category: row.category_name,
+      badge: row.sku_status === "ON_SALE" ? "数据库商品" : row.sku_status,
+
+      price: Number(row.price || 0),
+      sales: Number(row.total_sold_count || 0),
+
+      detail: `库存 ${row.available_stock ?? 0} 件，锁定 ${row.locked_stock ?? 0} 件。SKU：${row.sku_name}`,
+
+      image: imageSource.image,
+      imageFit: imageSource.imageFit,
+      imageFocus: imageSource.imageFocus,
+      imageZoom: imageSource.imageZoom,
+
+      // 保持原来卡片样式
+      detailLayout: imageSource.detailLayout || "price-sales-rank",
+      purchaseLayout: imageSource.purchaseLayout || "buy",
+
+      // 后面接购物车、直接下单时会用
+      availableStock: Number(row.available_stock || 0),
+      lockedStock: Number(row.locked_stock || 0),
+    };
+  });
+}
+
+
+async function loadProductsFromApi() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/products`);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success || !Array.isArray(result.data)) {
+      throw new Error("后端返回的数据格式不正确");
+    }
+
+    products = convertApiProducts(result.data);
+    salesRankMap = getSalesRankMap(products);
+    productsById = new Map(products.map((product) => [product.id, product]));
+
+    updateView();
+
+    console.log("已使用后端数据库商品渲染页面：", {
+      count: products.length,
+      products,
+    });
+  } catch (error) {
+    console.error("加载后端商品失败，继续使用静态商品：", error);
+
+    // 失败时保留原来的静态商品，页面不会空白
+    products = staticProducts;
+    salesRankMap = getSalesRankMap(products);
+    productsById = new Map(products.map((product) => [product.id, product]));
+    updateView();
+  }
+}
 
 function formatPrice(value) {
   return `¥${Number(value || 0).toLocaleString('zh-CN')}`;
@@ -1501,6 +1594,8 @@ updateView();
 renderSidebar();
 updateHeroParallax();
 updateHeroScrollState();
+// testLoadProductsFromApi(); 测试函数，通过以后就可以不再使用。
+loadProductsFromApi();
 
 window.addEventListener('scroll', scheduleHeroParallax, { passive: true });
 window.addEventListener('resize', scheduleHeroParallax);

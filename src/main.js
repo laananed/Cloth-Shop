@@ -117,6 +117,8 @@ let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = '';
 
+let isCartCheckoutSubmitting = false;
+
 const purchasePaymentMethods = [
   { value: 'alipay', label: '支付宝' },
   { value: 'wechat', label: '微信支付' },
@@ -439,6 +441,73 @@ async function createDirectOrderFromApi(product, quantity = 1, paymentMethod = "
     order: orderResult,
     payment: payResult,
   };
+}
+
+async function createOrderFromCartFromApi(paymentMethod = "alipay") {
+  const response = await fetch(`${API_BASE_URL}/orders/from-cart`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      address_id: CURRENT_ADDRESS_ID,
+    }),
+  });
+
+  const orderResult = await response.json();
+
+  if (!response.ok || !orderResult.success) {
+    throw new Error(orderResult.detail || "从购物车创建订单失败");
+  }
+
+  console.log("从购物车创建订单成功：", orderResult);
+
+  const payResult = await payOrderFromApi(orderResult.order_id, paymentMethod);
+
+  return {
+    order: orderResult,
+    payment: payResult,
+  };
+}
+
+async function submitCartCheckout() {
+  if (isCartCheckoutSubmitting) {
+    return;
+  }
+
+  try {
+    isCartCheckoutSubmitting = true;
+    renderSidebar();
+
+    setFeedback(sidebarCartFeedback, "正在从数据库购物车创建订单，请稍候...");
+
+    const result = await createOrderFromCartFromApi("alipay");
+
+    const orderNo =
+      result.order?.order_no ||
+      result.payment?.order_summary?.order_no ||
+      "未知订单号";
+
+    console.log("购物车结算完整流程成功：", result);
+
+    setFeedback(sidebarCartFeedback, `购物车结算并支付成功！订单号：${orderNo}`);
+
+    await syncCartFromApi(CURRENT_USER_ID);
+    renderSidebar();
+
+    await refreshOrdersFromApi();
+
+    setTimeout(() => {
+      openSidebar("orders");
+    }, 800);
+  } catch (error) {
+    console.error("购物车结算失败：", error);
+    setFeedback(sidebarCartFeedback, `购物车结算失败：${error.message}`, true);
+  } finally {
+    isCartCheckoutSubmitting = false;
+    renderSidebar();
+  }
 }
 
 function formatOrderStatus(status) {
@@ -1229,14 +1298,22 @@ function renderCartSummary(cart, selectedIds) {
     return;
   }
 
-  const totals = getCartTotals(cart, selectedIds);
+  // 当前后端 /orders/from-cart 是“整车结算”，所以这里先按整个数据库购物车计算
+  const totals = getCartTotals(cart, null);
 
   cartSummary.innerHTML = `
     <div class="cart-summary__meta">
-      <span>共 ${totals.totalQuantity} 件</span>
+      <span>整车共 ${totals.totalQuantity} 件</span>
       <strong>${formatCartMoney(totals.totalAmount)}</strong>
     </div>
-    <button class="cart-summary__checkout" type="button" ${totals.totalQuantity ? '' : 'disabled'}>结算</button>
+    <button
+      class="cart-summary__checkout"
+      type="button"
+      data-cart-checkout
+      ${totals.totalQuantity && !isCartCheckoutSubmitting ? '' : 'disabled'}
+    >
+      ${isCartCheckoutSubmitting ? '结算中...' : '结算全部'}
+    </button>
   `;
 }
 
@@ -1632,6 +1709,18 @@ if (cartList) {
 
     updateCartQuantity(itemId, delta);
     renderSidebar();
+  });
+}
+
+if (cartSummary) {
+  cartSummary.addEventListener("click", (event) => {
+    const checkoutButton = event.target.closest("[data-cart-checkout]");
+
+    if (!checkoutButton) {
+      return;
+    }
+
+    submitCartCheckout();
   });
 }
 

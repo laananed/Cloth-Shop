@@ -116,7 +116,7 @@ let activePurchaseProduct = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = '';
-
+let activeCartPaymentMethod = 'alipay';
 let isCartCheckoutSubmitting = false;
 
 const purchasePaymentMethods = [
@@ -124,6 +124,16 @@ const purchasePaymentMethods = [
   { value: 'wechat', label: '微信支付' },
   { value: 'cod', label: '先用后付' },
 ];
+
+function getPaymentMethodLabel(method) {
+  return purchasePaymentMethods.find((item) => item.value === method)?.label || '支付宝';
+}
+
+function setCartPaymentMethod(method) {
+  const isAllowed = purchasePaymentMethods.some((item) => item.value === method);
+  activeCartPaymentMethod = isAllowed ? method : 'alipay';
+  renderSidebar();
+}
 
 const sidebarMeta = {
   account: {
@@ -482,7 +492,7 @@ async function submitCartCheckout() {
 
     setFeedback(sidebarCartFeedback, "正在从数据库购物车创建订单，请稍候...");
 
-    const result = await createOrderFromCartFromApi("alipay");
+    const result = await createOrderFromCartFromApi(activeCartPaymentMethod);
 
     const orderNo =
       result.order?.order_no ||
@@ -491,7 +501,10 @@ async function submitCartCheckout() {
 
     console.log("购物车结算完整流程成功：", result);
 
-    setFeedback(sidebarCartFeedback, `购物车结算并支付成功！订单号：${orderNo}`);
+  setFeedback(
+    sidebarCartFeedback,
+    `购物车结算并支付成功！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${CURRENT_ADDRESS_ID}`
+  );
 
     await syncCartFromApi(CURRENT_USER_ID);
     renderSidebar();
@@ -1300,20 +1313,49 @@ function renderCartSummary(cart, selectedIds) {
 
   // 当前后端 /orders/from-cart 是“整车结算”，所以这里先按整个数据库购物车计算
   const totals = getCartTotals(cart, null);
+  const paymentLabel = getPaymentMethodLabel(activeCartPaymentMethod);
 
   cartSummary.innerHTML = `
-    <div class="cart-summary__meta">
-      <span>整车共 ${totals.totalQuantity} 件</span>
-      <strong>${formatCartMoney(totals.totalAmount)}</strong>
+    <div class="cart-summary__checkout-panel">
+      <div class="cart-summary__meta">
+        <span>当前为整车结算，共 ${totals.totalQuantity} 件</span>
+        <strong>${formatCartMoney(totals.totalAmount)}</strong>
+      </div>
+
+      <div class="cart-summary__address">
+        <span>收货地址</span>
+        <strong>测试地址 ID：${CURRENT_ADDRESS_ID}</strong>
+        <small>当前阶段固定使用数据库测试用户 ${CURRENT_USER_ID} 的地址 ${CURRENT_ADDRESS_ID}，后续再接入地址选择。</small>
+      </div>
+
+      <div class="cart-summary__payment">
+        <span>支付方式</span>
+        <div class="cart-summary__payment-options">
+          ${purchasePaymentMethods
+            .map(
+              (method) => `
+                <button
+                  type="button"
+                  class="cart-summary__payment-button ${method.value === activeCartPaymentMethod ? 'is-active' : ''}"
+                  data-cart-payment-method="${method.value}"
+                >
+                  ${method.label}
+                </button>
+              `,
+            )
+            .join('')}
+        </div>
+      </div>
+
+      <button
+        class="cart-summary__checkout"
+        type="button"
+        data-cart-checkout
+        ${totals.totalQuantity && !isCartCheckoutSubmitting ? '' : 'disabled'}
+      >
+        ${isCartCheckoutSubmitting ? '结算中...' : `使用${paymentLabel}结算全部商品`}
+      </button>
     </div>
-    <button
-      class="cart-summary__checkout"
-      type="button"
-      data-cart-checkout
-      ${totals.totalQuantity && !isCartCheckoutSubmitting ? '' : 'disabled'}
-    >
-      ${isCartCheckoutSubmitting ? '结算中...' : '结算全部'}
-    </button>
   `;
 }
 
@@ -1714,8 +1756,13 @@ if (cartList) {
 
 if (cartSummary) {
   cartSummary.addEventListener("click", (event) => {
-    const checkoutButton = event.target.closest("[data-cart-checkout]");
+    const paymentButton = event.target.closest("[data-cart-payment-method]");
+    if (paymentButton) {
+      setCartPaymentMethod(paymentButton.dataset.cartPaymentMethod);
+      return;
+    }
 
+    const checkoutButton = event.target.closest("[data-cart-checkout]");
     if (!checkoutButton) {
       return;
     }

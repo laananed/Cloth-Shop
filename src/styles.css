@@ -751,6 +751,62 @@ body.has-modal {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 244, 247, 0.86));
 }
 
+.cart-summary__checkout-panel {
+  width: 100%;
+  display: grid;
+  gap: 14px;
+}
+
+.cart-summary__address,
+.cart-summary__payment {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(105, 174, 230, 0.16);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.cart-summary__address span,
+.cart-summary__payment span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.cart-summary__address strong {
+  color: var(--ink);
+}
+
+.cart-summary__address small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.cart-summary__payment-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cart-summary__payment-button {
+  appearance: none;
+  border: 1px solid rgba(105, 174, 230, 0.24);
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cart-summary__payment-button.is-active {
+  color: white;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
 .cart-summary__meta {
   display: grid;
   gap: 4px;

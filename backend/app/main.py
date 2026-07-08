@@ -1645,6 +1645,48 @@ def get_user_orders(user_id: int):
             detail=f"查询用户订单列表失败：{str(e)}"
         )
 
+@app.get("/admin/orders")
+def get_admin_orders():
+    """
+    后台订单列表。
+    第一版暂不做权限校验，直接查询全部订单汇总。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        order_no,
+                        user_id,
+                        email,
+                        status,
+                        total_amount,
+                        item_kind_count,
+                        total_quantity,
+                        item_total_amount,
+                        created_at,
+                        updated_at
+                    FROM v_order_summary
+                    ORDER BY created_at DESC, order_id DESC
+                    """
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询后台订单列表成功",
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询后台订单列表失败：{str(e)}"
+        )
+
 
 @app.get("/orders/{order_id}")
 def get_order_detail(order_id: int):

@@ -2759,16 +2759,88 @@ function initAdminPage() {
   let renderedOrders = null;
   let renderedStats = null;
   let renderedProducts = null;
+  function convertApiOrdersToAdminRows(apiRows) {
+  return apiRows.map((row) => ({
+    orderNo: row.order_no || `订单 ${row.order_id}`,
+    customerName: row.email || `用户 ${row.user_id}`,
+    itemsLabel: `${Number(row.item_kind_count || 0)} 类 / ${Number(row.total_quantity || 0)} 件`,
+    amountLabel: formatPrice(row.total_amount),
+    status: formatOrderStatus(row.status),
+    createdAt: renderOrderDetailValue(row.created_at),
+  }));
+}
+  async function refreshAdminOrdersFromApi() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/orders`);
+    const result = await response.json();
+
+    if (!response.ok || !result.success || !Array.isArray(result.data)) {
+      throw new Error(result.detail || "加载后台订单失败");
+    }
+
+    const rows = convertApiOrdersToAdminRows(result.data);
+
+    renderedOrders = {
+      emptyState: rows.length ? "" : "暂无数据库订单",
+      rows,
+    };
+
+    renderOrders();
+
+    console.log("后台订单已切换为数据库订单：", result);
+  } catch (error) {
+    console.error("后台订单加载失败：", error);
+  }
+}
+
+async function loadAdminProductsFromApi() {
+  const response = await fetch(`${API_BASE_URL}/products`);
+  const result = await response.json();
+
+  if (!response.ok || !result.success || !Array.isArray(result.data)) {
+    throw new Error(result.detail || "加载后台商品列表失败");
+  }
+
+  return convertApiRowsToAdminProducts(result.data);
+}
 
   function refreshAdminData() {
+  if (!Array.isArray(products) || products.length === 0) {
     products = getStoredAdminProducts(storage);
-    orders = getStoredMockOrders(storage);
-    summary = getSalesSummary(products, orders);
-    productRows = getProductSalesRows(products, orders);
-    renderedOrders = renderAdminOrdersView(products, orders);
-    renderedStats = renderAdminStatsView(summary, productRows);
-    renderedProducts = renderAdminProductsView(products);
   }
+
+  orders = getStoredMockOrders(storage);
+  summary = getSalesSummary(products, orders);
+  productRows = getProductSalesRows(products, orders);
+  renderedOrders = renderAdminOrdersView(products, orders);
+  renderedStats = renderAdminStatsView(summary, productRows);
+  renderedProducts = renderAdminProductsView(products);
+}
+
+async function refreshAdminProductsFromApi() {
+  try {
+    products = await loadAdminProductsFromApi();
+    refreshAdminData();
+    renderOrders();
+    renderStats();
+    renderProducts();
+
+    console.log("后台商品列表已切换为数据库数据：", products);
+  } catch (error) {
+    console.error("后台商品列表加载失败：", error);
+    products = getStoredAdminProducts(storage);
+    refreshAdminData();
+    renderOrders();
+    renderStats();
+    renderProducts();
+
+    setFeedback(
+      productFeedback,
+      `后台商品列表加载数据库失败，暂时显示本地模拟商品：${error.message}`,
+      true
+    );
+  }
+}
 
   function renderOrders() {
     if (!ordersBody) {
@@ -2867,6 +2939,7 @@ function initAdminPage() {
             </div>
             <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
             <span>${escapeHtml(row.status)} · ${escapeHtml(row.imageLabel)}</span>
+            <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
           </article>
         `,
       )
@@ -2931,13 +3004,19 @@ async function createAdminProductToApi(values, imageFile) {
   }
 
   refreshAdminData();
+  refreshAdminProductsFromApi();
   populateImageSelect();
+
   navButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      activePanel = button.dataset.adminNavTarget || 'orders';
-      syncPanels();
-    });
+  button.addEventListener('click', () => {
+    activePanel = button.dataset.adminNavTarget || 'orders';
+    syncPanels();
+
+    if (activePanel === "orders") {
+      refreshAdminOrdersFromApi();
+    }
   });
+});
 
   if (productForm) {
     productForm.addEventListener('submit', async (event) => {
@@ -2986,11 +3065,8 @@ async function createAdminProductToApi(values, imageFile) {
           imageSelect.selectedIndex = 0;
         }
 
-        refreshAdminData();
-        syncPanels();
-        renderOrders();
-        renderStats();
-        renderProducts();
+      await refreshAdminProductsFromApi();
+      syncPanels();
       } catch (error) {
         console.error("后台新增商品失败：", error);
         setFeedback(productFeedback, `新增商品失败：${error.message}`, true);
@@ -3002,6 +3078,7 @@ async function createAdminProductToApi(values, imageFile) {
   renderOrders();
   renderStats();
   renderProducts();
+  refreshAdminOrdersFromApi();
 }
 
 if (isAdminPage) {

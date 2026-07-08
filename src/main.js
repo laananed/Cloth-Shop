@@ -59,6 +59,8 @@ const primaryCta = document.querySelector('[data-primary-cta]');
 const secondaryCta = document.querySelector('[data-secondary-cta]');
 const collectionRail = document.querySelector('[data-collection-rail]');
 const productGrid = document.querySelector('[data-product-grid]');
+const productSearchInput = document.querySelector('[data-product-search]');
+const productSearchClear = document.querySelector('[data-product-search-clear]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
 const productCountLabel = document.querySelector('[data-product-count]');
 const heroSection = document.querySelector('[data-hero-section]');
@@ -170,6 +172,7 @@ const sidebarMeta = {
 };
 
 let activeCategory = '全部';
+let activeProductSearchKeyword = '';
 let activeSidebarSection = 'account';
 let activeOrderStatusFilter = 'ALL';
 
@@ -1567,10 +1570,37 @@ function renderCollections() {
   activeCollectionLabel.textContent = activeCategory;
 }
 
+function getProductSearchText(product) {
+  const skuText = Array.isArray(product.skuList)
+    ? product.skuList
+        .map((sku) => `${sku.skuName || ''} ${sku.price || ''}`)
+        .join(' ')
+    : '';
+
+  return [
+    product.name,
+    product.category,
+    product.badge,
+    product.detail,
+    skuText,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
 function filteredProducts() {
-  return activeCategory === '全部'
-    ? products
-    : products.filter((product) => product.category === activeCategory);
+  const keyword = activeProductSearchKeyword.trim().toLowerCase();
+
+  return products.filter((product) => {
+    const matchCategory =
+      activeCategory === '全部' || product.category === activeCategory;
+
+    const matchKeyword =
+      !keyword || getProductSearchText(product).includes(keyword);
+
+    return matchCategory && matchKeyword;
+  });
 }
 
 function renderProducts() {
@@ -1580,7 +1610,19 @@ function renderProducts() {
 
   const visibleProducts = filteredProducts();
 
-  productCountLabel.textContent = `${visibleProducts.length} 件商品`;
+  productCountLabel.textContent = activeProductSearchKeyword.trim()
+    ? `${visibleProducts.length} 件匹配商品`
+    : `${visibleProducts.length} 件商品`;
+  
+  if (!visibleProducts.length) {
+      productGrid.innerHTML = `
+        <div class="product-empty">
+          <strong>没有找到匹配商品</strong>
+          <p>可以尝试更换关键词，或者切换到“全部”分类。</p>
+        </div>
+      `;
+      return;
+    }
   productGrid.innerHTML = visibleProducts
     .map((product) => {
       const isPrimaryDetail = product.detailLayout === 'price-sales-rank';
@@ -2650,6 +2692,24 @@ if (collectionRail) {
   });
 }
 
+if (productSearchInput) {
+  productSearchInput.addEventListener('input', (event) => {
+    activeProductSearchKeyword = String(event.target.value || '');
+    updateView();
+  });
+}
+
+if (productSearchClear) {
+  productSearchClear.addEventListener('click', () => {
+    activeProductSearchKeyword = '';
+
+    if (productSearchInput) {
+      productSearchInput.value = '';
+    }
+
+    updateView();
+  });
+}
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => {
     switch (character) {

@@ -208,6 +208,11 @@ function convertApiProducts(apiRows) {
         staticProducts[index % staticProducts.length] ||
         staticProducts[0];
 
+      const dbImageUrl = String(row.image_url || "").trim();
+      const productImage = dbImageUrl
+        ? `${API_BASE_URL}${dbImageUrl}`
+        : imageSource.image;
+
       productMap.set(productId, {
         // 前端原有 ranking.js 需要 id 是字符串
         id: `product-${productId}`,
@@ -239,11 +244,11 @@ function convertApiProducts(apiRows) {
 
         detail: "",
 
-        // 继续复用原来的图片
-        image: imageSource.image,
-        imageFit: imageSource.imageFit,
-        imageFocus: imageSource.imageFocus,
-        imageZoom: imageSource.imageZoom,
+        // 优先使用数据库图片；没有 image_url 时才复用原来的静态图片
+        image: productImage,
+        imageFit: dbImageUrl ? "cover" : imageSource.imageFit,
+        imageFocus: dbImageUrl ? "center top" : imageSource.imageFocus,
+        imageZoom: dbImageUrl ? 1 : imageSource.imageZoom,
 
         detailLayout: imageSource.detailLayout || "price-sales-rank",
         purchaseLayout: imageSource.purchaseLayout || "buy",
@@ -2886,6 +2891,34 @@ function initAdminPage() {
     }
   }
 
+async function createAdminProductToApi(values, imageFile) {
+  const formData = new FormData();
+
+  formData.append("category_name", String(values.category || "").trim());
+  formData.append("product_name", String(values.name || "").trim());
+  formData.append("sku_name", "默认规格");
+  formData.append("price", String(Number(values.price || 0)));
+  formData.append("available_stock", String(Number(values.stock || 20)));
+
+  if (imageFile) {
+    formData.append("image", imageFile);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/products`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "新增商品失败");
+  }
+
+  console.log("后台商品已写入数据库：", result);
+  return result;
+}
+
   function syncPanels() {
     navButtons.forEach((button) => {
       button.classList.toggle('is-active', button.dataset.adminNavTarget === activePanel);
@@ -2907,39 +2940,61 @@ function initAdminPage() {
   });
 
   if (productForm) {
-    productForm.addEventListener('submit', (event) => {
+    productForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+
       const values = Object.fromEntries(new FormData(productForm).entries());
+      const imageInput = productForm.querySelector('input[type="file"][name="image"]');
+      const imageFile = imageInput?.files?.[0] || null;
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
-      const image = String(values.image || '').trim();
       const price = Number(values.price || 0);
+      const stock = Number(values.stock || 20);
 
-      if (!name || !category || !image || !Number.isFinite(price) || price <= 0) {
-        setFeedback(productFeedback, '请完整填写商品名称、分类、价格和图片。', true);
+      if (!name || !category || !Number.isFinite(price) || price <= 0) {
+        setFeedback(productFeedback, '请完整填写商品名称、分类和价格。', true);
         return;
       }
 
-      addAdminProduct(storage, {
-        name,
-        category,
-        price,
-        badge: String(values.badge || '新品'),
-        image,
-        detail: String(values.detail || '').trim(),
-      });
-
-      setFeedback(productFeedback, '新品已上架并保存到本地。');
-      productForm.reset();
-      if (imageSelect?.options.length) {
-        imageSelect.selectedIndex = 0;
+      if (!Number.isInteger(stock) || stock < 0) {
+        setFeedback(productFeedback, '库存必须是大于等于 0 的整数。', true);
+        return;
       }
 
-      refreshAdminData();
-      syncPanels();
-      renderOrders();
-      renderStats();
-      renderProducts();
+      try {
+        setFeedback(productFeedback, '正在写入数据库，请稍候...');
+
+      const result = await createAdminProductToApi(
+        {
+          ...values,
+          name,
+          category,
+          price,
+          stock,
+        },
+        imageFile
+      );
+
+        setFeedback(
+          productFeedback,
+          `商品已写入数据库！商品ID：${result.product_id}，SKU ID：${result.sku_id}`
+        );
+
+        productForm.reset();
+
+        if (imageSelect?.options.length) {
+          imageSelect.selectedIndex = 0;
+        }
+
+        refreshAdminData();
+        syncPanels();
+        renderOrders();
+        renderStats();
+        renderProducts();
+      } catch (error) {
+        console.error("后台新增商品失败：", error);
+        setFeedback(productFeedback, `新增商品失败：${error.message}`, true);
+      }
     });
   }
 

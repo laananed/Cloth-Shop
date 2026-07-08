@@ -75,14 +75,18 @@
                   <span>价格</span>
                   <input type="number" name="price" min="0" step="1" placeholder="399" />
                 </label>
+                
                 <label class="admin-field">
                   <span>标签</span>
                   <input type="text" name="badge" placeholder="新品 / 热卖 / 推荐" />
                 </label>
-                <label class="admin-field">
-                  <span>图片</span>
-                  <select name="image" data-admin-image-select></select>
+
+                <label class="form-field">
+                  <span>商品主图</span>
+                  <input type="file" name="image" accept="image/*" />
                 </label>
+
+
                 <label class="admin-field">
                   <span>商品描述</span>
                   <textarea name="detail" rows="4" placeholder="简单描述商品卖点"></textarea>

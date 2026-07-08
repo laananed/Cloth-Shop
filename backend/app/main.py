@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 import json
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
@@ -25,6 +27,33 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+PRODUCT_UPLOAD_DIR = UPLOAD_DIR / "products"
+
+PRODUCT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def build_product_image_filename(original_filename: str) -> str:
+    suffix = Path(original_filename or "").suffix.lower()
+
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail="图片格式不支持，请上传 jpg、jpeg、png、webp 或 gif 文件"
+        )
+
+    import uuid
+    return f"{uuid.uuid4().hex}{suffix}"
+
+app.mount(
+    "/uploads",
+    StaticFiles(directory=str(UPLOAD_DIR)),
+    name="uploads"
 )
 
 class CartAddRequest(BaseModel):
@@ -82,6 +111,13 @@ class CancelOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
     remark: str = Field("用户取消订单", description="取消原因")
 
+class ProductCreateRequest(BaseModel):
+    category_name: str = Field(..., min_length=1, max_length=80, description="商品分类名称")
+    product_name: str = Field(..., min_length=1, max_length=120, description="商品名称")
+    sku_name: str = Field("默认规格", max_length=100, description="SKU 名称，第一版一个商品只对应一个 SKU")
+    price: float = Field(..., gt=0, description="SKU 售价")
+    available_stock: int = Field(..., ge=0, description="初始可用库存")
+
 @app.get("/")
 def root():
     return {
@@ -123,6 +159,9 @@ def get_products():
                         category_name,
                         product_id,
                         product_name,
+                        product_id,
+                        product_name,
+                        image_url,
                         product_status,
                         sku_id,
                         sku_name,
@@ -151,6 +190,190 @@ def get_products():
             status_code=500,
             detail=f"查询商品列表失败：{str(e)}"
         )
+
+@app.post("/products")
+async def create_product(
+    category_name: str = Form(...),
+    product_name: str = Form(...),
+    sku_name: str = Form("默认规格"),
+    price: float = Form(...),
+    available_stock: int = Form(...),
+    image: UploadFile | None = File(None),
+):
+    """
+    后台新增商品。
+    第一版：一个商品只创建一个 SKU。
+    支持上传一张商品主图，图片保存到 uploads/products，路径写入 product.image_url。
+    """
+    category_name = category_name.strip()
+    product_name = product_name.strip()
+    sku_name = sku_name.strip() or "默认规格"
+
+    if not category_name:
+        raise HTTPException(status_code=400, detail="商品分类不能为空")
+
+    if not product_name:
+        raise HTTPException(status_code=400, detail="商品名称不能为空")
+
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="商品价格必须大于 0")
+
+    if available_stock < 0:
+        raise HTTPException(status_code=400, detail="初始库存不能小于 0")
+
+    image_url = None
+
+    if image and image.filename:
+        image_filename = build_product_image_filename(image.filename)
+        image_path = PRODUCT_UPLOAD_DIR / image_filename
+
+        content = await image.read()
+
+        if not content:
+            raise HTTPException(status_code=400, detail="上传的图片文件为空")
+
+        max_size = 8 * 1024 * 1024
+        if len(content) > max_size:
+            raise HTTPException(status_code=400, detail="图片不能超过 8MB")
+
+        image_path.write_bytes(content)
+        image_url = f"/uploads/products/{image_filename}"
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    # 1. 分类不存在则创建，已存在则复用
+                    cursor.execute(
+                        """
+                        INSERT INTO category(name, sort_order, is_deleted)
+                        VALUES(%s, 0, 0)
+                        ON DUPLICATE KEY UPDATE
+                            id = LAST_INSERT_ID(id),
+                            is_deleted = 0
+                        """,
+                        (category_name,)
+                    )
+                    category_id = cursor.lastrowid
+
+                    # 2. 写入 product 表，保存 image_url
+                    cursor.execute(
+                        """
+                        INSERT INTO product(
+                            category_id,
+                            name,
+                            image_url,
+                            status,
+                            is_deleted
+                        )
+                        VALUES(%s, %s, %s, 'ON_SALE', 0)
+                        """,
+                        (category_id, product_name, image_url)
+                    )
+                    product_id = cursor.lastrowid
+
+                    # 3. 写入 product_sku 表
+                    cursor.execute(
+                        """
+                        INSERT INTO product_sku(
+                            product_id,
+                            sku_name,
+                            price,
+                            status,
+                            is_deleted
+                        )
+                        VALUES(%s, %s, %s, 'ON_SALE', 0)
+                        """,
+                        (product_id, sku_name, price)
+                    )
+                    sku_id = cursor.lastrowid
+
+                    # 4. 写入 inventory 表，初始化库存
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory(
+                            sku_id,
+                            available_stock,
+                            locked_stock
+                        )
+                        VALUES(%s, %s, 0)
+                        """,
+                        (sku_id, available_stock)
+                    )
+
+                    # 5. 写入 product_sales_stat 表，初始化销量统计
+                    cursor.execute(
+                        """
+                        INSERT INTO product_sales_stat(
+                            sku_id,
+                            total_sold_count,
+                            total_sales_amount
+                        )
+                        VALUES(%s, 0, 0.00)
+                        """,
+                        (sku_id,)
+                    )
+
+                conn.commit()
+
+                # 6. 新增成功后，从 v_product_detail 查回完整商品信息
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            category_id,
+                            category_name,
+                            product_id,
+                            product_name,
+                            image_url,
+                            product_status,
+                            sku_id,
+                            sku_name,
+                            price,
+                            sku_status,
+                            available_stock,
+                            locked_stock,
+                            total_sold_count,
+                            total_sales_amount,
+                            product_created_at,
+                            product_updated_at
+                        FROM v_product_detail
+                        WHERE product_id = %s
+                        ORDER BY sku_id
+                        """,
+                        (product_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "新增商品成功",
+            "product_id": product_id,
+            "sku_id": sku_id,
+            "image_url": image_url,
+            "data": jsonable_encoder(rows)
+        }
+
+    except HTTPException:
+        raise
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"新增商品失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
 
 def query_user_addresses(conn, user_id: int):
     with conn.cursor() as cursor:

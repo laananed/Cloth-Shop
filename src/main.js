@@ -85,6 +85,7 @@ const purchaseQuantityValue = document.querySelector('[data-purchase-quantity-va
 const purchaseQuantityDecrease = document.querySelector('[data-purchase-quantity-decrease]');
 const purchaseQuantityIncrease = document.querySelector('[data-purchase-quantity-increase]');
 const purchasePaymentOptions = document.querySelector('[data-purchase-payment-options]');
+const purchaseSkuOptions = document.querySelector('[data-purchase-sku-options]');
 const purchaseTotal = document.querySelector('[data-purchase-total]');
 const purchaseSubmit = document.querySelector('[data-purchase-submit]');
 const purchaseFeedback = document.querySelector('[data-purchase-feedback]');
@@ -113,10 +114,13 @@ const storage = window.localStorage;
 const pageRoot = document.documentElement;
 const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
+let activePurchaseSkuId = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
-let activePurchaseAddressId = '';
+let activePurchaseAddressId = CURRENT_ADDRESS_ID;
+let activeCartAddressId = CURRENT_ADDRESS_ID;
 let activeCartPaymentMethod = 'alipay';
+let dbAddressList = [];
 let isCartCheckoutSubmitting = false;
 let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
@@ -134,6 +138,11 @@ function getPaymentMethodLabel(method) {
 function setCartPaymentMethod(method) {
   const isAllowed = purchasePaymentMethods.some((item) => item.value === method);
   activeCartPaymentMethod = isAllowed ? method : 'alipay';
+  renderSidebar();
+}
+
+function setCartAddress(addressId) {
+  activeCartAddressId = Number(addressId);
   renderSidebar();
 }
 
@@ -290,6 +299,199 @@ async function loadProductsFromApi() {
   }
 }
 
+const selectedSkuByProductId = new Map();
+
+function getDefaultSku(product) {
+  if (Array.isArray(product?.skuList) && product.skuList.length) {
+    return product.skuList[0];
+  }
+
+  if (product?.skuId) {
+    return {
+      skuId: product.skuId,
+      skuName: '默认规格',
+      price: product.price,
+      availableStock: product.availableStock || 0,
+    };
+  }
+
+  return null;
+}
+
+function getSelectedSku(product) {
+  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+  const selectedSkuId = selectedSkuByProductId.get(product?.id);
+
+  return (
+    skuList.find((sku) => Number(sku.skuId) === Number(selectedSkuId)) ||
+    getDefaultSku(product)
+  );
+}
+
+function setSelectedSku(productId, skuId) {
+  selectedSkuByProductId.set(productId, Number(skuId));
+  updateView();
+}
+
+function getPurchaseSelectedSku(product) {
+  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+
+  return (
+    skuList.find((sku) => Number(sku.skuId) === Number(activePurchaseSkuId)) ||
+    getSelectedSku(product)
+  );
+}
+
+function renderProductSkuOptions(product) {
+  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+
+  if (skuList.length <= 1) {
+    return '';
+  }
+
+  const selectedSku = getSelectedSku(product);
+
+  return `
+    <div class="product-card__sku-options" aria-label="选择商品规格">
+      ${skuList
+        .map(
+          (sku) => `
+            <button
+              class="product-card__sku-button ${Number(sku.skuId) === Number(selectedSku?.skuId) ? 'is-active' : ''}"
+              type="button"
+              data-product-sku-id="${sku.skuId}"
+            >
+              ${escapeHtml(sku.skuName || '默认规格')}
+            </button>
+          `,
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+async function loadAddressesFromApi(userId = CURRENT_USER_ID) {
+  const response = await fetch(`${API_BASE_URL}/addresses/user/${userId}`);
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "查询用户地址失败");
+  }
+
+  dbAddressList = Array.isArray(result.data) ? result.data : [];
+
+  const defaultAddress =
+    dbAddressList.find((address) => Number(address.is_default) === 1) ||
+    dbAddressList[0];
+
+  if (defaultAddress) {
+    if (!dbAddressList.some((address) => Number(address.id) === Number(activePurchaseAddressId))) {
+      activePurchaseAddressId = Number(defaultAddress.id);
+    }
+
+    if (!dbAddressList.some((address) => Number(address.id) === Number(activeCartAddressId))) {
+      activeCartAddressId = Number(defaultAddress.id);
+    }
+  }
+
+  console.log("已加载数据库地址：", dbAddressList);
+
+  return dbAddressList;
+}
+
+
+async function addAddressToApi(values) {
+  const detail = [
+    values.province,
+    values.city,
+    values.detail,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
+
+  const response = await fetch(`${API_BASE_URL}/addresses/add`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      recipient_name: String(values.recipientName || '').trim(),
+      phone: String(values.phone || '').trim(),
+      detail,
+      is_default: Boolean(values.isDefault),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "新增收货地址失败");
+  }
+
+  dbAddressList = Array.isArray(result.data) ? result.data : [];
+
+  console.log("新增数据库地址成功：", result);
+
+  return result;
+}
+
+function formatDbAddress(address) {
+  if (!address) {
+    return "暂无地址";
+  }
+
+  return address.detail || "暂无详细地址";
+}
+
+function getDbAddressById(addressId) {
+  return dbAddressList.find((address) => Number(address.id) === Number(addressId)) || null;
+}
+
+function getDefaultDbAddress() {
+  return (
+    dbAddressList.find((address) => Number(address.is_default) === 1) ||
+    dbAddressList[0] ||
+    null
+  );
+}
+
+function getActivePurchaseAddressId() {
+  const selectedAddress = getDbAddressById(activePurchaseAddressId) || getDefaultDbAddress();
+  return selectedAddress ? Number(selectedAddress.id) : CURRENT_ADDRESS_ID;
+}
+
+function getActiveCartAddressId() {
+  const selectedAddress = getDbAddressById(activeCartAddressId) || getDefaultDbAddress();
+  return selectedAddress ? Number(selectedAddress.id) : CURRENT_ADDRESS_ID;
+}
+
+function renderDbAddressButtons(activeAddressId, dataAttribute) {
+  if (!dbAddressList.length) {
+    return '<p class="purchase-empty">暂无数据库收货地址，请先在数据库 user_address 表中添加地址。</p>';
+  }
+
+  return dbAddressList
+    .map((address) => {
+      const isActive = Number(address.id) === Number(activeAddressId);
+
+      return `
+        <button
+          type="button"
+          class="db-address-option ${isActive ? 'is-active' : ''}"
+          ${dataAttribute}="${address.id}"
+        >
+          <strong>${escapeHtml(address.recipient_name || '未命名收货人')}</strong>
+          <span>${escapeHtml(address.phone || '')}</span>
+          <small>${escapeHtml(formatDbAddress(address))}</small>
+          ${Number(address.is_default) === 1 ? '<em>默认地址</em>' : ''}
+        </button>
+      `;
+    })
+    .join('');
+}
+
 function convertApiCartRows(apiRows) {
   return apiRows.map((row) => {
     const matchedProduct =
@@ -344,7 +546,8 @@ async function syncCartFromApi(userId = CURRENT_USER_ID) {
 
 
 async function addCartToApi(product) {
-  const skuId = product.defaultSkuId || product.skuId;
+  const selectedSku = getSelectedSku(product);
+  const skuId = selectedSku?.skuId || product.defaultSkuId || product.skuId;
 
   if (!skuId) {
     setFeedback(sidebarCartFeedback, "加入购物车失败：当前商品没有 SKU。", true);
@@ -373,7 +576,10 @@ async function addCartToApi(product) {
 
     await syncCartFromApi(CURRENT_USER_ID);
 
-    setFeedback(sidebarCartFeedback, "已加入数据库购物车。");
+    setFeedback(
+      sidebarCartFeedback,
+      `已加入数据库购物车，规格：${selectedSku?.skuName || '默认规格'}。`
+    );
     openSidebar("cart");
 
     console.log("加入购物车成功：", result);
@@ -502,8 +708,13 @@ function promptPaymentMethod(defaultMethod = "alipay") {
   return defaultMethod || "alipay";
 }
 
-async function createDirectOrderFromApi(product, quantity = 1) {
-  const skuId = product.defaultSkuId || product.skuId;
+async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {
+  const selectedSku =
+    Array.isArray(product?.skuList)
+      ? product.skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || getSelectedSku(product)
+      : getSelectedSku(product);
+
+  const skuId = selectedSku?.skuId || product.defaultSkuId || product.skuId;
 
   if (!skuId) {
     throw new Error("当前商品没有 SKU，不能直接下单。");
@@ -516,7 +727,7 @@ async function createDirectOrderFromApi(product, quantity = 1) {
     },
     body: JSON.stringify({
       user_id: CURRENT_USER_ID,
-      address_id: CURRENT_ADDRESS_ID,
+      address_id: getActivePurchaseAddressId(),
       sku_id: skuId,
       quantity: Math.max(1, Number(quantity) || 1),
     }),
@@ -541,7 +752,7 @@ async function createOrderFromCartFromApi() {
     },
     body: JSON.stringify({
       user_id: CURRENT_USER_ID,
-      address_id: CURRENT_ADDRESS_ID,
+      address_id: getActiveCartAddressId(),
     }),
   });
 
@@ -564,7 +775,7 @@ async function createOrderFromSelectedCartFromApi(cartItemIds) {
     },
     body: JSON.stringify({
       user_id: CURRENT_USER_ID,
-      address_id: CURRENT_ADDRESS_ID,
+      address_id: getActiveCartAddressId(),
       cart_item_ids: cartItemIds,
     }),
   });
@@ -614,9 +825,9 @@ async function submitCartCheckout() {
     console.log("购物车选中商品提交订单成功：", orderResult);
 
     setFeedback(
-      sidebarCartFeedback,
-      `选中商品订单已提交！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${CURRENT_ADDRESS_ID}，当前状态：待支付。`
-    );
+  sidebarCartFeedback,
+  `选中商品订单已提交！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${getActiveCartAddressId()}，当前状态：待支付。`
+);
 
     await syncCartFromApi(CURRENT_USER_ID);
     saveStoredCartSelections(storage, []);
@@ -1179,6 +1390,10 @@ function renderProducts() {
       const isPurchaseUi = product.purchaseLayout === 'buy';
       const isTopSeller = salesRankMap.get(product.id) === 1;
       const salesRankLabel = isTopSeller ? '网站销量第一' : formatSalesRank(salesRankMap.get(product.id));
+      const selectedSku = getSelectedSku(product);
+      const displayPrice = Number(selectedSku?.price ?? product.price ?? 0);
+      const selectedSkuName = selectedSku?.skuName || '默认规格';
+      const selectedStock = Number(selectedSku?.availableStock ?? product.availableStock ?? 0);
 
       return `
         <article class="product-card ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
@@ -1196,7 +1411,7 @@ function renderProducts() {
             <div class="product-card__primary-detail">
               <div class="product-card__primary-topline">
                 <h3>${product.name}</h3>
-                <strong class="product-card__price">${formatPrice(product.price)}</strong>
+                <strong class="product-card__price">${formatPrice(displayPrice)}</strong>
               </div>
               <div class="product-card__primary-subline">
                 <span class="product-card__sales-chip">销量 ${product.sales}</span>
@@ -1212,7 +1427,7 @@ function renderProducts() {
               <div class="product-card__meta product-card__meta--stacked">
                 <div class="product-card__info-line">
                   <span class="product-card__info-label">售价：</span>
-                  <strong class="product-card__info-value">${formatPrice(product.price)}</strong>
+                  <strong class="product-card__info-value">${formatPrice(displayPrice)}</strong>
                 </div>
                 <div class="product-card__info-line">
                   <span class="product-card__info-label">销量：</span>
@@ -1230,6 +1445,8 @@ function renderProducts() {
             <p class="product-card__detail">${product.detail}</p>
                   `
             }
+            ${renderProductSkuOptions(product)}
+            <p class="product-card__sku-current">当前规格：${escapeHtml(selectedSkuName)}，库存 ${selectedStock} 件</p>
             <div class="product-card__footer">
               <div class="product-card__actions ${isPurchaseUi ? 'product-card__actions--purchase' : ''}">
                 ${
@@ -1350,21 +1567,48 @@ function renderSidebarAddressBook(addressBook) {
     .join('');
 }
 
+function renderSidebarDbAddressList() {
+  if (!sidebarAddressList) {
+    return;
+  }
+
+  if (!dbAddressList.length) {
+    sidebarAddressList.innerHTML = '<p class="sidebar-empty">暂无数据库收货地址，请新增一个地址。</p>';
+    return;
+  }
+
+  sidebarAddressList.innerHTML = dbAddressList
+    .map(
+      (address) => `
+        <article class="address-card ${Number(address.is_default) === 1 ? 'is-active' : ''}" data-sidebar-address-item="${address.id}">
+          <div class="address-card__header">
+            <strong>${escapeHtml(address.recipient_name || '未命名地址')}</strong>
+            ${Number(address.is_default) === 1 ? '<span>默认</span>' : ''}
+          </div>
+          <p>${escapeHtml(address.phone || '')}</p>
+          <p>${escapeHtml(formatDbAddress(address))}</p>
+        </article>
+      `,
+    )
+    .join('');
+}
+
 function renderPurchaseModal() {
   if (!purchaseModal) {
     return;
   }
 
-  const addressBook = getStoredAddressBook(storage);
-  const selectedAddress = getPurchaseAddress(addressBook, activePurchaseAddressId) || getPrimaryAddress(addressBook);
+  const selectedAddress = getDbAddressById(activePurchaseAddressId) || getDefaultDbAddress();
 
-  if (selectedAddress) {
-    activePurchaseAddressId = selectedAddress.id;
-  }
+if (selectedAddress) {
+  activePurchaseAddressId = Number(selectedAddress.id);
+}
 
   const product = activePurchaseProduct;
+  const selectedSku = getPurchaseSelectedSku(product);
+  const displayPrice = Number(selectedSku?.price ?? product?.price ?? 0);
   const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
-  const total = product ? product.price * quantity : 0;
+  const total = product ? displayPrice * quantity : 0;
 
   if (purchaseTitle) {
     purchaseTitle.textContent = product?.name || '立即购买';
@@ -1379,7 +1623,7 @@ function renderPurchaseModal() {
   }
 
   if (purchasePrice) {
-    purchasePrice.textContent = formatPrice(product?.price || 0);
+    purchasePrice.textContent = formatPrice(displayPrice);
   }
 
   if (purchaseSales) {
@@ -1401,26 +1645,34 @@ function renderPurchaseModal() {
     purchaseTotal.textContent = formatPrice(total);
   }
 
-  if (purchaseAddressList) {
-    if (!addressBook.addresses.length) {
-      purchaseAddressList.innerHTML = '<p class="purchase-empty">暂无收货地址，请先到个人中心添加。</p>';
+    if (purchaseSkuOptions) {
+    const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+
+    if (!product || skuList.length <= 1) {
+      purchaseSkuOptions.innerHTML = '<p class="purchase-empty">默认规格</p>';
     } else {
-      purchaseAddressList.innerHTML = addressBook.addresses
+      purchaseSkuOptions.innerHTML = skuList
         .map(
-          (address) => `
+          (sku) => `
             <button
               type="button"
-              class="purchase-address ${address.id === activePurchaseAddressId ? 'is-active' : ''}"
-              data-purchase-address-id="${address.id}"
+              class="purchase-sku ${Number(sku.skuId) === Number(selectedSku?.skuId) ? 'is-active' : ''}"
+              data-purchase-sku-id="${sku.skuId}"
             >
-              <span class="purchase-address__name">${address.recipientName || '未命名地址'}</span>
-              <span class="purchase-address__phone">${address.phone || ''}</span>
-              <span class="purchase-address__detail">${address.province} ${address.city} ${address.detail}</span>
+              <span>${escapeHtml(sku.skuName || '默认规格')}</span>
+              <small>${formatPrice(sku.price)} · 库存 ${Number(sku.availableStock || 0)} 件</small>
             </button>
           `,
         )
         .join('');
     }
+  }
+
+  if (purchaseAddressList) {
+    purchaseAddressList.innerHTML = renderDbAddressButtons(
+      activePurchaseAddressId,
+      "data-purchase-address-id"
+    );
   }
 
   if (purchasePaymentOptions) {
@@ -1450,13 +1702,21 @@ function renderPurchaseModal() {
   }
 }
 
-function openPurchaseModal(product) {
+async function openPurchaseModal(product) {
   activePurchaseProduct = product;
+  activePurchaseSkuId = getSelectedSku(product)?.skuId || product.defaultSkuId || product.skuId || null;
   activePurchaseQuantity = 1;
   activePurchasePaymentMethod = 'alipay';
 
-  const addressBook = getStoredAddressBook(storage);
-  activePurchaseAddressId = getPrimaryAddress(addressBook)?.id || '';
+  try {
+    await loadAddressesFromApi(CURRENT_USER_ID);
+  } catch (error) {
+    console.error("加载数据库地址失败：", error);
+    setFeedback(purchaseFeedback, `加载数据库地址失败：${error.message}`, true);
+  }
+
+  const defaultAddress = getDefaultDbAddress();
+  activePurchaseAddressId = defaultAddress ? Number(defaultAddress.id) : CURRENT_ADDRESS_ID;
 
   renderPurchaseModal();
   purchaseModal?.classList.add('is-open');
@@ -1479,13 +1739,24 @@ function setPurchaseQuantity(nextQuantity) {
   renderPurchaseModal();
 }
 
+function setPurchaseSku(skuId) {
+  activePurchaseSkuId = Number(skuId);
+
+  if (activePurchaseProduct) {
+    selectedSkuByProductId.set(activePurchaseProduct.id, Number(skuId));
+  }
+
+  renderPurchaseModal();
+  updateView();
+}
+
 function setPurchasePaymentMethod(method) {
   activePurchasePaymentMethod = method;
   renderPurchaseModal();
 }
 
 function setPurchaseAddress(addressId) {
-  activePurchaseAddressId = addressId;
+  activePurchaseAddressId = Number(addressId);
   renderPurchaseModal();
 }
 
@@ -1494,8 +1765,9 @@ async function submitPurchaseOrder() {
     return;
   }
 
+  const selectedSku = getPurchaseSelectedSku(activePurchaseProduct);
   const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
-  const total = Number(activePurchaseProduct.price || 0) * quantity;
+  const total = Number(selectedSku?.price ?? activePurchaseProduct.price ?? 0) * quantity;
 
   try {
     if (purchaseSubmit) {
@@ -1507,7 +1779,8 @@ async function submitPurchaseOrder() {
 
     const orderResult = await createDirectOrderFromApi(
       activePurchaseProduct,
-      quantity
+      quantity,
+      selectedSku?.skuId || activePurchaseSkuId
     );
 
     const orderNo = orderResult.order_no || "未知订单号";
@@ -1557,6 +1830,17 @@ function openSidebar(section = 'account') {
 
   if (activeSidebarSection === "orders") {
     refreshOrdersFromApi();
+  }
+
+  if (activeSidebarSection === "cart" || activeSidebarSection === "address") {
+  loadAddressesFromApi(CURRENT_USER_ID)
+    .then(() => {
+      renderSidebar();
+    })
+    .catch((error) => {
+      console.error("加载数据库地址失败：", error);
+      setFeedback(sidebarCartFeedback || sidebarAddressFeedback, `加载数据库地址失败：${error.message}`, true);
+    });
   }
 }
 
@@ -1892,6 +2176,8 @@ function renderCartSummary(cart, selectedIds) {
   const selectedTotals = getCartTotals(cartItems, safeSelectedIds);
   const allTotals = getCartTotals(cartItems, null);
   const paymentLabel = getPaymentMethodLabel(activeCartPaymentMethod);
+  const activeAddressId = getActiveCartAddressId();
+  const activeAddress = getDbAddressById(activeAddressId) || getDefaultDbAddress();
   const hasSelectedItems = selectedTotals.totalQuantity > 0;
 
   cartSummary.innerHTML = `
@@ -1901,10 +2187,13 @@ function renderCartSummary(cart, selectedIds) {
         <strong>${formatCartMoney(selectedTotals.totalAmount)}</strong>
       </div>
 
-      <div class="cart-summary__address">
+     <div class="cart-summary__address">
         <span>收货地址</span>
-        <strong>测试地址 ID：${CURRENT_ADDRESS_ID}</strong>
-        <small>当前阶段固定使用数据库测试用户 ${CURRENT_USER_ID} 的地址 ${CURRENT_ADDRESS_ID}，后续再接入地址选择。</small>
+        <strong>${activeAddress ? escapeHtml(activeAddress.recipient_name || '未命名收货人') : '暂无地址'}</strong>
+        <small>${activeAddress ? escapeHtml(formatDbAddress(activeAddress)) : '请先在数据库 user_address 表中添加地址。'}</small>
+        <div class="cart-summary__address-options">
+          ${renderDbAddressButtons(activeAddressId, "data-cart-address-id")}
+        </div>
       </div>
 
       <div class="cart-summary__payment">
@@ -1976,7 +2265,7 @@ function renderSidebar() {
     accountDisplayName.textContent = displayName;
   }
 
-  renderSidebarAddressBook(getStoredAddressBook(storage));
+  renderSidebarDbAddressList();
 
   // const orderView = renderOrderItems(getStoredOrders(storage));
   // if (ordersList) {
@@ -2377,6 +2666,11 @@ if (cartList) {
 
 if (cartSummary) {
   cartSummary.addEventListener("click", (event) => {
+    const addressButton = event.target.closest("[data-cart-address-id]");
+    if (addressButton) {
+      setCartAddress(addressButton.dataset.cartAddressId);
+      return;
+    }
     const paymentButton = event.target.closest("[data-cart-payment-method]");
     if (paymentButton) {
       setCartPaymentMethod(paymentButton.dataset.cartPaymentMethod);
@@ -2490,6 +2784,7 @@ if (purchaseModal) {
     const quantityDecrease = event.target.closest('[data-purchase-quantity-decrease]');
     const quantityIncrease = event.target.closest('[data-purchase-quantity-increase]');
     const addressButton = event.target.closest('[data-purchase-address-id]');
+    const skuButton = event.target.closest('[data-purchase-sku-id]');
     const paymentButton = event.target.closest('[data-purchase-payment-method]');
     const manageAddressButton = event.target.closest('[data-purchase-manage-address]');
     const submitButton = event.target.closest('[data-purchase-submit]');
@@ -2501,6 +2796,11 @@ if (purchaseModal) {
 
     if (quantityIncrease) {
       setPurchaseQuantity(activePurchaseQuantity + 1);
+      return;
+    }
+
+    if (skuButton) {
+      setPurchaseSku(skuButton.dataset.purchaseSkuId);
       return;
     }
 
@@ -2527,8 +2827,9 @@ if (purchaseModal) {
 }
 
 if (sidebarAddressForm) {
-  sidebarAddressForm.addEventListener('submit', (event) => {
+  sidebarAddressForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+
     const values = readFieldValues(sidebarAddressForm);
     const validation = validateAddress(values);
 
@@ -2537,34 +2838,28 @@ if (sidebarAddressForm) {
       return;
     }
 
-    const addressBook = getStoredAddressBook(storage);
-    const nextAddressId = `address-${addressBook.addresses.length + 1}`;
-    const shouldBeDefault = Boolean(values.isDefault) || addressBook.addresses.length === 0;
-    const nextAddresses = addressBook.addresses.map((address) => ({
-      ...address,
-      isDefault: false,
-    }));
+    try {
+      setFeedback(sidebarAddressFeedback, '正在保存到数据库...');
 
-    nextAddresses.push({
-      id: nextAddressId,
-      recipientName: String(values.recipientName),
-      phone: String(values.phone),
-      province: String(values.province),
-      city: String(values.city),
-      detail: String(values.detail),
-      isDefault: shouldBeDefault,
-    });
+      const result = await addAddressToApi(values);
 
-    saveStoredAddressBook(storage, {
-      addresses: nextAddresses,
-      defaultAddressId: shouldBeDefault ? nextAddressId : addressBook.defaultAddressId || nextAddressId,
-    });
+      const newAddressId = result.address_id;
 
-    sidebarAddressForm.reset();
+      activePurchaseAddressId = Number(newAddressId);
+      activeCartAddressId = Number(newAddressId);
 
-    setFeedback(sidebarAddressFeedback, '收货地址已保存。');
-    renderSidebar();
-    renderPurchaseModal();
+      sidebarAddressForm.reset();
+
+      setFeedback(sidebarAddressFeedback, '收货地址已保存到数据库。');
+
+      await loadAddressesFromApi(CURRENT_USER_ID);
+
+      renderSidebar();
+      renderPurchaseModal();
+    } catch (error) {
+      console.error("新增数据库地址失败：", error);
+      setFeedback(sidebarAddressFeedback, `新增收货地址失败：${error.message}`, true);
+    }
   });
 }
 
@@ -2608,6 +2903,11 @@ if (productGrid) {
     const product = getStoredProductById(productId);
 
     if (!product) {
+      return;
+    }
+
+    if (actionButton.dataset.productSkuId) {
+      setSelectedSku(product.id, actionButton.dataset.productSkuId);
       return;
     }
 

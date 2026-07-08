@@ -56,6 +56,13 @@ class PayOrderRequest(BaseModel):
     pay_method: str = Field(..., description="支付方式：ALIPAY / WECHAT / COD")
     pay_password: str = Field(..., min_length=6, max_length=6, description="6位支付密码")
 
+class AddressAddRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    recipient_name: str = Field(..., min_length=1, max_length=50, description="收货人")
+    phone: str = Field(..., min_length=1, max_length=20, description="手机号")
+    detail: str = Field(..., min_length=1, max_length=255, description="详细地址")
+    is_default: bool = Field(False, description="是否设为默认地址")
+
 class DirectOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
@@ -134,6 +141,170 @@ def get_products():
         raise HTTPException(
             status_code=500,
             detail=f"查询商品列表失败：{str(e)}"
+        )
+
+@app.get("/addresses/user/{user_id}")
+def get_user_addresses(user_id: int):
+    """
+    查询用户收货地址列表。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        user_id,
+                        recipient_name,
+                        phone,
+                        detail,
+                        is_default,
+                        created_at
+                    FROM user_address
+                    WHERE user_id = %s
+                      AND is_deleted = 0
+                    ORDER BY is_default DESC, id ASC
+                    """,
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询用户地址成功",
+            "user_id": user_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"查询用户地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/addresses/add")
+def add_user_address(req: AddressAddRequest):
+    """
+    新增用户收货地址。
+    当前数据库 user_address 表只有 detail 字段，所以前端会把省市区和详细地址合并后传入 detail。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM `user`
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.user_id,)
+                    )
+                    user_check = cursor.fetchone()
+
+                    if not user_check or user_check["cnt"] == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="用户不存在或已删除"
+                        )
+
+                    if req.is_default:
+                        cursor.execute(
+                            """
+                            UPDATE user_address
+                            SET is_default = 0
+                            WHERE user_id = %s
+                              AND is_deleted = 0
+                            """,
+                            (req.user_id,)
+                        )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO user_address(
+                            user_id,
+                            recipient_name,
+                            phone,
+                            detail,
+                            is_default,
+                            is_deleted
+                        )
+                        VALUES(%s, %s, %s, %s, %s, 0)
+                        """,
+                        (
+                            req.user_id,
+                            req.recipient_name,
+                            req.phone,
+                            req.detail,
+                            1 if req.is_default else 0
+                        )
+                    )
+
+                    address_id = cursor.lastrowid
+
+                conn.commit()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            user_id,
+                            recipient_name,
+                            phone,
+                            detail,
+                            is_default,
+                            created_at
+                        FROM user_address
+                        WHERE user_id = %s
+                          AND is_deleted = 0
+                        ORDER BY is_default DESC, id ASC
+                        """,
+                        (req.user_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "新增收货地址成功",
+            "address_id": address_id,
+            "user_id": req.user_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except HTTPException:
+        raise
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"新增收货地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.get("/cart/{user_id}")

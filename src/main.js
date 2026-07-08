@@ -2793,6 +2793,70 @@ function initAdminPage() {
   }
 }
 
+function convertApiStatsToRenderedStats(result) {
+  const summary = result.summary || {};
+  const rows = Array.isArray(result.rows) ? result.rows : [];
+  const maxRevenue = Math.max(
+    1,
+    ...rows.map((row) => Number(row.total_sales_amount || 0))
+  );
+
+  return {
+    kpis: [
+      {
+        label: "已支付销售额",
+        value: formatPrice(summary.total_revenue || 0),
+        detail: `已支付订单 ${Number(summary.paid_order_count || 0)} 单`,
+      },
+      {
+        label: "订单总数",
+        value: String(Number(summary.total_order_count || 0)),
+        detail: `待支付 ${Number(summary.pending_order_count || 0)} 单，已取消 ${Number(summary.cancelled_order_count || 0)} 单`,
+      },
+      {
+        label: "售出件数",
+        value: String(Number(summary.total_units_sold || 0)),
+        detail: "按已支付订单统计",
+      },
+      {
+        label: "商品数量",
+        value: String(Number(summary.total_product_count || 0)),
+        detail: "数据库商品总数",
+      },
+    ],
+    rows: rows.map((row) => {
+      const revenue = Number(row.total_sales_amount || 0);
+      const barWidth = `${Math.max(6, Math.round((revenue / maxRevenue) * 100))}%`;
+
+      return {
+        name: `${row.product_name || "未知商品"} / ${row.sku_name || "默认规格"}`,
+        category: row.category_name || "未分类",
+        unitsLabel: `销量 ${Number(row.total_sold_count || 0)} 件`,
+        revenueLabel: formatPrice(revenue),
+        barWidth,
+      };
+    }),
+  };
+}
+
+async function refreshAdminStatsFromApi() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/stats`);
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.detail || "加载后台销量统计失败");
+    }
+
+    renderedStats = convertApiStatsToRenderedStats(result);
+    renderStats();
+
+    console.log("后台销量统计已切换为数据库数据：", result);
+  } catch (error) {
+    console.error("后台销量统计加载失败：", error);
+  }
+}
+
 async function loadAdminProductsFromApi() {
   const response = await fetch(`${API_BASE_URL}/products`);
   const result = await response.json();
@@ -3015,6 +3079,10 @@ async function createAdminProductToApi(values, imageFile) {
     if (activePanel === "orders") {
       refreshAdminOrdersFromApi();
     }
+
+    if (activePanel === "stats") {
+      refreshAdminStatsFromApi();
+    }
   });
 });
 
@@ -3079,6 +3147,7 @@ async function createAdminProductToApi(values, imageFile) {
   renderStats();
   renderProducts();
   refreshAdminOrdersFromApi();
+  refreshAdminStatsFromApi();
 }
 
 if (isAdminPage) {

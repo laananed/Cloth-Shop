@@ -1688,6 +1688,81 @@ def get_admin_orders():
         )
 
 
+@app.get("/admin/stats")
+def get_admin_stats():
+    """
+    后台销量统计。
+    第一版暂不做权限校验，统计真实数据库订单、商品、销量排行。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                # 1. 订单与销售额汇总
+                cursor.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS total_order_count,
+                        SUM(CASE WHEN status = 'PAID' THEN 1 ELSE 0 END) AS paid_order_count,
+                        SUM(CASE WHEN status = 'PENDING_PAYMENT' THEN 1 ELSE 0 END) AS pending_order_count,
+                        SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_order_count,
+                        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_amount ELSE 0 END), 0.00) AS total_revenue,
+                        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_quantity ELSE 0 END), 0) AS total_units_sold
+                    FROM v_order_summary
+                    """
+                )
+                summary = cursor.fetchone()
+
+                # 2. 商品总数
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS total_product_count
+                    FROM product
+                    WHERE is_deleted = 0
+                    """
+                )
+                product_count_row = cursor.fetchone()
+
+                # 3. 商品销量排行
+                cursor.execute(
+                    """
+                    SELECT
+                        category_name,
+                        product_id,
+                        product_name,
+                        sku_id,
+                        sku_name,
+                        price,
+                        total_sold_count,
+                        total_sales_amount,
+                        sales_rank
+                    FROM v_product_sales_rank
+                    ORDER BY sales_rank ASC, sku_id ASC
+                    LIMIT 20
+                    """
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询后台销量统计成功",
+            "summary": {
+                "total_revenue": float(summary["total_revenue"] or 0),
+                "total_order_count": int(summary["total_order_count"] or 0),
+                "paid_order_count": int(summary["paid_order_count"] or 0),
+                "pending_order_count": int(summary["pending_order_count"] or 0),
+                "cancelled_order_count": int(summary["cancelled_order_count"] or 0),
+                "total_units_sold": int(summary["total_units_sold"] or 0),
+                "total_product_count": int(product_count_row["total_product_count"] or 0),
+            },
+            "rows": jsonable_encoder(rows)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询后台销量统计失败：{str(e)}"
+        )
+
 @app.get("/orders/{order_id}")
 def get_order_detail(order_id: int):
     """

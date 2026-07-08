@@ -63,6 +63,15 @@ class AddressAddRequest(BaseModel):
     detail: str = Field(..., min_length=1, max_length=255, description="详细地址")
     is_default: bool = Field(False, description="是否设为默认地址")
 
+class AddressSetDefaultRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="地址ID")
+
+
+class AddressDeleteRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="地址ID")
+
 class DirectOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
@@ -142,6 +151,28 @@ def get_products():
             status_code=500,
             detail=f"查询商品列表失败：{str(e)}"
         )
+
+def query_user_addresses(conn, user_id: int):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                recipient_name,
+                phone,
+                detail,
+                is_default,
+                created_at
+            FROM user_address
+            WHERE user_id = %s
+              AND is_deleted = 0
+            ORDER BY is_default DESC, id ASC
+            """,
+            (user_id,)
+        )
+        return cursor.fetchall()
+
 
 @app.get("/addresses/user/{user_id}")
 def get_user_addresses(user_id: int):
@@ -306,6 +337,102 @@ def add_user_address(req: AddressAddRequest):
             status_code=500,
             detail=f"服务器错误：{str(e)}"
         )
+
+@app.post("/addresses/set-default")
+def set_default_address(req: AddressSetDefaultRequest):
+    """
+    设置默认收货地址。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_set_default_address(%s, %s)",
+                        (req.user_id, req.address_id)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                rows = query_user_addresses(conn, req.user_id)
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "设置默认地址成功",
+            "user_id": req.user_id,
+            "address_id": req.address_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"设置默认地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/addresses/delete")
+def delete_user_address(req: AddressDeleteRequest):
+    """
+    删除收货地址。
+    当前采用软删除：is_deleted = 1。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_delete_user_address(%s, %s)",
+                        (req.user_id, req.address_id)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                rows = query_user_addresses(conn, req.user_id)
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "删除收货地址成功",
+            "user_id": req.user_id,
+            "address_id": req.address_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"删除收货地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
 
 @app.get("/cart/{user_id}")
 def get_cart(user_id: int):

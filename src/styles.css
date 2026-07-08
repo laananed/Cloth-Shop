@@ -864,6 +864,19 @@ body.has-modal {
   color: rgba(255, 255, 255, 0.88);
 }
 
+.address-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.address-card__hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .cart-summary__address-options {
   display: grid;
   gap: 8px;
@@ -1049,6 +1062,49 @@ body.has-modal {
 .orders-list {
   display: grid;
   gap: 12px;
+}
+
+.order-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.order-filter__button {
+  appearance: none;
+  border: 1px solid rgba(105, 174, 230, 0.2);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.order-filter__button span {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(105, 174, 230, 0.12);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.order-filter__button.is-active {
+  color: white;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.order-filter__button.is-active span {
+  background: rgba(255, 255, 255, 0.22);
+  color: white;
 }
 
 .orders-empty {
@@ -1831,6 +1887,21 @@ body::after {
   align-items: start;
   grid-auto-rows: min-content;
 }
+
+.product-card__sku-current.is-sold-out {
+  color: #c83f3f;
+  font-weight: 700;
+}
+
+button:disabled,
+.ghost-button:disabled,
+.cart-item__stepper-button:disabled,
+.purchase-payment:disabled,
+.purchase-sku:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 
 .product-card__info-line {
   display: flex;

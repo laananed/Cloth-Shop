@@ -171,6 +171,14 @@ const sidebarMeta = {
 
 let activeCategory = '全部';
 let activeSidebarSection = 'account';
+let activeOrderStatusFilter = 'ALL';
+
+const orderStatusFilters = [
+  { value: 'ALL', label: '全部' },
+  { value: 'PENDING_PAYMENT', label: '待支付' },
+  { value: 'PAID', label: '已支付' },
+  { value: 'CANCELLED', label: '已取消' },
+];
 let scrollFrame = 0;
 
 async function testLoadProductsFromApi() {
@@ -328,6 +336,36 @@ function getSelectedSku(product) {
   );
 }
 
+
+function getSkuAvailableStock(sku) {
+  return Math.max(0, Number(sku?.availableStock || 0));
+}
+
+function isSkuInStock(sku) {
+  return getSkuAvailableStock(sku) > 0;
+}
+
+function getStockLabel(stock) {
+  if (stock <= 0) {
+    return "已售罄";
+  }
+
+  if (stock <= 5) {
+    return `库存紧张，仅剩 ${stock} 件`;
+  }
+
+  return `库存 ${stock} 件`;
+}
+
+function findOverStockCartItems(cartItems) {
+  return cartItems.filter((item) => {
+    const quantity = Math.max(1, Number(item.quantity || 1));
+    const availableStock = Math.max(0, Number(item.availableStock || 0));
+
+    return availableStock <= 0 || quantity > availableStock;
+  });
+}
+
 function setSelectedSku(productId, skuId) {
   selectedSkuByProductId.set(productId, Number(skuId));
   updateView();
@@ -437,6 +475,76 @@ async function addAddressToApi(values) {
   return result;
 }
 
+async function setDefaultAddressToApi(addressId) {
+  const response = await fetch(`${API_BASE_URL}/addresses/set-default`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      address_id: Number(addressId),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "设置默认地址失败");
+  }
+
+  dbAddressList = Array.isArray(result.data) ? result.data : [];
+
+  console.log("设置默认地址成功：", result);
+
+  return result;
+}
+
+async function deleteAddressFromApi(addressId) {
+  const address = getDbAddressById(addressId);
+
+  const confirmed = window.confirm(
+    `确定要删除这个收货地址吗？\n\n${address ? `${address.recipient_name} ${address.phone}\n${formatDbAddress(address)}` : ''}`
+  );
+
+  if (!confirmed) {
+    return null;
+  }
+
+  const response = await fetch(`${API_BASE_URL}/addresses/delete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      address_id: Number(addressId),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "删除收货地址失败");
+  }
+
+  dbAddressList = Array.isArray(result.data) ? result.data : [];
+
+  const defaultAddress = getDefaultDbAddress();
+
+  if (defaultAddress) {
+    activePurchaseAddressId = Number(defaultAddress.id);
+    activeCartAddressId = Number(defaultAddress.id);
+  } else {
+    activePurchaseAddressId = CURRENT_ADDRESS_ID;
+    activeCartAddressId = CURRENT_ADDRESS_ID;
+  }
+
+  console.log("删除收货地址成功：", result);
+
+  return result;
+}
+
 function formatDbAddress(address) {
   if (!address) {
     return "暂无地址";
@@ -513,6 +621,7 @@ function convertApiCartRows(apiRows) {
 
       price: Number(row.price || 0),
       quantity: Number(row.quantity || 1),
+      availableStock: Number(row.available_stock || 0),
     };
   });
 }
@@ -548,6 +657,13 @@ async function syncCartFromApi(userId = CURRENT_USER_ID) {
 async function addCartToApi(product) {
   const selectedSku = getSelectedSku(product);
   const skuId = selectedSku?.skuId || product.defaultSkuId || product.skuId;
+  const availableStock = getSkuAvailableStock(selectedSku);
+
+  if (availableStock <= 0) {
+    setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格库存不足。", true);
+    openSidebar("cart");
+    return;
+  }
 
   if (!skuId) {
     setFeedback(sidebarCartFeedback, "加入购物车失败：当前商品没有 SKU。", true);
@@ -806,6 +922,18 @@ async function submitCartCheckout() {
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
   const selectedCartItemIds = getSelectedCartItemIds(cart, selectedIds);
+  const selectedCartItems = cart.filter((item) => selectedIds.includes(item.id));
+  const overStockItems = findOverStockCartItems(selectedCartItems);
+
+  if (overStockItems.length) {
+    const itemNames = overStockItems.map((item) => item.name).join("、");
+    setFeedback(
+      sidebarCartFeedback,
+      `提交订单失败：以下商品库存不足或购买数量超过库存：${itemNames}`,
+      true
+    );
+    return;
+  }
 
   if (!selectedCartItemIds.length) {
     setFeedback(sidebarCartFeedback, "请先勾选要提交订单的商品。", true);
@@ -872,6 +1000,51 @@ function formatOrderStatus(status) {
   };
 
   return statusMap[status] || status || "未知状态";
+}
+
+function getOrderStatusFilterLabel(status) {
+  return orderStatusFilters.find((item) => item.value === status)?.label || '全部';
+}
+
+function getFilteredOrders(orders) {
+  const orderList = Array.isArray(orders) ? orders : [];
+
+  if (activeOrderStatusFilter === 'ALL') {
+    return orderList;
+  }
+
+  return orderList.filter((order) => order.status === activeOrderStatusFilter);
+}
+
+function getOrderStatusCount(orders, status) {
+  const orderList = Array.isArray(orders) ? orders : [];
+
+  if (status === 'ALL') {
+    return orderList.length;
+  }
+
+  return orderList.filter((order) => order.status === status).length;
+}
+
+function renderOrderStatusFilters(orders) {
+  return `
+    <div class="order-filter">
+      ${orderStatusFilters
+        .map(
+          (filter) => `
+            <button
+              type="button"
+              class="order-filter__button ${activeOrderStatusFilter === filter.value ? 'is-active' : ''}"
+              data-order-status-filter="${filter.value}"
+            >
+              ${filter.label}
+              <span>${getOrderStatusCount(orders, filter.value)}</span>
+            </button>
+          `,
+        )
+        .join('')}
+    </div>
+  `;
 }
 
 async function loadOrdersFromApi(userId = CURRENT_USER_ID) {
@@ -1156,74 +1329,99 @@ function renderApiOrders(orders) {
     return;
   }
 
-  if (!orders.length) {
-    ordersList.innerHTML = `<p class="orders-empty">暂无购买记录</p>`;
+  const allOrders = Array.isArray(orders) ? orders : [];
+  const filteredOrders = getFilteredOrders(allOrders);
+  const filterLabel = getOrderStatusFilterLabel(activeOrderStatusFilter);
+
+  if (!allOrders.length) {
+    ordersList.innerHTML = `
+      ${renderOrderStatusFilters(allOrders)}
+      <p class="orders-empty">暂无购买记录</p>
+    `;
     return;
   }
 
-  ordersList.innerHTML = orders
-    .map((order) => {
-      const orderId = Number(order.order_id);
-      const isCancelling = cancellingOrderIds.has(orderId);
-      const cancellable = canCancelOrder(order.status);
-      const cancelHint = getOrderCancelHint(order.status);
+  if (!filteredOrders.length) {
+    ordersList.innerHTML = `
+      ${renderOrderStatusFilters(allOrders)}
+      <p class="orders-empty">当前筛选：${filterLabel}，暂无对应订单</p>
+    `;
+    return;
+  }
 
-      return `
-        <article class="order-card" data-order-id="${order.order_id}">
-          <div class="order-card__header">
-            <strong>${escapeHtml(order.order_no || "未知订单号")}</strong>
-            <span>${formatOrderStatus(order.status)}</span>
-          </div>
-          <p>订单ID：${order.order_id}</p>
-          <p>商品种类：${order.item_kind_count} 类，数量：${order.total_quantity} 件</p>
-          <p>合计：${formatPrice(order.total_amount)}</p>
-          <p>创建时间：${renderOrderDetailValue(order.created_at)}</p>
+  ordersList.innerHTML = `
+    ${renderOrderStatusFilters(allOrders)}
+    ${filteredOrders
+      .map((order) => {
+        const orderId = Number(order.order_id);
+        const isCancelling = typeof cancellingOrderIds !== 'undefined' && cancellingOrderIds.has(orderId);
+        const cancellable = typeof canCancelOrder === 'function'
+          ? canCancelOrder(order.status)
+          : order.status === 'PENDING_PAYMENT';
 
-          <div class="order-card__actions">
-            <button
-              class="ghost-button ghost-button--small"
-              type="button"
-              data-order-detail-id="${order.order_id}"
-            >
-              查看详情
-            </button>
+        const cancelHint = typeof getOrderCancelHint === 'function'
+          ? getOrderCancelHint(order.status)
+          : '';
 
-            ${
-              order.status === "PENDING_PAYMENT"
-                ? `
-                  <button
-                    class="ghost-button ghost-button--small ghost-button--solid"
-                    type="button"
-                    data-order-pay-id="${order.order_id}"
-                  >
-                    去支付
-                  </button>
-                `
-                : ""
-            }
+        return `
+          <article class="order-card" data-order-id="${order.order_id}">
+            <div class="order-card__header">
+              <strong>${escapeHtml(order.order_no || "未知订单号")}</strong>
+              <span>${formatOrderStatus(order.status)}</span>
+            </div>
+            <p>订单ID：${order.order_id}</p>
+            <p>商品种类：${order.item_kind_count} 类，数量：${order.total_quantity} 件</p>
+            <p>合计：${formatPrice(order.total_amount)}</p>
+            <p>创建时间：${renderOrderDetailValue(order.created_at)}</p>
 
-            ${
-              cancellable
-                ? `
-                  <button
-                    class="ghost-button ghost-button--small ghost-button--danger"
-                    type="button"
-                    data-order-cancel-id="${order.order_id}"
-                    ${isCancelling ? "disabled" : ""}
-                  >
-                    ${isCancelling ? "取消中..." : "取消订单"}
-                  </button>
-                `
-                : `<span class="order-card__hint">${escapeHtml(cancelHint)}</span>`
-            }
-          </div>
+            <div class="order-card__actions">
+              <button
+                class="ghost-button ghost-button--small"
+                type="button"
+                data-order-detail-id="${order.order_id}"
+              >
+                查看详情
+              </button>
 
-          <p class="order-card__action-feedback" data-order-action-feedback="${order.order_id}"></p>
-          <div data-order-detail-container="${order.order_id}"></div>
-        </article>
-      `;
-    })
-    .join("");
+              ${
+                order.status === "PENDING_PAYMENT"
+                  ? `
+                    <button
+                      class="ghost-button ghost-button--small ghost-button--solid"
+                      type="button"
+                      data-order-pay-id="${order.order_id}"
+                    >
+                      去支付
+                    </button>
+                  `
+                  : ""
+              }
+
+              ${
+                cancellable
+                  ? `
+                    <button
+                      class="ghost-button ghost-button--small ghost-button--danger"
+                      type="button"
+                      data-order-cancel-id="${order.order_id}"
+                      ${isCancelling ? "disabled" : ""}
+                    >
+                      ${isCancelling ? "取消中..." : "取消订单"}
+                    </button>
+                  `
+                  : cancelHint
+                    ? `<span class="order-card__hint">${escapeHtml(cancelHint)}</span>`
+                    : ""
+              }
+            </div>
+
+            <p class="order-card__action-feedback" data-order-action-feedback="${order.order_id}"></p>
+            <div data-order-detail-container="${order.order_id}"></div>
+          </article>
+        `;
+      })
+      .join("")}
+  `;
 }
 
 async function refreshOrdersFromApi() {
@@ -1394,6 +1592,8 @@ function renderProducts() {
       const displayPrice = Number(selectedSku?.price ?? product.price ?? 0);
       const selectedSkuName = selectedSku?.skuName || '默认规格';
       const selectedStock = Number(selectedSku?.availableStock ?? product.availableStock ?? 0);
+      const isSelectedSkuInStock = selectedStock > 0;
+      const stockLabel = getStockLabel(selectedStock);
 
       return `
         <article class="product-card ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
@@ -1446,7 +1646,9 @@ function renderProducts() {
                   `
             }
             ${renderProductSkuOptions(product)}
-            <p class="product-card__sku-current">当前规格：${escapeHtml(selectedSkuName)}，库存 ${selectedStock} 件</p>
+            <p class="product-card__sku-current ${isSelectedSkuInStock ? '' : 'is-sold-out'}">
+              当前规格：${escapeHtml(selectedSkuName)}，${escapeHtml(stockLabel)}
+            </p>
             <div class="product-card__footer">
               <div class="product-card__actions ${isPurchaseUi ? 'product-card__actions--purchase' : ''}">
                 ${
@@ -1455,10 +1657,23 @@ function renderProducts() {
                 <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入收藏夹" data-sidebar-launch="favorites">
                   <span class="ghost-button__icon">${getFavoriteIcon()}</span>
                 </button>
-                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入购物车" data-sidebar-launch="cart">
+                <button
+                  type="button"
+                  class="ghost-button ghost-button--icon ghost-button--icon-outline"
+                  aria-label="加入购物车"
+                  data-sidebar-launch="cart"
+                  ${isSelectedSkuInStock ? '' : 'disabled'}
+                >
                   <span class="ghost-button__icon">${getCartIcon()}</span>
                 </button>
-                <button type="button" class="ghost-button ghost-button--solid ghost-button--buy" data-purchase-launch="buy">立即购买</button>
+                <button
+                  type="button"
+                  class="ghost-button ghost-button--solid ghost-button--buy"
+                  data-purchase-launch="buy"
+                  ${isSelectedSkuInStock ? '' : 'disabled'}
+                >
+                  ${isSelectedSkuInStock ? '立即购买' : '已售罄'}
+                </button>
                     `
                     : `
                 <button type="button" class="ghost-button">加入收藏</button>
@@ -1579,16 +1794,42 @@ function renderSidebarDbAddressList() {
 
   sidebarAddressList.innerHTML = dbAddressList
     .map(
-      (address) => `
-        <article class="address-card ${Number(address.is_default) === 1 ? 'is-active' : ''}" data-sidebar-address-item="${address.id}">
-          <div class="address-card__header">
-            <strong>${escapeHtml(address.recipient_name || '未命名地址')}</strong>
-            ${Number(address.is_default) === 1 ? '<span>默认</span>' : ''}
-          </div>
-          <p>${escapeHtml(address.phone || '')}</p>
-          <p>${escapeHtml(formatDbAddress(address))}</p>
-        </article>
-      `,
+      (address) => {
+        const isDefault = Number(address.is_default) === 1;
+
+        return `
+          <article class="address-card ${isDefault ? 'is-active' : ''}" data-sidebar-address-item="${address.id}">
+            <div class="address-card__header">
+              <strong>${escapeHtml(address.recipient_name || '未命名地址')}</strong>
+              ${isDefault ? '<span>默认</span>' : ''}
+            </div>
+            <p>${escapeHtml(address.phone || '')}</p>
+            <p>${escapeHtml(formatDbAddress(address))}</p>
+            <div class="address-card__actions">
+              ${
+                isDefault
+                  ? '<span class="address-card__hint">当前默认地址</span>'
+                  : `
+                    <button
+                      type="button"
+                      class="ghost-button ghost-button--small"
+                      data-db-address-default="${address.id}"
+                    >
+                      设为默认
+                    </button>
+                  `
+              }
+              <button
+                type="button"
+                class="ghost-button ghost-button--small ghost-button--danger"
+                data-db-address-delete="${address.id}"
+              >
+                删除
+              </button>
+            </div>
+          </article>
+        `;
+      },
     )
     .join('');
 }
@@ -1607,8 +1848,13 @@ if (selectedAddress) {
   const product = activePurchaseProduct;
   const selectedSku = getPurchaseSelectedSku(product);
   const displayPrice = Number(selectedSku?.price ?? product?.price ?? 0);
-  const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
+  const availableStock = getSkuAvailableStock(selectedSku);
+  const quantity = Math.min(
+    Math.max(1, Number(activePurchaseQuantity) || 1),
+    availableStock > 0 ? availableStock : 1
+  );
   const total = product ? displayPrice * quantity : 0;
+  const canSubmitPurchase = Boolean(product) && availableStock > 0 && quantity <= availableStock;
 
   if (purchaseTitle) {
     purchaseTitle.textContent = product?.name || '立即购买';
@@ -1639,6 +1885,13 @@ if (selectedAddress) {
 
   if (purchaseQuantityValue) {
     purchaseQuantityValue.textContent = String(quantity);
+  }
+  if (purchaseQuantityDecrease) {
+    purchaseQuantityDecrease.disabled = quantity <= 1;
+  }
+
+  if (purchaseQuantityIncrease) {
+    purchaseQuantityIncrease.disabled = availableStock <= 0 || quantity >= availableStock;
   }
 
   if (purchaseTotal) {
@@ -1692,8 +1945,12 @@ if (selectedAddress) {
   }
 
   if (purchaseSubmit) {
-    purchaseSubmit.disabled = !product;
-    purchaseSubmit.textContent = product ? `提交订单 ${formatPrice(total)}` : '请选择商品';
+    purchaseSubmit.disabled = !canSubmitPurchase;
+    purchaseSubmit.textContent = product
+      ? canSubmitPurchase
+        ? `提交订单 ${formatPrice(total)}`
+        : '当前规格库存不足'
+      : '请选择商品';
   }
 
   if (purchaseFeedback) {
@@ -1735,7 +1992,19 @@ function closePurchaseModal() {
 }
 
 function setPurchaseQuantity(nextQuantity) {
-  activePurchaseQuantity = Math.min(99, Math.max(1, Number(nextQuantity) || 1));
+  const selectedSku = getPurchaseSelectedSku(activePurchaseProduct);
+  const availableStock = getSkuAvailableStock(selectedSku);
+  const maxQuantity = availableStock > 0 ? Math.min(99, availableStock) : 1;
+
+  activePurchaseQuantity = Math.min(
+    maxQuantity,
+    Math.max(1, Number(nextQuantity) || 1)
+  );
+
+  if (Number(nextQuantity) > maxQuantity) {
+    setFeedback(purchaseFeedback, `当前规格最多只能购买 ${availableStock} 件。`, true);
+  }
+
   renderPurchaseModal();
 }
 
@@ -1768,6 +2037,17 @@ async function submitPurchaseOrder() {
   const selectedSku = getPurchaseSelectedSku(activePurchaseProduct);
   const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
   const total = Number(selectedSku?.price ?? activePurchaseProduct.price ?? 0) * quantity;
+  const availableStock = getSkuAvailableStock(selectedSku);
+
+  if (availableStock <= 0) {
+    setFeedback(purchaseFeedback, "提交订单失败：当前规格库存不足。", true);
+    return;
+  }
+
+  if (quantity > availableStock) {
+    setFeedback(purchaseFeedback, `提交订单失败：当前规格最多只能购买 ${availableStock} 件。`, true);
+    return;
+  }
 
   try {
     if (purchaseSubmit) {
@@ -1994,6 +2274,17 @@ async function updateCartQuantityToApi(itemId, delta) {
 
   const currentQuantity = Math.max(1, Number(item.quantity || 1));
   const nextQuantity = Math.max(1, currentQuantity + Number(delta || 0));
+  const availableStock = Math.max(0, Number(item.availableStock || 0));
+
+  if (Number(delta || 0) > 0 && availableStock > 0 && nextQuantity > availableStock) {
+    setFeedback(sidebarCartFeedback, `库存不足，当前最多只能购买 ${availableStock} 件。`, true);
+    return;
+  }
+
+  if (Number(delta || 0) > 0 && availableStock <= 0) {
+    setFeedback(sidebarCartFeedback, "库存不足，不能继续增加数量。", true);
+    return;
+  }
 
   if (nextQuantity === currentQuantity) {
     return;
@@ -2111,6 +2402,8 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
       const quantity = Math.max(1, Number(item.quantity || 1));
       const subtotal = getCartItemTotal(item);
       const isSelected = isCartItemSelected(selectedIds, item.id);
+      const availableStock = Math.max(0, Number(item.availableStock || 0));
+      const canIncrease = availableStock > 0 && quantity < availableStock;
 
       return `
         <article class="cart-item ${isSelected ? 'is-selected' : ''}" data-cart-item-id="${item.id}">
@@ -2149,13 +2442,24 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
               </div>
             </div>
             <div class="cart-item__bottomline">
-              <span class="cart-item__unit-price">${formatCartMoney(item.price)} / 件</span>
+              <span class="cart-item__unit-price">
+                ${formatCartMoney(item.price)} / 件 · ${escapeHtml(getStockLabel(availableStock))}
+              </span>
               <div class="cart-item__quantity-zone">
                 <span class="cart-item__quantity-label">x${quantity}</span>
                 <div class="cart-item__stepper">
                   <button class="cart-item__stepper-button" type="button" data-cart-quantity-step="-1" data-cart-item-id="${item.id}" aria-label="减少数量">-</button>
                   <span class="cart-item__quantity-value">${quantity}</span>
-                  <button class="cart-item__stepper-button" type="button" data-cart-quantity-step="1" data-cart-item-id="${item.id}" aria-label="增加数量">+</button>
+                  <button
+                    class="cart-item__stepper-button"
+                    type="button"
+                    data-cart-quantity-step="1"
+                    data-cart-item-id="${item.id}"
+                    aria-label="增加数量"
+                    ${canIncrease ? '' : 'disabled'}
+                  >
+                    +
+                  </button>
                 </div>
               </div>
             </div>
@@ -2606,6 +2910,25 @@ sidebarNavButtons.forEach((button) => {
 
 if (ordersList) {
   ordersList.addEventListener("click", (event) => {
+    const filterButton = event.target.closest("[data-order-status-filter]");
+    if (filterButton) {
+      activeOrderStatusFilter = filterButton.dataset.orderStatusFilter || 'ALL';
+      refreshOrdersFromApi();
+      return;
+    }
+
+    const cancelButton = event.target.closest("[data-order-cancel-id]");
+    if (cancelButton) {
+      const orderId = Number(cancelButton.dataset.orderCancelId);
+
+      if (!Number.isInteger(orderId) || orderId <= 0) {
+        return;
+      }
+
+      handleCancelOrder(orderId);
+      return;
+    }
+
     const payButton = event.target.closest("[data-order-pay-id]");
     if (payButton) {
       const orderId = Number(payButton.dataset.orderPayId);
@@ -2864,30 +3187,62 @@ if (sidebarAddressForm) {
 }
 
 if (sidebarAddressList) {
-  sidebarAddressList.addEventListener('click', (event) => {
-    const defaultButton = event.target.closest('[data-sidebar-address-default]');
+  sidebarAddressList.addEventListener('click', async (event) => {
+    const defaultButton = event.target.closest('[data-db-address-default]');
+    if (defaultButton) {
+      const addressId = Number(defaultButton.dataset.dbAddressDefault);
 
-    if (!defaultButton) {
+      if (!Number.isInteger(addressId) || addressId <= 0) {
+        return;
+      }
+
+      try {
+        setFeedback(sidebarAddressFeedback, '正在设置默认地址...');
+
+        await setDefaultAddressToApi(addressId);
+
+        activePurchaseAddressId = addressId;
+        activeCartAddressId = addressId;
+
+        setFeedback(sidebarAddressFeedback, '默认地址已更新。');
+
+        renderSidebar();
+        renderPurchaseModal();
+      } catch (error) {
+        console.error("设置默认地址失败：", error);
+        setFeedback(sidebarAddressFeedback, `设置默认地址失败：${error.message}`, true);
+      }
+
       return;
     }
 
-    const addressId = defaultButton.dataset.sidebarAddressDefault;
-    const addressBook = getStoredAddressBook(storage);
+    const deleteButton = event.target.closest('[data-db-address-delete]');
+    if (deleteButton) {
+      const addressId = Number(deleteButton.dataset.dbAddressDelete);
 
-    if (!addressBook.addresses.length) {
-      return;
+      if (!Number.isInteger(addressId) || addressId <= 0) {
+        return;
+      }
+
+      try {
+        setFeedback(sidebarAddressFeedback, '正在删除地址...');
+
+        const result = await deleteAddressFromApi(addressId);
+
+        if (!result) {
+          setFeedback(sidebarAddressFeedback, '已取消删除。');
+          return;
+        }
+
+        setFeedback(sidebarAddressFeedback, '地址已删除。');
+
+        renderSidebar();
+        renderPurchaseModal();
+      } catch (error) {
+        console.error("删除地址失败：", error);
+        setFeedback(sidebarAddressFeedback, `删除地址失败：${error.message}`, true);
+      }
     }
-
-    saveStoredAddressBook(storage, {
-      addresses: addressBook.addresses.map((address) => ({
-        ...address,
-        isDefault: address.id === addressId,
-      })),
-      defaultAddressId: addressId,
-    });
-
-    renderSidebar();
-    renderPurchaseModal();
   });
 }
 

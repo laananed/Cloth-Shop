@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+import json
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from pymysql.err import MySQLError
@@ -26,18 +29,77 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+PRODUCT_UPLOAD_DIR = UPLOAD_DIR / "products"
+
+PRODUCT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def build_product_image_filename(original_filename: str) -> str:
+    suffix = Path(original_filename or "").suffix.lower()
+
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail="图片格式不支持，请上传 jpg、jpeg、png、webp 或 gif 文件"
+        )
+
+    import uuid
+    return f"{uuid.uuid4().hex}{suffix}"
+
+app.mount(
+    "/uploads",
+    StaticFiles(directory=str(UPLOAD_DIR)),
+    name="uploads"
+)
+
 class CartAddRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     sku_id: int = Field(..., gt=0, description="SKU ID")
     quantity: int = Field(..., gt=0, description="加入购物车数量")
 
+class CartUpdateQuantityRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    cart_item_id: int = Field(..., gt=0, description="购物车明细ID")
+    quantity: int = Field(..., gt=0, description="修改后的购物车商品数量")
+
+class CartDeleteItemRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    cart_item_id: int = Field(..., gt=0, description="购物车明细ID")
+
 class OrderFromCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
 
+class OrderFromSelectedCartRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="收货地址ID")
+    cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
+
 class PayOrderRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
     order_id: int = Field(..., gt=0, description="订单ID")
-    pay_method: str = Field("ALIPAY", description="支付方式，例如 ALIPAY / WECHAT")
+    pay_method: str = Field(..., description="支付方式：ALIPAY / WECHAT / COD")
+    pay_password: str = Field(..., min_length=6, max_length=6, description="6位支付密码")
+
+class AddressAddRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    recipient_name: str = Field(..., min_length=1, max_length=50, description="收货人")
+    phone: str = Field(..., min_length=1, max_length=20, description="手机号")
+    detail: str = Field(..., min_length=1, max_length=255, description="详细地址")
+    is_default: bool = Field(False, description="是否设为默认地址")
+
+class AddressSetDefaultRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="地址ID")
+
+
+class AddressDeleteRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="地址ID")
 
 class DirectOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
@@ -48,6 +110,13 @@ class DirectOrderRequest(BaseModel):
 class CancelOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
     remark: str = Field("用户取消订单", description="取消原因")
+
+class ProductCreateRequest(BaseModel):
+    category_name: str = Field(..., min_length=1, max_length=80, description="商品分类名称")
+    product_name: str = Field(..., min_length=1, max_length=120, description="商品名称")
+    sku_name: str = Field("默认规格", max_length=100, description="SKU 名称，第一版一个商品只对应一个 SKU")
+    price: float = Field(..., gt=0, description="SKU 售价")
+    available_stock: int = Field(..., ge=0, description="初始可用库存")
 
 @app.get("/")
 def root():
@@ -90,6 +159,9 @@ def get_products():
                         category_name,
                         product_id,
                         product_name,
+                        product_id,
+                        product_name,
+                        image_url,
                         product_status,
                         sku_id,
                         sku_name,
@@ -118,6 +190,472 @@ def get_products():
             status_code=500,
             detail=f"查询商品列表失败：{str(e)}"
         )
+
+@app.post("/products")
+async def create_product(
+    category_name: str = Form(...),
+    product_name: str = Form(...),
+    sku_name: str = Form("默认规格"),
+    price: float = Form(...),
+    available_stock: int = Form(...),
+    image: UploadFile | None = File(None),
+):
+    """
+    后台新增商品。
+    第一版：一个商品只创建一个 SKU。
+    支持上传一张商品主图，图片保存到 uploads/products，路径写入 product.image_url。
+    """
+    category_name = category_name.strip()
+    product_name = product_name.strip()
+    sku_name = sku_name.strip() or "默认规格"
+
+    if not category_name:
+        raise HTTPException(status_code=400, detail="商品分类不能为空")
+
+    if not product_name:
+        raise HTTPException(status_code=400, detail="商品名称不能为空")
+
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="商品价格必须大于 0")
+
+    if available_stock < 0:
+        raise HTTPException(status_code=400, detail="初始库存不能小于 0")
+
+    image_url = None
+
+    if image and image.filename:
+        image_filename = build_product_image_filename(image.filename)
+        image_path = PRODUCT_UPLOAD_DIR / image_filename
+
+        content = await image.read()
+
+        if not content:
+            raise HTTPException(status_code=400, detail="上传的图片文件为空")
+
+        max_size = 8 * 1024 * 1024
+        if len(content) > max_size:
+            raise HTTPException(status_code=400, detail="图片不能超过 8MB")
+
+        image_path.write_bytes(content)
+        image_url = f"/uploads/products/{image_filename}"
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    # 1. 分类不存在则创建，已存在则复用
+                    cursor.execute(
+                        """
+                        INSERT INTO category(name, sort_order, is_deleted)
+                        VALUES(%s, 0, 0)
+                        ON DUPLICATE KEY UPDATE
+                            id = LAST_INSERT_ID(id),
+                            is_deleted = 0
+                        """,
+                        (category_name,)
+                    )
+                    category_id = cursor.lastrowid
+
+                    # 2. 写入 product 表，保存 image_url
+                    cursor.execute(
+                        """
+                        INSERT INTO product(
+                            category_id,
+                            name,
+                            image_url,
+                            status,
+                            is_deleted
+                        )
+                        VALUES(%s, %s, %s, 'ON_SALE', 0)
+                        """,
+                        (category_id, product_name, image_url)
+                    )
+                    product_id = cursor.lastrowid
+
+                    # 3. 写入 product_sku 表
+                    cursor.execute(
+                        """
+                        INSERT INTO product_sku(
+                            product_id,
+                            sku_name,
+                            price,
+                            status,
+                            is_deleted
+                        )
+                        VALUES(%s, %s, %s, 'ON_SALE', 0)
+                        """,
+                        (product_id, sku_name, price)
+                    )
+                    sku_id = cursor.lastrowid
+
+                    # 4. 写入 inventory 表，初始化库存
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory(
+                            sku_id,
+                            available_stock,
+                            locked_stock
+                        )
+                        VALUES(%s, %s, 0)
+                        """,
+                        (sku_id, available_stock)
+                    )
+
+                    # 5. 写入 product_sales_stat 表，初始化销量统计
+                    cursor.execute(
+                        """
+                        INSERT INTO product_sales_stat(
+                            sku_id,
+                            total_sold_count,
+                            total_sales_amount
+                        )
+                        VALUES(%s, 0, 0.00)
+                        """,
+                        (sku_id,)
+                    )
+
+                conn.commit()
+
+                # 6. 新增成功后，从 v_product_detail 查回完整商品信息
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            category_id,
+                            category_name,
+                            product_id,
+                            product_name,
+                            image_url,
+                            product_status,
+                            sku_id,
+                            sku_name,
+                            price,
+                            sku_status,
+                            available_stock,
+                            locked_stock,
+                            total_sold_count,
+                            total_sales_amount,
+                            product_created_at,
+                            product_updated_at
+                        FROM v_product_detail
+                        WHERE product_id = %s
+                        ORDER BY sku_id
+                        """,
+                        (product_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "新增商品成功",
+            "product_id": product_id,
+            "sku_id": sku_id,
+            "image_url": image_url,
+            "data": jsonable_encoder(rows)
+        }
+
+    except HTTPException:
+        raise
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"新增商品失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+
+def query_user_addresses(conn, user_id: int):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                recipient_name,
+                phone,
+                detail,
+                is_default,
+                created_at
+            FROM user_address
+            WHERE user_id = %s
+              AND is_deleted = 0
+            ORDER BY is_default DESC, id ASC
+            """,
+            (user_id,)
+        )
+        return cursor.fetchall()
+
+
+@app.get("/addresses/user/{user_id}")
+def get_user_addresses(user_id: int):
+    """
+    查询用户收货地址列表。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        user_id,
+                        recipient_name,
+                        phone,
+                        detail,
+                        is_default,
+                        created_at
+                    FROM user_address
+                    WHERE user_id = %s
+                      AND is_deleted = 0
+                    ORDER BY is_default DESC, id ASC
+                    """,
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询用户地址成功",
+            "user_id": user_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"查询用户地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/addresses/add")
+def add_user_address(req: AddressAddRequest):
+    """
+    新增用户收货地址。
+    当前数据库 user_address 表只有 detail 字段，所以前端会把省市区和详细地址合并后传入 detail。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM `user`
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.user_id,)
+                    )
+                    user_check = cursor.fetchone()
+
+                    if not user_check or user_check["cnt"] == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="用户不存在或已删除"
+                        )
+
+                    if req.is_default:
+                        cursor.execute(
+                            """
+                            UPDATE user_address
+                            SET is_default = 0
+                            WHERE user_id = %s
+                              AND is_deleted = 0
+                            """,
+                            (req.user_id,)
+                        )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO user_address(
+                            user_id,
+                            recipient_name,
+                            phone,
+                            detail,
+                            is_default,
+                            is_deleted
+                        )
+                        VALUES(%s, %s, %s, %s, %s, 0)
+                        """,
+                        (
+                            req.user_id,
+                            req.recipient_name,
+                            req.phone,
+                            req.detail,
+                            1 if req.is_default else 0
+                        )
+                    )
+
+                    address_id = cursor.lastrowid
+
+                conn.commit()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            user_id,
+                            recipient_name,
+                            phone,
+                            detail,
+                            is_default,
+                            created_at
+                        FROM user_address
+                        WHERE user_id = %s
+                          AND is_deleted = 0
+                        ORDER BY is_default DESC, id ASC
+                        """,
+                        (req.user_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "新增收货地址成功",
+            "address_id": address_id,
+            "user_id": req.user_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except HTTPException:
+        raise
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"新增收货地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/addresses/set-default")
+def set_default_address(req: AddressSetDefaultRequest):
+    """
+    设置默认收货地址。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_set_default_address(%s, %s)",
+                        (req.user_id, req.address_id)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                rows = query_user_addresses(conn, req.user_id)
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "设置默认地址成功",
+            "user_id": req.user_id,
+            "address_id": req.address_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"设置默认地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/addresses/delete")
+def delete_user_address(req: AddressDeleteRequest):
+    """
+    删除收货地址。
+    当前采用软删除：is_deleted = 1。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_delete_user_address(%s, %s)",
+                        (req.user_id, req.address_id)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                rows = query_user_addresses(conn, req.user_id)
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "删除收货地址成功",
+            "user_id": req.user_id,
+            "address_id": req.address_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"删除收货地址失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
 
 @app.get("/cart/{user_id}")
 def get_cart(user_id: int):
@@ -243,6 +781,156 @@ def add_to_cart(req: CartAddRequest):
             detail=f"服务器错误：{str(e)}"
         )
 
+
+@app.post("/cart/update-quantity")
+def update_cart_quantity(req: CartUpdateQuantityRequest):
+    """
+    修改购物车商品数量。
+    调用存储过程 sp_update_cart_item_quantity。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_update_cart_item_quantity(%s, %s, %s)",
+                        (req.user_id, req.cart_item_id, req.quantity)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            user_id,
+                            email,
+                            cart_id,
+                            cart_item_id,
+                            product_id,
+                            product_name,
+                            sku_id,
+                            sku_name,
+                            price,
+                            quantity,
+                            item_amount,
+                            available_stock,
+                            cart_status,
+                            created_at,
+                            updated_at
+                        FROM v_user_cart_detail
+                        WHERE user_id = %s
+                        ORDER BY cart_item_id
+                        """,
+                        (req.user_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        total_amount = sum(float(row["item_amount"]) for row in rows)
+
+        return {
+            "success": True,
+            "message": "修改购物车数量成功",
+            "user_id": req.user_id,
+            "count": len(rows),
+            "cart_total_amount": total_amount,
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"修改购物车数量失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+@app.post("/cart/delete-item")
+def delete_cart_item(req: CartDeleteItemRequest):
+    """
+    删除购物车中的单个商品。
+    调用存储过程 sp_delete_cart_item。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_delete_cart_item(%s, %s)",
+                        (req.user_id, req.cart_item_id)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            user_id,
+                            email,
+                            cart_id,
+                            cart_item_id,
+                            product_id,
+                            product_name,
+                            sku_id,
+                            sku_name,
+                            price,
+                            quantity,
+                            item_amount,
+                            available_stock,
+                            cart_status,
+                            created_at,
+                            updated_at
+                        FROM v_user_cart_detail
+                        WHERE user_id = %s
+                        ORDER BY cart_item_id
+                        """,
+                        (req.user_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        total_amount = sum(float(row["item_amount"]) for row in rows)
+
+        return {
+            "success": True,
+            "message": "删除购物车商品成功",
+            "user_id": req.user_id,
+            "count": len(rows),
+            "cart_total_amount": total_amount,
+            "data": jsonable_encoder(rows)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"删除购物车商品失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
 
 @app.post("/orders/from-cart")
 def create_order_from_cart(req: OrderFromCartRequest):
@@ -370,30 +1058,211 @@ def create_order_from_cart(req: OrderFromCartRequest):
             detail=f"服务器错误：{str(e)}"
         )
 
-
-@app.post("/orders/pay")
-def pay_order(req: PayOrderRequest):
+@app.post("/orders/from-cart-selected")
+def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
     """
-    支付订单。
-    调用已有存储过程 sp_pay_order。
+    从购物车中选中的商品创建订单。
+    调用新增存储过程 sp_create_order_from_selected_cart_items。
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 调用支付订单存储过程
+                    cursor.execute(
+                        """
+                        CALL sp_create_order_from_selected_cart_items(
+                            %s,
+                            %s,
+                            %s,
+                            @selected_order_id,
+                            @selected_order_no
+                        )
+                        """,
+                        (
+                            req.user_id,
+                            req.address_id,
+                            json.dumps(req.cart_item_ids)
+                        )
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                    cursor.execute(
+                        """
+                        SELECT
+                            @selected_order_id AS order_id,
+                            @selected_order_no AS order_no
+                        """
+                    )
+                    order_result = cursor.fetchone()
+
+                conn.commit()
+
+                order_id = order_result["order_id"]
+                order_no = order_result["order_no"]
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            order_id,
+                            order_no,
+                            user_id,
+                            email,
+                            status,
+                            total_amount,
+                            item_kind_count,
+                            total_quantity,
+                            item_total_amount,
+                            created_at,
+                            updated_at
+                        FROM v_order_summary
+                        WHERE order_id = %s
+                        """,
+                        (order_id,)
+                    )
+                    order_summary = cursor.fetchone()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            user_id,
+                            email,
+                            order_id,
+                            order_no,
+                            order_status,
+                            total_amount,
+                            order_created_at,
+                            recipient_name,
+                            phone,
+                            address_detail,
+                            order_item_id,
+                            product_id,
+                            product_name,
+                            sku_id,
+                            sku_name,
+                            quantity,
+                            price,
+                            item_amount,
+                            pay_method,
+                            pay_status,
+                            pay_amount,
+                            pay_created_at
+                        FROM v_user_order_detail
+                        WHERE order_id = %s
+                        ORDER BY order_item_id
+                        """,
+                        (order_id,)
+                    )
+                    order_items = cursor.fetchall()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            sku_id,
+                            change_type,
+                            change_qty,
+                            ref_no,
+                            created_at
+                        FROM inventory_log
+                        WHERE ref_no = %s
+                        ORDER BY id
+                        """,
+                        (order_no,)
+                    )
+                    inventory_logs = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "从购物车选中商品创建订单成功",
+            "order_id": order_id,
+            "order_no": order_no,
+            "order_summary": jsonable_encoder(order_summary),
+            "order_items": jsonable_encoder(order_items),
+            "inventory_logs": jsonable_encoder(inventory_logs)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"从购物车选中商品创建订单失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
+
+@app.post("/orders/pay")
+def pay_order(req: PayOrderRequest):
+    """
+    支付订单。
+    先校验用户、订单归属和支付密码，校验通过后调用 sp_pay_order。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    # 1. 校验支付密码
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM `user`
+                        WHERE id = %s
+                          AND is_deleted = 0
+                          AND pay_password_hash = SHA2(%s, 256)
+                        """,
+                        (req.user_id, req.pay_password)
+                    )
+                    password_check = cursor.fetchone()
+
+                    if not password_check or password_check["cnt"] == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="支付密码错误"
+                        )
+
+                    # 2. 校验订单是否属于当前用户
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM order_main
+                        WHERE id = %s
+                          AND user_id = %s
+                        """,
+                        (req.order_id, req.user_id)
+                    )
+                    order_check = cursor.fetchone()
+
+                    if not order_check or order_check["cnt"] == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="订单不存在或不属于当前用户"
+                        )
+
+                    # 3. 调用原有支付存储过程
                     cursor.execute(
                         "CALL sp_pay_order(%s, %s)",
                         (req.order_id, req.pay_method)
                     )
 
-                    # 2. 清理可能存在的结果集
                     while cursor.nextset():
                         pass
 
                 conn.commit()
 
-                # 3. 查询订单汇总
+                # 4. 查询支付后的订单概要
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -416,7 +1285,6 @@ def pay_order(req: PayOrderRequest):
                     )
                     order_summary = cursor.fetchone()
 
-                # 4. 查询支付记录
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -435,24 +1303,9 @@ def pay_order(req: PayOrderRequest):
                     )
                     payment_records = cursor.fetchall()
 
-                # 5. 查询订单状态日志
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            id,
-                            order_id,
-                            from_status,
-                            to_status,
-                            remark,
-                            created_at
-                        FROM order_status_log
-                        WHERE order_id = %s
-                        ORDER BY id
-                        """,
-                        (req.order_id,)
-                    )
-                    status_logs = cursor.fetchall()
+            except HTTPException:
+                conn.rollback()
+                raise
 
             except Exception:
                 conn.rollback()
@@ -463,15 +1316,17 @@ def pay_order(req: PayOrderRequest):
             "message": "订单支付成功",
             "order_id": req.order_id,
             "order_summary": jsonable_encoder(order_summary),
-            "payment_records": jsonable_encoder(payment_records),
-            "status_logs": jsonable_encoder(status_logs)
+            "payment_records": jsonable_encoder(payment_records)
         }
+
+    except HTTPException:
+        raise
 
     except MySQLError as e:
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
-            detail=f"支付订单失败：{error_message}"
+            detail=f"订单支付失败：{error_message}"
         )
 
     except Exception as e:
@@ -790,6 +1645,123 @@ def get_user_orders(user_id: int):
             detail=f"查询用户订单列表失败：{str(e)}"
         )
 
+@app.get("/admin/orders")
+def get_admin_orders():
+    """
+    后台订单列表。
+    第一版暂不做权限校验，直接查询全部订单汇总。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        order_no,
+                        user_id,
+                        email,
+                        status,
+                        total_amount,
+                        item_kind_count,
+                        total_quantity,
+                        item_total_amount,
+                        created_at,
+                        updated_at
+                    FROM v_order_summary
+                    ORDER BY created_at DESC, order_id DESC
+                    """
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询后台订单列表成功",
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询后台订单列表失败：{str(e)}"
+        )
+
+
+@app.get("/admin/stats")
+def get_admin_stats():
+    """
+    后台销量统计。
+    第一版暂不做权限校验，统计真实数据库订单、商品、销量排行。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                # 1. 订单与销售额汇总
+                cursor.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS total_order_count,
+                        SUM(CASE WHEN status = 'PAID' THEN 1 ELSE 0 END) AS paid_order_count,
+                        SUM(CASE WHEN status = 'PENDING_PAYMENT' THEN 1 ELSE 0 END) AS pending_order_count,
+                        SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_order_count,
+                        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_amount ELSE 0 END), 0.00) AS total_revenue,
+                        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_quantity ELSE 0 END), 0) AS total_units_sold
+                    FROM v_order_summary
+                    """
+                )
+                summary = cursor.fetchone()
+
+                # 2. 商品总数
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS total_product_count
+                    FROM product
+                    WHERE is_deleted = 0
+                    """
+                )
+                product_count_row = cursor.fetchone()
+
+                # 3. 商品销量排行
+                cursor.execute(
+                    """
+                    SELECT
+                        category_name,
+                        product_id,
+                        product_name,
+                        sku_id,
+                        sku_name,
+                        price,
+                        total_sold_count,
+                        total_sales_amount,
+                        sales_rank
+                    FROM v_product_sales_rank
+                    ORDER BY sales_rank ASC, sku_id ASC
+                    LIMIT 20
+                    """
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询后台销量统计成功",
+            "summary": {
+                "total_revenue": float(summary["total_revenue"] or 0),
+                "total_order_count": int(summary["total_order_count"] or 0),
+                "paid_order_count": int(summary["paid_order_count"] or 0),
+                "pending_order_count": int(summary["pending_order_count"] or 0),
+                "cancelled_order_count": int(summary["cancelled_order_count"] or 0),
+                "total_units_sold": int(summary["total_units_sold"] or 0),
+                "total_product_count": int(product_count_row["total_product_count"] or 0),
+            },
+            "rows": jsonable_encoder(rows)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询后台销量统计失败：{str(e)}"
+        )
 
 @app.get("/orders/{order_id}")
 def get_order_detail(order_id: int):

@@ -107,6 +107,10 @@
 
         <section class="purchase-modal__section">
           <div class="purchase-modal__section-header">
+            <div class="purchase-field purchase-field--sku">
+              <span>商品规格</span>
+              <div class="purchase-sku-options" data-purchase-sku-options></div>
+            </div>
             <h3>支付方式</h3>
           </div>
           <div class="purchase-payment-options" data-purchase-payment-options></div>
@@ -275,6 +279,25 @@
           </div>
           <p>轻互动展示，不打扰浏览。</p>
         </div>
+        <div class="product-search">
+            <label class="product-search__label" for="product-search-input">搜索商品</label>
+            <div class="product-search__control">
+              <input
+                id="product-search-input"
+                class="product-search__input"
+                type="search"
+                placeholder="搜索商品名、分类或规格，例如：S、XL、外套"
+                data-product-search
+              />
+              <button
+                class="product-search__clear"
+                type="button"
+                data-product-search-clear
+              >
+                清空
+              </button>
+            </div>
+          </div>
         <div class="product-grid" data-product-grid></div>
       </section>
 
@@ -297,6 +320,6 @@
       </footer>
     </main>
 
-    <script type="module" src="./src/main.js?v=20260707b"></script>
+    <script type="module" src="./src/main.js?v=20260707e"></script>
   </body>
 </html>

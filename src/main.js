@@ -1489,6 +1489,25 @@ function formatOrderStatus(status) {
   return statusMap[status] || status || "未知状态";
 }
 
+function renderAdminOrderStatusBadge(status) {
+  const normalizedStatus = normalizeStatus(status);
+  const badgeMap = {
+    PENDING_PAYMENT: { className: 'admin-status-badge--pending', label: '待支付' },
+    PAID: { className: 'admin-status-badge--paid', label: '已支付' },
+    SHIPPED: { className: 'admin-status-badge--shipped', label: '已发货' },
+    REFUNDED: { className: 'admin-status-badge--refunded', label: '已退款' },
+    CANCELLED: { className: 'admin-status-badge--cancelled', label: '已取消' },
+    COMPLETED: { className: 'admin-status-badge--completed', label: '已完成' },
+  };
+  const badge = badgeMap[normalizedStatus] || { className: 'admin-status-badge--default', label: formatOrderStatus(normalizedStatus) };
+
+  return `
+    <span class="admin-status-badge ${badge.className}">
+      ${escapeHtml(badge.label)}
+    </span>
+  `;
+}
+
 function getOrderStatusFilterLabel(status) {
   return orderStatusFilters.find((item) => item.value === status)?.label || '全部';
 }
@@ -3530,6 +3549,7 @@ function initAdminPage() {
   const statsRows = shell.querySelector('[data-admin-stats-rows]');
   const productList = shell.querySelector('[data-admin-products-list]');
   const productSummary = shell.querySelector('[data-admin-product-summary]');
+  const orderFeedback = shell.querySelector('[data-admin-order-feedback]');
   const adminProductSearchInput = shell.querySelector('[data-admin-product-search]');
   const adminProductSearchClear = shell.querySelector('[data-admin-product-search-clear]');
   const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
@@ -3735,6 +3755,25 @@ function initAdminPage() {
     return result;
   }
 
+  async function unshipAdminOrderToApi(orderId, remark = '管理员后台取消发货') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/unship`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '后台取消发货失败');
+    }
+
+    return result;
+  }
+
   async function renderAdminOrderDetail(orderId, detail = null) {
     const row = getAdminOrderDetailRow(orderId);
     const container = getAdminOrderDetailContainer(orderId);
@@ -3805,9 +3844,45 @@ function initAdminPage() {
       .map(
         (row) => {
           const isExpanded = activeAdminOrderDetailId === row.orderId;
-          const canShip = row.status === 'PAID';
+          const status = normalizeStatus(row.status);
+          const statusBadge = renderAdminOrderStatusBadge(status);
+          const canShip = status === 'PAID';
+          const canUnship = status === 'SHIPPED';
           const detailButtonLabel = isExpanded ? '收起详情' : '查看详情';
           const detailRowHidden = isExpanded ? '' : ' hidden';
+          let actionButtonHtml = `
+            <button
+              class="admin-order-action-button admin-order-action-button--disabled"
+              type="button"
+              disabled
+            >
+              无法发货
+            </button>
+          `;
+
+          if (canShip) {
+            actionButtonHtml = `
+              <button
+                class="admin-order-action-button admin-order-action-button--primary"
+                type="button"
+                data-admin-order-ship-id="${row.orderId}"
+              >
+                发货
+              </button>
+            `;
+          }
+
+          if (canUnship) {
+            actionButtonHtml = `
+              <button
+                class="admin-order-action-button admin-order-action-button--warning"
+                type="button"
+                data-admin-order-unship-id="${row.orderId}"
+              >
+                取消发货
+              </button>
+            `;
+          }
 
           return `
           <tr>
@@ -3815,7 +3890,7 @@ function initAdminPage() {
             <td>${escapeHtml(row.email || `用户 ${row.userId || ""}`)}</td>
             <td>${escapeHtml(row.productSummary || `${row.itemKindCount} 类商品 / ${row.totalQuantity} 件`)}</td>
             <td>${escapeHtml(formatPrice(row.totalAmount))}</td>
-            <td>${escapeHtml(row.statusLabel || formatOrderStatus(row.status))}</td>
+            <td>${statusBadge}</td>
             <td>${escapeHtml(row.createdAt)}</td>
             <td>
               <div class="admin-order-actions">
@@ -3826,19 +3901,7 @@ function initAdminPage() {
                 >
                   ${escapeHtml(detailButtonLabel)}
                 </button>
-                ${
-                  canShip
-                    ? `
-                      <button
-                        class="admin-order-action-button admin-order-action-button--primary"
-                        type="button"
-                        data-admin-order-ship-id="${row.orderId}"
-                      >
-                        发货
-                      </button>
-                    `
-                    : ''
-                }
+                ${actionButtonHtml}
               </div>
             </td>
           </tr>
@@ -4633,6 +4696,7 @@ async function createAdminProductToApi(values, imageFile) {
     ordersBody.addEventListener("click", async (event) => {
       const detailButton = event.target.closest("[data-admin-order-detail-id]");
       const shipButton = event.target.closest("[data-admin-order-ship-id]");
+      const unshipButton = event.target.closest("[data-admin-order-unship-id]");
 
       if (detailButton) {
         const orderId = Number(detailButton.dataset.adminOrderDetailId);
@@ -4671,8 +4735,8 @@ async function createAdminProductToApi(values, imageFile) {
           shipButton.textContent = "发货中...";
 
           await shipAdminOrderToApi(orderId, "管理员后台发货");
-          activeAdminOrderDetailId = orderId;
           await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "发货成功");
         } catch (error) {
           console.error("后台发货失败：", error);
 
@@ -4682,7 +4746,42 @@ async function createAdminProductToApi(values, imageFile) {
             container.innerHTML = `<p class="order-detail__empty">发货失败：${escapeHtml(error.message)}</p>`;
           }
 
-          window.alert(`发货失败：${error.message}`);
+          setFeedback(orderFeedback, `发货失败：${error.message}`, true);
+        }
+
+        return;
+      }
+
+      if (unshipButton) {
+        const orderId = Number(unshipButton.dataset.adminOrderUnshipId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要取消这个已发货订单的发货状态吗？");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          unshipButton.disabled = true;
+          unshipButton.textContent = "取消中...";
+
+          await unshipAdminOrderToApi(orderId, "管理员后台取消发货");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "取消发货成功");
+        } catch (error) {
+          console.error("后台取消发货失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">取消发货失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `取消发货失败：${error.message}`, true);
         }
       }
     });

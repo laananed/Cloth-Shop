@@ -234,8 +234,13 @@ class AdminLoginRequest(BaseModel):
 
 
 class AdminShipOrderRequest(BaseModel):
-    order_id: int = Field(..., gt=0, description="鐠併垹宕烮D")
-    remark: str = Field("缁狅紕鎮婇崨妯烘倵閸欐澘褰傜拹?", description="閸欐垼鎻ｆ径鍥ㄦ暈")
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员后台发货", description="发货备注")
+
+
+class AdminUnshipOrderRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员后台取消发货", description="取消发货备注")
 
 
 @app.get("/")
@@ -2214,7 +2219,8 @@ def get_admin_order_detail(order_id: int, authorization: str | None = Header(Non
 @app.post("/admin/orders/ship")
 def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Header(None)):
     """
-    绠＄悊鍛樺彂璐с€?    """
+    管理员发货。
+    """
     try:
         admin_user = require_admin_user(authorization)
 
@@ -2235,7 +2241,7 @@ def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Hea
                     if not order_row:
                         raise HTTPException(
                             status_code=404,
-                            detail="鐠併垹宕熸稉宥呯摠閸?"
+                            detail="订单不存在"
                         )
 
                     current_status = str(order_row.get("status") or "").strip().upper()
@@ -2243,7 +2249,7 @@ def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Hea
                     if current_status != "PAID":
                         raise HTTPException(
                             status_code=400,
-                            detail="閸欘亝婀佸鍙夋暜娴犳﹢顤傜拋銏犲礋閹靛秷鍏橀崣鎴ｆ彛"
+                            detail="只有已支付订单才能发货"
                         )
 
                     cursor.execute(
@@ -2286,7 +2292,85 @@ def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Hea
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"查询后台订单详情失败：{str(e)}"
+            detail=f"后台发货失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/unship")
+def unship_admin_order(req: AdminUnshipOrderRequest, authorization: str | None = Header(None)):
+    """
+    管理员取消发货。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+        action_type = "ADMIN_UNSHIP_ORDER"
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, status
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "SHIPPED":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有已发货订单才能取消发货"
+                        )
+
+                    cursor.execute(
+                        "UPDATE order_main SET status = 'PAID' WHERE id = %s",
+                        (req.order_id,)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "取消发货成功",
+                    "admin_user_id": admin_user["id"],
+                    "action_type": action_type,
+                    "order_id": req.order_id,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"后台取消发货失败：{str(e)}"
         )
 
 

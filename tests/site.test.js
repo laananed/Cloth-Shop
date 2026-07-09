@@ -967,6 +967,30 @@ test('admin order detail and ship source wiring is present', () => {
   assert.ok(html.includes('操作'));
 });
 
+test('admin order unship source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(backend.includes('AdminUnshipOrderRequest'));
+  assert.ok(backend.includes('@app.post("/admin/orders/unship")'));
+  assert.ok(backend.includes('ADMIN_UNSHIP_ORDER'));
+  assert.ok(backend.includes("UPDATE order_main SET status = 'PAID'"));
+  assert.ok(backend.includes('取消发货成功'));
+
+  assert.ok(mainJs.includes('unshipAdminOrderToApi'));
+  assert.ok(mainJs.includes('renderAdminOrderStatusBadge'));
+  assert.ok(mainJs.includes('data-admin-order-unship-id'));
+  assert.ok(mainJs.includes('无法发货'));
+  assert.ok(mainJs.includes('取消发货'));
+  assert.ok(mainJs.includes('activeAdminOrderDetailId = null'));
+
+  assert.ok(styles.includes('.admin-status-badge'));
+  assert.ok(styles.includes('.admin-status-badge--shipped'));
+  assert.ok(styles.includes('.admin-status-badge--paid'));
+  assert.ok(styles.includes('.admin-status-badge--pending'));
+});
+
 test('admin order status labels include shipped and the orders table keeps the operation column', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const html = readFileSync('admin.html', 'utf8');

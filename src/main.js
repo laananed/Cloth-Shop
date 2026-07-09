@@ -2082,16 +2082,18 @@ function renderPurchaseModal() {
     return;
   }
 
-  const selectedAddress = getDbAddressById(activePurchaseAddressId) || getDefaultDbAddress();
-  const productState = getProductDisplayState(product);
-  const selectedSkuOnSale = isOnSale(selectedSku?.skuStatus || "ON_SALE");
-
-if (selectedAddress) {
-  activePurchaseAddressId = Number(selectedAddress.id);
-}
-
   const product = activePurchaseProduct;
   const selectedSku = getPurchaseSelectedSku(product);
+  const productState = product
+    ? getProductDisplayState(product)
+    : { key: "UNSELECTED", label: "请选择商品", message: "", priority: 99 };
+  const selectedSkuOnSale = isOnSale(selectedSku?.skuStatus || "ON_SALE");
+  const selectedAddress = getDbAddressById(activePurchaseAddressId) || getDefaultDbAddress();
+
+  if (selectedAddress) {
+    activePurchaseAddressId = Number(selectedAddress.id);
+  }
+
   const displayPrice = Number(selectedSku?.price ?? product?.price ?? 0);
   const availableStock = getSkuAvailableStock(selectedSku);
   const quantity = Math.min(
@@ -2148,7 +2150,7 @@ if (selectedAddress) {
     purchaseTotal.textContent = formatPrice(total);
   }
 
-    if (purchaseSkuOptions) {
+  if (purchaseSkuOptions) {
     const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
 
     if (!product || skuList.length <= 1) {
@@ -2219,7 +2221,7 @@ if (selectedAddress) {
 
 async function openPurchaseModal(product) {
   activePurchaseProduct = product;
-  activePurchaseSkuId = getSelectedSku(product)?.skuId || product.defaultSkuId || product.skuId || null;
+  activePurchaseSkuId = getSelectedSku(product)?.skuId || product?.defaultSkuId || product?.skuId || null;
   activePurchaseQuantity = 1;
   activePurchasePaymentMethod = 'alipay';
 
@@ -2233,10 +2235,17 @@ async function openPurchaseModal(product) {
   const defaultAddress = getDefaultDbAddress();
   activePurchaseAddressId = defaultAddress ? Number(defaultAddress.id) : CURRENT_ADDRESS_ID;
 
-  renderPurchaseModal();
-  purchaseModal?.classList.add('is-open');
-  purchaseModal?.setAttribute('aria-hidden', 'false');
-  document.body.classList.add('has-modal');
+  try {
+    renderPurchaseModal();
+    purchaseModal?.classList.add('is-open');
+    purchaseModal?.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('has-modal');
+  } catch (error) {
+    console.error("打开立即购买弹窗失败：", error);
+    setFeedback(purchaseFeedback, `打开立即购买弹窗失败：${error.message}`, true);
+    window.alert(`打开立即购买弹窗失败：${error.message}`);
+    throw error;
+  }
 }
 
 function closePurchaseModal() {
@@ -4340,7 +4349,9 @@ if (productGrid) {
           return;
         }
 
-        openPurchaseModal(product);
+        void openPurchaseModal(product).catch((error) => {
+          console.error("立即购买打开失败：", error);
+        });
         return;
     }
 

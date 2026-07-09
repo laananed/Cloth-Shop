@@ -146,6 +146,32 @@ test('purchase flow exposes modal hooks in the source and markup', () => {
   assert.ok(html.includes('data-purchase-payment-options'));
   assert.ok(mainJs.includes('data-purchase-launch'));
   assert.ok(mainJs.includes('data-purchase-total'));
+  assert.ok(mainJs.includes('openPurchaseModal'));
+  assert.ok(mainJs.includes('renderPurchaseModal'));
+  assert.ok(mainJs.includes('createDirectOrderFromApi'));
+  assert.ok(mainJs.includes('data-purchase-launch="buy"'));
+});
+
+test('purchase modal source keeps product selection before derived state', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderStart = mainJs.indexOf('function renderPurchaseModal() {');
+  const renderEnd = mainJs.indexOf('async function openPurchaseModal(product) {', renderStart);
+
+  assert.ok(renderStart >= 0);
+  assert.ok(renderEnd > renderStart);
+
+  const renderBody = mainJs.slice(renderStart, renderEnd);
+  const productIndex = renderBody.indexOf('const product = activePurchaseProduct;');
+  const selectedSkuIndex = renderBody.indexOf('const selectedSku = getPurchaseSelectedSku(product);');
+  const productStateIndex = renderBody.indexOf('getProductDisplayState(product)');
+  const selectedSkuOnSaleIndex = renderBody.indexOf('selectedSkuOnSale');
+
+  assert.ok(productIndex >= 0);
+  assert.ok(selectedSkuIndex >= 0);
+  assert.ok(productStateIndex >= 0);
+  assert.ok(selectedSkuOnSaleIndex >= 0);
+  assert.ok(productIndex < productStateIndex);
+  assert.ok(selectedSkuIndex < selectedSkuOnSaleIndex);
 });
 
 test('purchase button click handling does not require a sidebar action hook', () => {

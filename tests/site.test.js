@@ -279,7 +279,7 @@ test('scroll tools route sidebar and page scrolling through the right targets', 
   const initScrollToolsBody = sliceBetween(mainJs, 'function initScrollTools() {', 'function initAdminPage() {');
 
   assert.ok(mainJs.includes('function getActiveSidebarScrollContainer()'));
-  assert.ok(mainJs.includes('.sidebar__panel'));
+  assert.ok(mainJs.includes(".sidebar__content"));
   assert.ok(initScrollToolsBody.includes('sidebarPanel.scrollTo({'));
   assert.ok(mainJs.includes('window.scrollTo({'));
   assert.ok(mainJs.includes('[data-scroll-to]'));
@@ -843,11 +843,36 @@ test('saved product shelves render an empty state when there are no items', () =
 test('sidebar layout uses a fixed visual anchor across sections', () => {
   const css = readFileSync('src/styles.css', 'utf8');
 
-  assert.match(css, /--sidebar-layout-anchor-offset:\s*144px;/);
-  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?align-content:\s*start;/);
-  assert.match(css, /\.sidebar__layout\s*\{[\s\S]*?margin-top:\s*var\(--sidebar-layout-anchor-offset\);/);
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?overflow:\s*hidden;/);
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?display:\s*grid;/);
 });
 
+test('sidebar keeps the five nav buttons visible while content scrolls independently', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const css = readFileSync('src/styles.css', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(html.includes('data-sidebar-nav'));
+  assert.ok(html.includes('data-sidebar-target="account"'));
+  assert.ok(html.includes('data-sidebar-target="address"'));
+  assert.ok(html.includes('data-sidebar-target="orders"'));
+  assert.ok(html.includes('data-sidebar-target="favorites"'));
+  assert.ok(html.includes('data-sidebar-target="cart"'));
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?height:\s*100vh;/);
+  assert.match(css, /\.sidebar-nav\s*\{[\s\S]*?position:\s*sticky;/);
+  assert.match(css, /\.sidebar__content\s*\{[\s\S]*?overflow-y:\s*auto;/);
+  assert.match(mainJs, /function getActiveSidebarScrollContainer\(\) \{[\s\S]*?return sidebar\.querySelector\('\.sidebar__content'\);/);
+});
+
+test('sidebar content starts at the top beside the left rail', () => {
+  const css = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(css, /sidebar__panel[\s\S]*?display:\s*grid/);
+  assert.match(css, /sidebar__layout[\s\S]*?display:\s*contents/);
+  assert.match(css, /sidebar__content[\s\S]*?grid-column:\s*2/);
+  assert.match(css, /sidebar__content[\s\S]*?grid-row:\s*1\s*\/\s*span\s*2/);
+  assert.doesNotMatch(css, /sidebar__layout[\s\S]*?margin-top:\s*var\(--sidebar-layout-anchor-offset\)/);
+});
 test('admin storage seeds mock products and mock orders', () => {
   const storage = createMemoryStorage();
   const products = getStoredAdminProducts(storage);

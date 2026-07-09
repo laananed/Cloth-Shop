@@ -16,7 +16,6 @@
   --radius-lg: 24px;
   --radius-md: 18px;
   --radius-sm: 14px;
-  --sidebar-layout-anchor-offset: 144px;
 }
 
 * {
@@ -490,9 +489,10 @@ body.has-modal {
   top: 0;
   right: 0;
   width: min(100%, 920px);
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
   padding: 24px;
-  overflow-y: auto;
+  overflow: hidden;
   border-left: 1px solid rgba(255, 255, 255, 0.72);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 250, 255, 0.92)),
@@ -500,8 +500,15 @@ body.has-modal {
   box-shadow: -30px 0 80px rgba(33, 62, 89, 0.18);
   backdrop-filter: blur(20px);
   display: grid;
-  align-content: start;
+  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
+}
+
+.sidebar__header {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
 }
 
 .sidebar__subtitle {
@@ -511,17 +518,19 @@ body.has-modal {
 }
 
 .sidebar__layout {
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
-  gap: 18px;
-  margin-top: var(--sidebar-layout-anchor-offset);
-  min-height: 0;
+  display: contents;
 }
 
 .sidebar-nav {
+  grid-column: 1;
+  grid-row: 2;
   display: grid;
   align-content: start;
   gap: 10px;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100%;
 }
 
 .sidebar-nav__button {
@@ -543,8 +552,12 @@ body.has-modal {
 }
 
 .sidebar__content {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   min-width: 0;
-  display: grid;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
 }
 
 .sidebar-view {
@@ -3113,15 +3126,30 @@ button:disabled,
   .sidebar__panel {
     width: 100%;
     padding: 18px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .sidebar__header {
+    grid-column: 1;
+    grid-row: 1;
   }
 
   .sidebar__layout {
-    grid-template-columns: 1fr;
-    margin-top: 96px;
+    display: contents;
   }
 
   .sidebar-nav {
+    grid-column: 1;
+    grid-row: 2;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    position: static;
+    max-height: none;
+  }
+
+  .sidebar__content {
+    grid-column: 1;
+    grid-row: 3;
   }
 
   .page-shell {

@@ -2882,6 +2882,14 @@ function openSidebar(section = 'account') {
   document.body.classList.add('has-sidebar');
   renderSidebar();
 
+  const sidebarContent = getActiveSidebarScrollContainer();
+  if (sidebarContent) {
+    sidebarContent.scrollTo({
+      top: 0,
+      behavior: 'auto',
+    });
+  }
+
   if (activeSidebarSection === "orders") {
     refreshOrdersFromApi();
   }
@@ -2909,7 +2917,7 @@ function getActiveSidebarScrollContainer() {
     return null;
   }
 
-  return sidebar.querySelector('.sidebar__panel');
+  return sidebar.querySelector('.sidebar__content');
 }
 
 function getStoredProductById(productId) {

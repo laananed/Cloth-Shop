@@ -111,6 +111,12 @@ class CancelOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
     remark: str = Field("用户取消订单", description="取消原因")
 
+
+class RefundOrderRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="用户ID")
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("用户申请退款", description="退款原因")
+
 class ProductCreateRequest(BaseModel):
     category_name: str = Field(..., min_length=1, max_length=80, description="商品分类名称")
     product_name: str = Field(..., min_length=1, max_length=120, description="商品名称")
@@ -1730,6 +1736,134 @@ def cancel_order(req: CancelOrderRequest):
             status_code=500,
             detail=f"服务器错误：{str(e)}"
         )
+
+@app.post("/orders/refund")
+def refund_order(req: RefundOrderRequest):
+    """
+    退款订单。
+    调用已存在存储过程 sp_refund_paid_order。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "CALL sp_refund_paid_order(%s, %s, %s)",
+                        (req.user_id, req.order_id, req.remark)
+                    )
+
+                    while cursor.nextset():
+                        pass
+
+                conn.commit()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            order_id,
+                            order_no,
+                            user_id,
+                            email,
+                            status,
+                            total_amount,
+                            item_kind_count,
+                            total_quantity,
+                            item_total_amount,
+                            created_at,
+                            updated_at
+                        FROM v_order_summary
+                        WHERE order_id = %s
+                        """,
+                        (req.order_id,)
+                    )
+                    order_summary = cursor.fetchone()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            order_id,
+                            pay_method,
+                            pay_status,
+                            pay_amount,
+                            created_at
+                        FROM payment_record
+                        WHERE order_id = %s
+                        ORDER BY id DESC
+                        """,
+                        (req.order_id,)
+                    )
+                    payment_records = cursor.fetchall()
+
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            order_id,
+                            from_status,
+                            to_status,
+                            remark,
+                            created_at
+                        FROM order_status_log
+                        WHERE order_id = %s
+                        ORDER BY id
+                        """,
+                        (req.order_id,)
+                    )
+                    status_logs = cursor.fetchall()
+
+                order_no = order_summary["order_no"] if order_summary else None
+
+                inventory_logs = []
+                if order_no:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT
+                                id,
+                                sku_id,
+                                change_type,
+                                change_qty,
+                                ref_no,
+                                created_at
+                            FROM inventory_log
+                            WHERE ref_no = %s
+                            ORDER BY id
+                            """,
+                            (order_no,)
+                        )
+                        inventory_logs = cursor.fetchall()
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "订单退款成功",
+            "order_id": req.order_id,
+            "order_summary": jsonable_encoder(order_summary),
+            "payment_records": jsonable_encoder(payment_records),
+            "status_logs": jsonable_encoder(status_logs),
+            "inventory_logs": jsonable_encoder(inventory_logs)
+        }
+
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"订单退款失败：{error_message}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"服务器错误：{str(e)}"
+        )
+
 
 @app.get("/orders/user/{user_id}")
 def get_user_orders(user_id: int):

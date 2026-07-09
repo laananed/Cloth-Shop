@@ -655,6 +655,19 @@ test('admin product filtering source wiring is present', () => {
   assert.ok(mainJs.includes('productSummary.hidden = true'));
 });
 
+test('refund order backend wiring is present in source and sql', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const sql = readFileSync('06_add_refund_order.sql', 'utf8');
+
+  assert.ok(backend.includes('RefundOrderRequest'));
+  assert.ok(backend.includes('@app.post("/orders/refund")'));
+  assert.ok(backend.includes('sp_refund_paid_order'));
+  assert.ok(sql.includes('sp_refund_paid_order'));
+  assert.ok(sql.includes('REFUNDED'));
+  assert.ok(sql.includes('REFUND_RESTORE'));
+  assert.ok(sql.includes('product_sales_stat'));
+});
+
 test('front page exposes a visible admin entry point', () => {
   const html = readFileSync('index.html', 'utf8');
 

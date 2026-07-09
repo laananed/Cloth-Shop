@@ -1,7 +1,11 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Header
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import json
+import base64
+import hashlib
+import hmac
+import time
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from pymysql.err import MySQLError
@@ -36,6 +40,8 @@ PRODUCT_UPLOAD_DIR = UPLOAD_DIR / "products"
 PRODUCT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ADMIN_TOKEN_SECRET = b"frieren-cloth-shop-admin-token-v1"
+ADMIN_TOKEN_TTL_SECONDS = 8 * 60 * 60
 
 
 def build_product_image_filename(original_filename: str) -> str:
@@ -49,6 +55,91 @@ def build_product_image_filename(original_filename: str) -> str:
 
     import uuid
     return f"{uuid.uuid4().hex}{suffix}"
+
+
+def create_admin_token(admin_user_id: int) -> str:
+    expires_at = int(time.time()) + ADMIN_TOKEN_TTL_SECONDS
+    payload = f"{admin_user_id}:{expires_at}"
+    signature = hmac.new(ADMIN_TOKEN_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    token_text = f"{payload}:{signature}"
+    token_bytes = base64.urlsafe_b64encode(token_text.encode("utf-8"))
+    return token_bytes.decode("utf-8").rstrip("=")
+
+
+def verify_admin_token(token: str) -> int:
+    token_text = str(token or "").strip()
+
+    if not token_text:
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
+
+    padding = "=" * (-len(token_text) % 4)
+
+    try:
+      decoded = base64.urlsafe_b64decode(f"{token_text}{padding}".encode("utf-8")).decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
+
+    parts = decoded.split(":")
+
+    if len(parts) != 3:
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
+
+    admin_user_id_text, expires_at_text, signature = parts
+
+    try:
+        admin_user_id = int(admin_user_id_text)
+        expires_at = int(expires_at_text)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
+
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
+
+    payload = f"{admin_user_id}:{expires_at}"
+    expected_signature = hmac.new(ADMIN_TOKEN_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(expected_signature, signature):
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
+
+    return admin_user_id
+
+
+def require_admin_user(authorization: str | None):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="请先登录管理员账号")
+
+    auth_value = str(authorization).strip()
+
+    if not auth_value.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="请先登录管理员账号")
+
+    admin_user_id = verify_admin_token(auth_value.split(" ", 1)[1].strip())
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, email, is_admin, is_deleted
+                    FROM `user`
+                    WHERE id = %s
+                    """,
+                    (admin_user_id,)
+                )
+                admin_user = cursor.fetchone()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"校验管理员身份失败：{str(e)}"
+        )
+
+    if not admin_user:
+        raise HTTPException(status_code=403, detail="不是管理员账号")
+
+    if int(admin_user.get("is_deleted") or 0) != 0 or int(admin_user.get("is_admin") or 0) != 1:
+        raise HTTPException(status_code=403, detail="不是管理员账号")
+
+    return admin_user
 
 app.mount(
     "/uploads",
@@ -137,6 +228,11 @@ class AdminProductStatusUpdateRequest(BaseModel):
 class AdminProductDeleteRequest(BaseModel):
     product_id: int = Field(..., gt=0, description="要逻辑删除的商品 ID")
 
+class AdminLoginRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
 @app.get("/")
 def root():
     return {
@@ -208,6 +304,53 @@ def get_products():
         raise HTTPException(
             status_code=500,
             detail=f"查询商品列表失败：{str(e)}"
+        )
+
+
+@app.post("/admin/login")
+def admin_login(req: AdminLoginRequest):
+    """
+    管理员登录。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, email, is_admin
+                    FROM `user`
+                    WHERE email = %s
+                      AND password_hash = SHA2(%s, 256)
+                      AND is_deleted = 0
+                    """,
+                    (req.email, req.password)
+                )
+                admin_user = cursor.fetchone()
+
+        if not admin_user:
+            raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+        if int(admin_user.get("is_admin") or 0) != 1:
+            raise HTTPException(status_code=403, detail="不是管理员账号")
+
+        admin_user_id = int(admin_user["id"])
+        token = create_admin_token(admin_user_id)
+
+        return {
+            "success": True,
+            "message": "管理员登录成功",
+            "admin_user_id": admin_user_id,
+            "email": admin_user["email"],
+            "admin_token": token,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"管理员登录失败：{str(e)}"
         )
 
 
@@ -319,12 +462,15 @@ async def create_product(
     available_stock: int = Form(...),
     skus_json: str | None = Form(None),
     image: UploadFile | None = File(None),
+    authorization: str | None = Header(None),
 ):
     """
     后台新增商品。
     第一版：一个商品只创建一个 SKU。
     支持上传一张商品主图，图片保存到 uploads/products，路径写入 product.image_url。
     """
+    require_admin_user(authorization)
+
     category_name = category_name.strip()
     product_name = product_name.strip()
     sku_name = sku_name.strip() or "默认规格"
@@ -527,6 +673,52 @@ def query_user_addresses(conn, user_id: int):
             WHERE user_id = %s
               AND is_deleted = 0
             ORDER BY is_default DESC, id ASC
+            """,
+            (user_id,)
+        )
+        return cursor.fetchall()
+
+
+def query_cart_rows(conn, user_id: int):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                u.id AS user_id,
+                u.email,
+                c.id AS cart_id,
+                ci.id AS cart_item_id,
+                p.id AS product_id,
+                p.name AS product_name,
+                p.status AS product_status,
+                p.is_deleted AS product_is_deleted,
+                s.id AS sku_id,
+                s.sku_name,
+                s.status AS sku_status,
+                s.is_deleted AS sku_is_deleted,
+                s.price,
+                ci.quantity,
+                (ci.quantity * s.price) AS item_amount,
+                COALESCE(i.available_stock, 0) AS available_stock,
+                COALESCE(i.locked_stock, 0) AS locked_stock,
+                c.status AS cart_status,
+                ci.created_at,
+                ci.updated_at
+            FROM `user` u
+            JOIN cart c
+              ON u.id = c.user_id
+            JOIN cart_item ci
+              ON c.id = ci.cart_id
+            JOIN product_sku s
+              ON ci.sku_id = s.id
+            JOIN product p
+              ON s.product_id = p.id
+            LEFT JOIN inventory i
+              ON s.id = i.sku_id
+            WHERE u.id = %s
+              AND u.is_deleted = 0
+              AND c.status = 'ACTIVE'
+            ORDER BY ci.id
             """,
             (user_id,)
         )
@@ -801,30 +993,7 @@ def get_cart(user_id: int):
     """
     try:
         with get_db() as conn:
-            with conn.cursor() as cursor:
-                sql = """
-                    SELECT
-                        user_id,
-                        email,
-                        cart_id,
-                        cart_item_id,
-                        product_id,
-                        product_name,
-                        sku_id,
-                        sku_name,
-                        price,
-                        quantity,
-                        item_amount,
-                        available_stock,
-                        cart_status,
-                        created_at,
-                        updated_at
-                    FROM v_user_cart_detail
-                    WHERE user_id = %s
-                    ORDER BY cart_item_id
-                """
-                cursor.execute(sql, (user_id,))
-                rows = cursor.fetchall()
+            rows = query_cart_rows(conn, user_id)
 
         total_amount = sum(float(row["item_amount"]) for row in rows)
 
@@ -861,32 +1030,7 @@ def add_to_cart(req: CartAddRequest):
                 conn.commit()
 
                 # 加入成功后，再查询一次用户购物车，方便前端直接刷新页面
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            user_id,
-                            email,
-                            cart_id,
-                            cart_item_id,
-                            product_id,
-                            product_name,
-                            sku_id,
-                            sku_name,
-                            price,
-                            quantity,
-                            item_amount,
-                            available_stock,
-                            cart_status,
-                            created_at,
-                            updated_at
-                        FROM v_user_cart_detail
-                        WHERE user_id = %s
-                        ORDER BY cart_item_id
-                        """,
-                        (req.user_id,)
-                    )
-                    rows = cursor.fetchall()
+                rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
                 conn.rollback()
@@ -938,32 +1082,7 @@ def update_cart_quantity(req: CartUpdateQuantityRequest):
 
                 conn.commit()
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            user_id,
-                            email,
-                            cart_id,
-                            cart_item_id,
-                            product_id,
-                            product_name,
-                            sku_id,
-                            sku_name,
-                            price,
-                            quantity,
-                            item_amount,
-                            available_stock,
-                            cart_status,
-                            created_at,
-                            updated_at
-                        FROM v_user_cart_detail
-                        WHERE user_id = %s
-                        ORDER BY cart_item_id
-                        """,
-                        (req.user_id,)
-                    )
-                    rows = cursor.fetchall()
+                rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
                 conn.rollback()
@@ -1013,32 +1132,7 @@ def delete_cart_item(req: CartDeleteItemRequest):
 
                 conn.commit()
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            user_id,
-                            email,
-                            cart_id,
-                            cart_item_id,
-                            product_id,
-                            product_name,
-                            sku_id,
-                            sku_name,
-                            price,
-                            quantity,
-                            item_amount,
-                            available_stock,
-                            cart_status,
-                            created_at,
-                            updated_at
-                        FROM v_user_cart_detail
-                        WHERE user_id = %s
-                        ORDER BY cart_item_id
-                        """,
-                        (req.user_id,)
-                    )
-                    rows = cursor.fetchall()
+                rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
                 conn.rollback()
@@ -1910,12 +2004,14 @@ def get_user_orders(user_id: int):
         )
 
 @app.get("/admin/orders")
-def get_admin_orders():
+def get_admin_orders(authorization: str | None = Header(None)):
     """
     后台订单列表。
     第一版暂不做权限校验，直接查询全部订单汇总。
     """
     try:
+        require_admin_user(authorization)
+
         with get_db() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
@@ -1953,12 +2049,14 @@ def get_admin_orders():
 
 
 @app.get("/admin/stats")
-def get_admin_stats():
+def get_admin_stats(authorization: str | None = Header(None)):
     """
     后台销量统计。
     第一版暂不做权限校验，统计真实数据库订单、商品、销量排行。
     """
     try:
+        require_admin_user(authorization)
+
         with get_db() as conn:
             with conn.cursor() as cursor:
                 # 1. 订单与销售额汇总
@@ -2028,12 +2126,14 @@ def get_admin_stats():
         )
 
 @app.get("/admin/inventory")
-def get_admin_inventory():
+def get_admin_inventory(authorization: str | None = Header(None)):
     """
     后台库存列表。
     显示所有未逻辑删除的商品 SKU，包括上架和下架商品。
     """
     try:
+        require_admin_user(authorization)
+
         with get_db() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
@@ -2076,7 +2176,7 @@ def get_admin_inventory():
 
 
 @app.post("/admin/inventory/update-stock")
-def update_admin_stock(req: AdminStockUpdateRequest):
+def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None = Header(None)):
     """
     后台修改 SKU 可用库存。
     注意：这里修改的是 available_stock，不直接修改 locked_stock。
@@ -2193,11 +2293,13 @@ def update_admin_stock(req: AdminStockUpdateRequest):
 
 
 @app.post("/admin/products/update-status")
-def update_admin_product_status(req: AdminProductStatusUpdateRequest):
+def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorization: str | None = Header(None)):
     """
     后台修改商品上下架状态。
     第一版：商品和该商品下全部 SKU 状态保持一致。
     """
+    require_admin_user(authorization)
+
     new_status = req.status.strip().upper()
 
     if new_status not in {"ON_SALE", "OFF_SALE"}:
@@ -2307,12 +2409,14 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest):
 
 
 @app.post("/admin/products/delete")
-def delete_admin_product(req: AdminProductDeleteRequest):
+def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | None = Header(None)):
     """
     后台商品逻辑删除。
     不删除库中的记录，仅标记 product、product_sku 为已删除。
     """
     try:
+        require_admin_user(authorization)
+
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:

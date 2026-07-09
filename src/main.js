@@ -12,19 +12,13 @@ import {
   getStoredCart,
   getStoredCartSelections,
   getStoredFavorites,
-  getStoredMockOrders,
-  getStoredOrders,
   getStoredProfile,
-  renderAdminOrdersView,
   renderAdminProductsView,
   renderAdminStatsView,
-  renderOrderItems,
   renderSavedProductItems,
   saveStoredCart,
   saveStoredAdminProducts,
   saveStoredFavorites,
-  saveStoredMockOrders,
-  saveStoredOrders,
   saveStoredProfile,
   saveStoredAddressBook,
   saveStoredCartSelections,
@@ -91,6 +85,11 @@ const purchaseSkuOptions = document.querySelector('[data-purchase-sku-options]')
 const purchaseTotal = document.querySelector('[data-purchase-total]');
 const purchaseSubmit = document.querySelector('[data-purchase-submit]');
 const purchaseFeedback = document.querySelector('[data-purchase-feedback]');
+const purchaseEyebrow = document.querySelector('.purchase-modal__eyebrow');
+const purchaseAddressSection = purchaseAddressList?.closest('.purchase-modal__section') || null;
+const purchaseQuantitySection = purchaseQuantityValue?.closest('.purchase-modal__section') || null;
+const purchasePaymentSection = purchasePaymentOptions?.closest('.purchase-modal__section') || null;
+const purchaseTotalSection = purchaseTotal?.closest('.purchase-modal__total') || null;
 
 const sidebar = document.querySelector('[data-sidebar]');
 const menuOpenButton = document.querySelector('[data-menu-open]');
@@ -111,6 +110,15 @@ const ordersList = document.querySelector('[data-orders-list]');
 const accountEmail = document.querySelector('[data-account-email]');
 const accountDisplayName = document.querySelector('[data-account-display-name]');
 const isAdminPage = Boolean(document.querySelector('[data-admin-shell]'));
+const ADMIN_SESSION_STORAGE_KEY = 'cloth_shop_admin_session';
+const adminShell = document.querySelector('[data-admin-shell]');
+const adminLoginPanel = document.querySelector('[data-admin-login-panel]');
+const adminLoginForm = document.querySelector('[data-admin-login-form]');
+const adminLoginFeedback = document.querySelector('[data-admin-login-feedback]');
+const adminCurrentUser = document.querySelector('[data-admin-current-user]');
+const adminCurrentUserNodes = document.querySelectorAll('[data-admin-current-user]');
+const adminUserChipNodes = document.querySelectorAll('[data-admin-user-chip], [data-admin-current-user]');
+const adminLogoutButton = document.querySelector('[data-admin-logout]');
 
 const storage = window.localStorage;
 const pageRoot = document.documentElement;
@@ -120,6 +128,7 @@ let activePurchaseSkuId = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = CURRENT_ADDRESS_ID;
+let activePurchaseAction = 'buy';
 let activeCartAddressId = CURRENT_ADDRESS_ID;
 let activeCartPaymentMethod = 'alipay';
 let dbAddressList = [];
@@ -128,11 +137,278 @@ let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
 const refundingOrderIds = new Set();
 
+function getStoredAdminSession() {
+  try {
+    const raw = sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+
+    return {
+      adminToken: String(parsed.admin_token || parsed.adminToken || '').trim(),
+      email: String(parsed.email || '').trim(),
+      adminUserId: Number(parsed.admin_user_id || parsed.adminUserId || 0),
+    };
+  } catch (error) {
+    console.warn('读取管理员登录态失败：', error);
+    return null;
+  }
+}
+
+function saveStoredAdminSession(session) {
+  sessionStorage.setItem(
+    ADMIN_SESSION_STORAGE_KEY,
+    JSON.stringify({
+      admin_token: String(session?.adminToken || session?.admin_token || '').trim(),
+      email: String(session?.email || '').trim(),
+      admin_user_id: Number(session?.adminUserId || session?.admin_user_id || 0),
+      created_at: new Date().toISOString(),
+    }),
+  );
+}
+
+function clearStoredAdminSession() {
+  sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+}
+
+function getAdminIdentityLabel(session) {
+  if (!session?.adminToken) {
+    return '未登录';
+  }
+
+  const email = session.email || '管理员';
+  const id = session.adminUserId ? ` · ID ${session.adminUserId}` : '';
+
+  return `${email}${id}`;
+}
+
+function setAdminIdentityVisible(isLoggedIn, session) {
+  const label = isLoggedIn ? getAdminIdentityLabel(session) : '';
+
+  adminCurrentUserNodes.forEach((node) => {
+    node.textContent = label;
+    node.hidden = !isLoggedIn;
+    node.setAttribute('aria-hidden', String(!isLoggedIn));
+  });
+
+  adminUserChipNodes.forEach((node) => {
+    node.hidden = !isLoggedIn;
+    node.setAttribute('aria-hidden', String(!isLoggedIn));
+  });
+}
+
+function clearAdminDashboardData(targets = {}) {
+  const {
+    ordersBody,
+    statsSummary,
+    statsRows,
+    productList,
+    productSummary,
+  } = targets;
+  const emptyMessage = '请先登录管理员账号';
+
+  if (ordersBody) {
+    ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyMessage)}</div></td></tr>`;
+  }
+
+  if (statsSummary) {
+    statsSummary.innerHTML = '';
+  }
+
+  if (statsRows) {
+    statsRows.innerHTML = '';
+  }
+
+  if (productList) {
+    productList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyMessage)}</div>`;
+  }
+
+  if (productSummary) {
+    productSummary.hidden = true;
+    productSummary.innerHTML = '';
+  }
+}
+
+function getAdminAuthHeaders() {
+  const session = getStoredAdminSession();
+  const headers = {};
+
+  if (session?.adminToken) {
+    headers.Authorization = `Bearer ${session.adminToken}`;
+  }
+
+  return headers;
+}
+
+async function adminFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const authHeaders = getAdminAuthHeaders();
+
+  if (authHeaders.Authorization) {
+    headers.set('Authorization', authHeaders.Authorization);
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  let result = null;
+
+  try {
+    result = await response.json();
+  } catch (error) {
+    result = null;
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    const authError = new Error(result?.detail || '管理员登录已失效，请重新登录');
+    authError.status = response.status;
+    authError.detail = result?.detail || authError.message;
+    throw authError;
+  }
+
+  if (!response.ok) {
+    const error = new Error(result?.detail || `请求失败：${response.status}`);
+    error.status = response.status;
+    error.detail = result?.detail || error.message;
+    throw error;
+  }
+
+  return result;
+}
+
+function renderAdminAuthState(message = '') {
+  const session = getStoredAdminSession();
+  const isLoggedIn = Boolean(session?.adminToken);
+
+  document.body.classList.toggle('is-admin-authenticated', isLoggedIn);
+
+  if (adminShell) {
+    adminShell.hidden = !isLoggedIn;
+    adminShell.setAttribute('aria-hidden', String(!isLoggedIn));
+  }
+
+  if (adminLoginPanel) {
+    adminLoginPanel.hidden = isLoggedIn;
+    adminLoginPanel.setAttribute('aria-hidden', String(isLoggedIn));
+  }
+
+  setAdminIdentityVisible(isLoggedIn, session);
+
+  if (adminLogoutButton) {
+    adminLogoutButton.hidden = !isLoggedIn;
+    adminLogoutButton.disabled = !isLoggedIn;
+    adminLogoutButton.setAttribute('aria-hidden', String(!isLoggedIn));
+  }
+
+  if (adminLoginFeedback) {
+    adminLoginFeedback.textContent = String(message || '');
+    adminLoginFeedback.classList.toggle('is-error', Boolean(message));
+  }
+
+  if (adminLoginForm) {
+    const emailInput = adminLoginForm.querySelector('[data-admin-login-email]');
+    const passwordInput = adminLoginForm.querySelector('[data-admin-login-password]');
+
+    if (emailInput) {
+      emailInput.value = isLoggedIn ? session.email || '' : emailInput.value;
+    }
+
+    if (passwordInput && !isLoggedIn) {
+      passwordInput.value = '';
+    }
+  }
+}
+
+async function loginAdmin(email, password) {
+  const response = await fetch(`${API_BASE_URL}/admin/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      password,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    const error = new Error(result.detail || '管理员登录失败');
+    error.status = response.status;
+    throw error;
+  }
+
+  saveStoredAdminSession(result);
+
+  return result;
+}
+
+function requireAdminSessionBeforeLoading() {
+  const session = getStoredAdminSession();
+
+  renderAdminAuthState(session?.adminToken ? '' : '请先登录管理员账号');
+
+  return Boolean(session?.adminToken);
+}
+
 const purchasePaymentMethods = [
   { value: 'alipay', label: '支付宝' },
   { value: 'wechat', label: '微信支付' },
   { value: 'cod', label: '先用后付' },
 ];
+
+const purchaseActionConfigs = {
+  buy: {
+    key: 'buy',
+    label: '立即购买',
+    eyebrow: '立即购买',
+    submitLabel: (totalText) => `立即支付 ${totalText}`,
+    pendingLabel: '正在创建待支付订单...',
+    showAddress: true,
+    showQuantity: true,
+    showPayment: true,
+    showTotal: true,
+    openSidebar: 'orders',
+  },
+  cart: {
+    key: 'cart',
+    label: '加入购物车',
+    eyebrow: '加入购物车',
+    submitLabel: () => '加入购物车',
+    pendingLabel: '正在加入购物车...',
+    showAddress: true,
+    showQuantity: true,
+    showPayment: false,
+    showTotal: true,
+    openSidebar: 'cart',
+  },
+  favorites: {
+    key: 'favorites',
+    label: '加入收藏夹',
+    eyebrow: '加入收藏夹',
+    submitLabel: () => '加入收藏',
+    pendingLabel: '正在加入收藏...',
+    showAddress: false,
+    showQuantity: false,
+    showPayment: false,
+    showTotal: false,
+    openSidebar: 'favorites',
+  },
+};
+
+function getPurchaseActionConfig(action = 'buy') {
+  return purchaseActionConfigs[action] || purchaseActionConfigs.buy;
+}
 
 function getPaymentMethodLabel(method) {
   return purchasePaymentMethods.find((item) => item.value === method)?.label || '支付宝';
@@ -405,8 +681,27 @@ function getDefaultSku(product) {
   return null;
 }
 
+function getProductSkuList(product) {
+  return Array.isArray(product?.skuList) ? product.skuList : [];
+}
+
+function hasExplicitSelectedSku(product) {
+  return selectedSkuByProductId.has(product?.id);
+}
+
+function getExplicitSelectedSku(product) {
+  const skuList = getProductSkuList(product);
+  const selectedSkuId = selectedSkuByProductId.get(product?.id);
+
+  return skuList.find((sku) => Number(sku.skuId) === Number(selectedSkuId)) || null;
+}
+
+function getActionSelectedSku(product) {
+  return getExplicitSelectedSku(product);
+}
+
 function getSelectedSku(product) {
-  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+  const skuList = getProductSkuList(product);
   const selectedSkuId = selectedSkuByProductId.get(product?.id);
 
   return (
@@ -445,33 +740,92 @@ function findOverStockCartItems(cartItems) {
   });
 }
 
+function getCartItemInvalidReason(item) {
+  const productIsDeleted = Number(item?.productIsDeleted ?? item?.product_is_deleted ?? 0);
+  const productStatus = normalizeStatus(item?.productStatus || item?.product_status || item?.status || "");
+  const skuIsDeleted = Number(item?.skuIsDeleted ?? item?.sku_is_deleted ?? 0);
+  const skuStatus = normalizeStatus(item?.skuStatus || item?.sku_status || item?.skuStatusLabel || "");
+  const availableStock = Math.max(0, Number(item?.availableStock ?? item?.available_stock ?? 0));
+  const quantity = Math.max(1, Number(item?.quantity || 1));
+
+  if (productIsDeleted === 1) {
+    return "商品已删除，不能结算";
+  }
+
+  if (productStatus && productStatus !== "ON_SALE") {
+    return "商品已下架，不能结算";
+  }
+
+  if (skuIsDeleted === 1) {
+    return "当前规格已删除，不能结算";
+  }
+
+  if (skuStatus && skuStatus !== "ON_SALE") {
+    return "当前规格已下架，不能结算";
+  }
+
+  if (availableStock <= 0) {
+    return "当前规格已售罄，不能结算";
+  }
+
+  if (quantity > availableStock) {
+    return `库存不足，仅剩 ${availableStock} 件，不能结算`;
+  }
+
+  return "";
+}
+
+function isCartItemCheckoutable(item) {
+  return !getCartItemInvalidReason(item);
+}
+
+function getInvalidCartItems(cartItems) {
+  return (Array.isArray(cartItems) ? cartItems : []).filter((item) => !isCartItemCheckoutable(item));
+}
+
 function setSelectedSku(productId, skuId) {
   selectedSkuByProductId.set(productId, Number(skuId));
   updateView();
 }
 
 function getPurchaseSelectedSku(product) {
-  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+  const skuList = getProductSkuList(product);
+  return skuList.find((sku) => Number(sku.skuId) === Number(activePurchaseSkuId)) || null;
+}
 
-  return (
-    skuList.find((sku) => Number(sku.skuId) === Number(activePurchaseSkuId)) ||
-    getSelectedSku(product)
-  );
+function getAvailableProductSkuList(product) {
+  return getProductSkuList(product).filter((sku) => {
+    return isOnSale(sku.skuStatus || sku.status || "ON_SALE") && Number(sku.availableStock || 0) > 0;
+  });
+}
+
+function canOpenProductActionModal(product) {
+  const productState = getProductDisplayState(product);
+  return productState.key === "AVAILABLE" && getAvailableProductSkuList(product).length > 0;
 }
 
 function renderProductSkuOptions(product) {
-  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
-
-  if (skuList.length <= 1) {
-    return '';
-  }
-
-  const selectedSku = getSelectedSku(product);
+  const skuList = getProductSkuList(product);
+  const renderableSkuList = skuList.length
+    ? skuList
+    : product?.skuId
+      ? [{
+          skuId: product.skuId,
+          skuName: '默认规格',
+          price: product.price,
+          availableStock: product.availableStock || 0,
+          skuStatus: product.skuStatus || product.status || 'ON_SALE',
+        }]
+      : [];
+  const selectedSku = getExplicitSelectedSku(product);
   const productOnSale = isOnSale(product.productStatus || product.status);
+  const selectionHint = !selectedSku
+    ? '<p class="product-card__sku-hint">请选择规格后再加入购物车、收藏或购买。</p>'
+    : '';
 
   return `
     <div class="product-card__sku-options" aria-label="选择商品规格">
-      ${skuList
+      ${renderableSkuList
         .map((sku) => {
           const skuDisabled =
             !productOnSale ||
@@ -490,6 +844,7 @@ function renderProductSkuOptions(product) {
           `;
         })
         .join('')}
+      ${selectionHint}
     </div>
   `;
 }
@@ -692,6 +1047,20 @@ function convertApiCartRows(apiRows) {
       products.find((product) => product.productId === Number(row.product_id)) ||
       products.find((product) => product.skuId === Number(row.sku_id)) ||
       products[0];
+    const productStatus = normalizeStatus(row.product_status || "ON_SALE");
+    const productIsDeleted = Number(row.product_is_deleted || 0);
+    const skuStatus = normalizeStatus(row.sku_status || "ON_SALE");
+    const skuIsDeleted = Number(row.sku_is_deleted || 0);
+    const availableStock = Number(row.available_stock || 0);
+    const quantity = Number(row.quantity || 1);
+    const invalidReason = getCartItemInvalidReason({
+      productStatus,
+      productIsDeleted,
+      skuStatus,
+      skuIsDeleted,
+      availableStock,
+      quantity,
+    });
 
     return {
       id: `sku-${row.sku_id}`,
@@ -706,8 +1075,19 @@ function convertApiCartRows(apiRows) {
       image: matchedProduct?.image || staticProducts[0]?.image || "",
 
       price: Number(row.price || 0),
-      quantity: Number(row.quantity || 1),
-      availableStock: Number(row.available_stock || 0),
+      quantity,
+      availableStock,
+      lockedStock: Number(row.locked_stock || 0),
+      productStatus,
+      productIsDeleted,
+      skuStatus,
+      skuIsDeleted,
+      productIsValid: productIsDeleted !== 1 && productStatus === "ON_SALE",
+      skuIsValid: skuIsDeleted !== 1 && skuStatus === "ON_SALE",
+      invalidReason,
+      checkoutable: !invalidReason,
+      cartStatus: String(row.cart_status || "").trim(),
+      itemAmount: Number(row.item_amount || 0),
     };
   });
 }
@@ -740,34 +1120,43 @@ async function syncCartFromApi(userId = CURRENT_USER_ID) {
 }
 
 
-async function addCartToApi(product) {
-  const selectedSku = getSelectedSku(product);
-  const skuId = selectedSku?.skuId || product.defaultSkuId || product.skuId;
-  const availableStock = getSkuAvailableStock(selectedSku);
-  const productState = getProductDisplayState(product);
+async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {
+  const actualSelectedSku = selectedSku || null;
+  const skuId = actualSelectedSku?.skuId;
 
-  if (productState.key !== "AVAILABLE") {
-    setFeedback(sidebarCartFeedback, `加入购物车失败：${productState.message}`, true);
-    openSidebar("cart");
-    return;
+  if (!skuId) {
+    setFeedback(sidebarCartFeedback, "请先选择商品规格，再加入购物车。", true);
+    if (openSidebarAfterSuccess) {
+      openSidebar("cart");
+    }
+    return null;
   }
 
-  if (!isOnSale(selectedSku?.skuStatus || "ON_SALE")) {
+  const nextQuantity = Math.max(1, Number(quantity) || 1);
+  const availableStock = getSkuAvailableStock(actualSelectedSku);
+
+  if (!isOnSale(actualSelectedSku.skuStatus || actualSelectedSku.status || "ON_SALE")) {
     setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格已下架。", true);
-    openSidebar("cart");
-    return;
+    if (openSidebarAfterSuccess) {
+      openSidebar("cart");
+    }
+    return null;
   }
 
   if (availableStock <= 0) {
     setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格库存不足。", true);
-    openSidebar("cart");
-    return;
+    if (openSidebarAfterSuccess) {
+      openSidebar("cart");
+    }
+    return null;
   }
 
-  if (!skuId) {
-    setFeedback(sidebarCartFeedback, "加入购物车失败：当前商品没有 SKU。", true);
-    openSidebar("cart");
-    return;
+  if (nextQuantity > availableStock) {
+    setFeedback(sidebarCartFeedback, `加入购物车失败：当前规格最多只能购买 ${availableStock} 件。`, true);
+    if (openSidebarAfterSuccess) {
+      openSidebar("cart");
+    }
+    return null;
   }
 
   try {
@@ -779,7 +1168,7 @@ async function addCartToApi(product) {
       body: JSON.stringify({
         user_id: CURRENT_USER_ID,
         sku_id: skuId,
-        quantity: 1,
+        quantity: nextQuantity,
       }),
     });
 
@@ -793,11 +1182,14 @@ async function addCartToApi(product) {
 
     setFeedback(
       sidebarCartFeedback,
-      `已加入数据库购物车，规格：${selectedSku?.skuName || '默认规格'}。`
+      `已加入数据库购物车，规格：${actualSelectedSku?.skuName || '默认规格'}。`
     );
-    openSidebar("cart");
+    if (openSidebarAfterSuccess) {
+      openSidebar("cart");
+    }
 
     console.log("加入购物车成功：", result);
+    return result;
   } catch (error) {
     console.error("加入购物车失败：", error);
 
@@ -806,7 +1198,10 @@ async function addCartToApi(product) {
       `加入购物车失败：${error.message}`,
       true
     );
-    openSidebar("cart");
+    if (openSidebarAfterSuccess) {
+      openSidebar("cart");
+    }
+    return null;
   }
 }
 
@@ -924,15 +1319,13 @@ function promptPaymentMethod(defaultMethod = "alipay") {
 }
 
 async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {
-  const selectedSku =
-    Array.isArray(product?.skuList)
-      ? product.skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || getSelectedSku(product)
-      : getSelectedSku(product);
+  const skuList = getProductSkuList(product);
+  const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;
 
-  const skuId = selectedSku?.skuId || product.defaultSkuId || product.skuId;
+  const skuId = selectedSku?.skuId;
 
   if (!skuId) {
-    throw new Error("当前商品没有 SKU，不能直接下单。");
+    throw new Error("请先选择商品规格。");
   }
 
   const response = await fetch(`${API_BASE_URL}/orders/direct`, {
@@ -1022,13 +1415,15 @@ async function submitCartCheckout() {
   const selectedIds = getStoredCartSelections(storage);
   const selectedCartItemIds = getSelectedCartItemIds(cart, selectedIds);
   const selectedCartItems = cart.filter((item) => selectedIds.includes(item.id));
-  const overStockItems = findOverStockCartItems(selectedCartItems);
+  const invalidCartItems = getInvalidCartItems(selectedCartItems);
 
-  if (overStockItems.length) {
-    const itemNames = overStockItems.map((item) => item.name).join("、");
+  if (invalidCartItems.length) {
+    const itemNames = invalidCartItems
+      .map((item) => `${item.name}（${getCartItemInvalidReason(item)}）`)
+      .join("、");
     setFeedback(
       sidebarCartFeedback,
-      `提交订单失败：以下商品库存不足或购买数量超过库存：${itemNames}`,
+      `提交订单失败：以下商品暂不能结算：${itemNames}`,
       true
     );
     return;
@@ -1822,20 +2217,20 @@ function renderProducts() {
       const isPurchaseUi = product.purchaseLayout === 'buy';
       const isTopSeller = salesRankMap.get(product.id) === 1;
       const salesRankLabel = isTopSeller ? '网站销量第一' : formatSalesRank(salesRankMap.get(product.id));
-      const selectedSku = getSelectedSku(product);
+      const selectedSku = getExplicitSelectedSku(product);
       const displayPrice = Number(selectedSku?.price ?? product.price ?? 0);
-      const selectedSkuName = selectedSku?.skuName || '默认规格';
-      const selectedStock = Number(selectedSku?.availableStock ?? product.availableStock ?? 0);
+      const selectedSkuName = selectedSku?.skuName || '请选择规格';
+      const selectedStock = selectedSku ? Number(selectedSku?.availableStock ?? product.availableStock ?? 0) : null;
       const productState = getProductDisplayState(product);
       const productStateClass = `product-card--${productState.key.toLowerCase()}`;
       const isProductAvailable = productState.key === "AVAILABLE";
-      const isSelectedSkuPurchasable =
-        isProductAvailable &&
-        isOnSale(selectedSku?.skuStatus || "ON_SALE") &&
-        selectedStock > 0;
-      const stockLabel = productState.key === "OFF_SALE"
-        ? "已下架"
-        : getStockLabel(selectedStock);
+      const hasSelectedSku = Boolean(selectedSku);
+      const canOpenActionModal = canOpenProductActionModal(product);
+      const stockLabel = !hasSelectedSku
+        ? "请选择规格后查看库存"
+        : productState.key === "OFF_SALE"
+          ? "已下架"
+          : getStockLabel(selectedStock);
 
       return `
         <article class="product-card ${productStateClass} ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
@@ -1889,7 +2284,7 @@ function renderProducts() {
                   `
             }
             ${renderProductSkuOptions(product)}
-            <p class="product-card__sku-current ${isSelectedSkuPurchasable ? '' : 'is-sold-out'}">
+            <p class="product-card__sku-current ${hasSelectedSku && Number(selectedStock || 0) <= 0 ? 'is-sold-out' : ''}">
               当前规格：${escapeHtml(selectedSkuName)}，${escapeHtml(stockLabel)}
             </p>
             <div class="product-card__footer">
@@ -1897,7 +2292,13 @@ function renderProducts() {
                 ${
                   isPurchaseUi
                     ? `
-                <button type="button" class="ghost-button ghost-button--icon ghost-button--icon-outline" aria-label="加入收藏夹" data-sidebar-launch="favorites">
+                <button
+                  type="button"
+                  class="ghost-button ghost-button--icon ghost-button--icon-outline"
+                  aria-label="加入收藏夹"
+                  data-sidebar-launch="favorites"
+                  ${canOpenActionModal ? '' : 'disabled'}
+                >
                   <span class="ghost-button__icon">${getFavoriteIcon()}</span>
                 </button>
                 <button
@@ -1905,7 +2306,7 @@ function renderProducts() {
                   class="ghost-button ghost-button--icon ghost-button--icon-outline"
                   aria-label="加入购物车"
                   data-sidebar-launch="cart"
-                  ${isSelectedSkuPurchasable ? '' : 'disabled'}
+                  ${canOpenActionModal ? '' : 'disabled'}
                 >
                   <span class="ghost-button__icon">${getCartIcon()}</span>
                 </button>
@@ -1913,9 +2314,9 @@ function renderProducts() {
                   type="button"
                   class="ghost-button ghost-button--solid ghost-button--buy"
                   data-purchase-launch="buy"
-                  ${isSelectedSkuPurchasable ? '' : 'disabled'}
+                  ${canOpenActionModal ? '' : 'disabled'}
                 >
-                  ${isSelectedSkuPurchasable ? '立即购买' : productState.label}
+                  ${canOpenActionModal ? '立即购买' : productState.label}
                 </button>
                     `
                     : `
@@ -2082,18 +2483,12 @@ function renderPurchaseModal() {
     return;
   }
 
+  const actionConfig = getPurchaseActionConfig(activePurchaseAction);
   const product = activePurchaseProduct;
   const selectedSku = getPurchaseSelectedSku(product);
   const productState = product
     ? getProductDisplayState(product)
     : { key: "UNSELECTED", label: "请选择商品", message: "", priority: 99 };
-  const selectedSkuOnSale = isOnSale(selectedSku?.skuStatus || "ON_SALE");
-  const selectedAddress = getDbAddressById(activePurchaseAddressId) || getDefaultDbAddress();
-
-  if (selectedAddress) {
-    activePurchaseAddressId = Number(selectedAddress.id);
-  }
-
   const displayPrice = Number(selectedSku?.price ?? product?.price ?? 0);
   const availableStock = getSkuAvailableStock(selectedSku);
   const quantity = Math.min(
@@ -2101,15 +2496,25 @@ function renderPurchaseModal() {
     availableStock > 0 ? availableStock : 1
   );
   const total = product ? displayPrice * quantity : 0;
+  const selectedSkuOnSale = Boolean(selectedSku) && isOnSale(selectedSku.skuStatus || selectedSku.status || "ON_SALE");
   const canSubmitPurchase =
     Boolean(product) &&
     productState.key === "AVAILABLE" &&
+    Boolean(selectedSku) &&
     selectedSkuOnSale &&
     availableStock > 0 &&
     quantity <= availableStock;
 
+  if (purchaseModal) {
+    purchaseModal.dataset.action = actionConfig.key;
+  }
+
+  if (purchaseEyebrow) {
+    purchaseEyebrow.textContent = actionConfig.eyebrow;
+  }
+
   if (purchaseTitle) {
-    purchaseTitle.textContent = product?.name || '立即购买';
+    purchaseTitle.textContent = product?.name || actionConfig.label;
   }
 
   if (purchaseCategory) {
@@ -2121,11 +2526,13 @@ function renderPurchaseModal() {
   }
 
   if (purchasePrice) {
-    purchasePrice.textContent = formatPrice(displayPrice);
+    purchasePrice.textContent = selectedSku ? formatPrice(displayPrice) : '请选择规格';
   }
 
   if (purchaseSales) {
-    purchaseSales.textContent = product ? `销量 ${product.sales}` : '请选择商品';
+    purchaseSales.textContent = selectedSku
+      ? `销量 ${product.sales}`
+      : '请选择商品规格后继续';
   }
 
   if (purchaseImage) {
@@ -2139,11 +2546,11 @@ function renderPurchaseModal() {
     purchaseQuantityValue.textContent = String(quantity);
   }
   if (purchaseQuantityDecrease) {
-    purchaseQuantityDecrease.disabled = quantity <= 1;
+    purchaseQuantityDecrease.disabled = !actionConfig.showQuantity || quantity <= 1 || !selectedSku;
   }
 
   if (purchaseQuantityIncrease) {
-    purchaseQuantityIncrease.disabled = availableStock <= 0 || quantity >= availableStock;
+    purchaseQuantityIncrease.disabled = !actionConfig.showQuantity || availableStock <= 0 || quantity >= availableStock || !selectedSku;
   }
 
   if (purchaseTotal) {
@@ -2151,10 +2558,10 @@ function renderPurchaseModal() {
   }
 
   if (purchaseSkuOptions) {
-    const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+    const skuList = getProductSkuList(product);
 
-    if (!product || skuList.length <= 1) {
-      purchaseSkuOptions.innerHTML = '<p class="purchase-empty">默认规格</p>';
+    if (!product || !skuList.length) {
+      purchaseSkuOptions.innerHTML = '<p class="purchase-empty">暂无可选规格</p>';
     } else {
       purchaseSkuOptions.innerHTML = skuList
         .map((sku) => {
@@ -2179,14 +2586,32 @@ function renderPurchaseModal() {
     }
   }
 
-  if (purchaseAddressList) {
-    purchaseAddressList.innerHTML = renderDbAddressButtons(
-      activePurchaseAddressId,
-      "data-purchase-address-id"
-    );
+  if (purchaseAddressSection) {
+    purchaseAddressSection.hidden = !actionConfig.showAddress;
   }
 
-  if (purchasePaymentOptions) {
+  if (purchaseQuantitySection) {
+    purchaseQuantitySection.hidden = !actionConfig.showQuantity;
+  }
+
+  if (purchasePaymentSection) {
+    purchasePaymentSection.hidden = !actionConfig.showPayment;
+  }
+
+  if (purchaseTotalSection) {
+    purchaseTotalSection.hidden = !actionConfig.showTotal;
+  }
+
+  if (purchaseAddressList && actionConfig.showAddress) {
+    purchaseAddressList.innerHTML = dbAddressList.length
+      ? renderDbAddressButtons(
+          activePurchaseAddressId,
+          "data-purchase-address-id"
+        )
+      : '<p class="purchase-empty">暂无数据库收货地址，请先在数据库 user_address 表中添加地址。</p>';
+  }
+
+  if (purchasePaymentOptions && actionConfig.showPayment) {
     purchasePaymentOptions.innerHTML = purchasePaymentMethods
       .map(
         (method) => `
@@ -2206,34 +2631,41 @@ function renderPurchaseModal() {
     purchaseSubmit.disabled = !canSubmitPurchase;
     purchaseSubmit.textContent = product
       ? canSubmitPurchase
-        ? `提交订单 ${formatPrice(total)}`
-        : productState.key === "OFF_SALE"
-          ? "商品已下架"
-          : "当前规格库存不足"
+        ? actionConfig.submitLabel(formatPrice(total))
+        : !selectedSku
+          ? '请选择商品规格'
+          : productState.key === "OFF_SALE"
+            ? "商品已下架"
+            : "当前规格库存不足"
       : '请选择商品';
   }
 
   if (purchaseFeedback) {
-    purchaseFeedback.textContent = '演示模式：使用数据库测试用户 2 和地址 3。';
+    purchaseFeedback.textContent = actionConfig.showAddress
+      ? '请选择商品规格和地址后继续。'
+      : '请选择商品规格后继续。';
     purchaseFeedback.dataset.state = 'success';
   }
 }
 
-async function openPurchaseModal(product) {
+async function openPurchaseModal(product, action = 'buy') {
   activePurchaseProduct = product;
-  activePurchaseSkuId = getSelectedSku(product)?.skuId || product?.defaultSkuId || product?.skuId || null;
+  activePurchaseAction = getPurchaseActionConfig(action).key;
+  activePurchaseSkuId = null;
   activePurchaseQuantity = 1;
   activePurchasePaymentMethod = 'alipay';
 
-  try {
-    await loadAddressesFromApi(CURRENT_USER_ID);
-  } catch (error) {
-    console.error("加载数据库地址失败：", error);
-    setFeedback(purchaseFeedback, `加载数据库地址失败：${error.message}`, true);
-  }
+  if (getPurchaseActionConfig(activePurchaseAction).showAddress) {
+    try {
+      await loadAddressesFromApi(CURRENT_USER_ID);
+    } catch (error) {
+      console.error("加载数据库地址失败：", error);
+      setFeedback(purchaseFeedback, `加载数据库地址失败：${error.message}`, true);
+    }
 
-  const defaultAddress = getDefaultDbAddress();
-  activePurchaseAddressId = defaultAddress ? Number(defaultAddress.id) : CURRENT_ADDRESS_ID;
+    const defaultAddress = getDefaultDbAddress();
+    activePurchaseAddressId = defaultAddress ? Number(defaultAddress.id) : CURRENT_ADDRESS_ID;
+  }
 
   try {
     renderPurchaseModal();
@@ -2256,6 +2688,7 @@ function closePurchaseModal() {
   purchaseModal.classList.remove('is-open');
   purchaseModal.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('has-modal');
+  activePurchaseAction = 'buy';
 }
 
 function setPurchaseQuantity(nextQuantity) {
@@ -2301,6 +2734,7 @@ async function submitPurchaseOrder() {
     return;
   }
 
+  const actionConfig = getPurchaseActionConfig(activePurchaseAction);
   const selectedSku = getPurchaseSelectedSku(activePurchaseProduct);
   const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
   const total = Number(selectedSku?.price ?? activePurchaseProduct.price ?? 0) * quantity;
@@ -2308,73 +2742,113 @@ async function submitPurchaseOrder() {
   const productState = getProductDisplayState(activePurchaseProduct);
 
   if (productState.key !== "AVAILABLE") {
-    setFeedback(purchaseFeedback, `提交订单失败：${productState.message}`, true);
+    setFeedback(purchaseFeedback, `${actionConfig.label}失败：${productState.message}`, true);
     return;
   }
 
-  if (!isOnSale(selectedSku?.skuStatus || "ON_SALE")) {
-    setFeedback(purchaseFeedback, "提交订单失败：当前规格已下架。", true);
+  if (!selectedSku) {
+    setFeedback(purchaseFeedback, "请先选择商品规格。", true);
+    return;
+  }
+
+  if (!isOnSale(selectedSku?.skuStatus || selectedSku?.status || "ON_SALE")) {
+    setFeedback(purchaseFeedback, `${actionConfig.label}失败：当前规格已下架。`, true);
     return;
   }
 
   if (availableStock <= 0) {
-    setFeedback(purchaseFeedback, "提交订单失败：当前规格库存不足。", true);
+    setFeedback(purchaseFeedback, `${actionConfig.label}失败：当前规格库存不足。`, true);
     return;
   }
 
   if (quantity > availableStock) {
-    setFeedback(purchaseFeedback, `提交订单失败：当前规格最多只能购买 ${availableStock} 件。`, true);
+    setFeedback(purchaseFeedback, `${actionConfig.label}失败：当前规格最多只能购买 ${availableStock} 件。`, true);
     return;
   }
 
   try {
     if (purchaseSubmit) {
       purchaseSubmit.disabled = true;
-      purchaseSubmit.textContent = "正在提交订单...";
+      purchaseSubmit.textContent = actionConfig.pendingLabel;
     }
 
-    setFeedback(purchaseFeedback, "正在创建待支付订单，请稍候...");
+    if (actionConfig.key === 'buy') {
+      setFeedback(purchaseFeedback, "正在创建待支付订单，请稍候...");
 
-    const orderResult = await createDirectOrderFromApi(
-      activePurchaseProduct,
-      quantity,
-      selectedSku?.skuId || activePurchaseSkuId
-    );
-
-    const orderNo = orderResult.order_no || "未知订单号";
-
-    setFeedback(
-      purchaseFeedback,
-      `订单已提交，订单号：${orderNo}，金额：${formatPrice(total)}，当前状态：待支付。`
-    );
-
-    const payResult = await payOrderWithPasswordPrompt(
-      orderResult.order_id,
-      activePurchasePaymentMethod,
-      purchaseFeedback
-    );
-
-    if (payResult.paid) {
-      setFeedback(
-        purchaseFeedback,
-        `支付成功！订单号：${orderNo}，金额：${formatPrice(total)}。`
+      const orderResult = await createDirectOrderFromApi(
+        activePurchaseProduct,
+        quantity,
+        selectedSku?.skuId
       );
 
-      await loadProductsFromApi();
-    }
+      const orderNo = orderResult.order_no || "未知订单号";
 
-    setTimeout(() => {
+      setFeedback(
+        purchaseFeedback,
+        `订单已提交，订单号：${orderNo}，金额：${formatPrice(total)}，当前状态：待支付。`
+      );
+
+      const payResult = await payOrderWithPasswordPrompt(
+        orderResult.order_id,
+        activePurchasePaymentMethod,
+        purchaseFeedback
+      );
+
+      if (payResult.paid) {
+        setFeedback(
+          purchaseFeedback,
+          `支付成功！订单号：${orderNo}，金额：${formatPrice(total)}。`
+        );
+
+        await loadProductsFromApi();
+      }
+
+      setTimeout(() => {
+        closePurchaseModal();
+        openSidebar(actionConfig.openSidebar);
+        refreshOrdersFromApi();
+      }, 800);
+    } else if (actionConfig.key === 'cart') {
+      setFeedback(purchaseFeedback, "正在加入购物车，请稍候...");
+
+      const result = await addCartToApi(activePurchaseProduct, selectedSku, quantity, { openSidebarAfterSuccess: false });
+
+      if (!result) {
+        throw new Error("加入购物车失败");
+      }
+
+      setFeedback(
+        purchaseFeedback,
+        `已加入数据库购物车，规格：${selectedSku?.skuName || '默认规格'}。`
+      );
+
       closePurchaseModal();
-      openSidebar("orders");
-      refreshOrdersFromApi();
-    }, 800);
+      openSidebar(actionConfig.openSidebar);
+    } else if (actionConfig.key === 'favorites') {
+      setFeedback(purchaseFeedback, "正在加入收藏，请稍候...");
+
+      const result = upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false });
+
+      if (!result) {
+        throw new Error("加入收藏失败");
+      }
+
+      setFeedback(purchaseFeedback, "已加入收藏夹。");
+
+      closePurchaseModal();
+      openSidebar(actionConfig.openSidebar);
+    }
   } catch (error) {
     console.error("提交订单或支付失败：", error);
-    setFeedback(purchaseFeedback, `提交订单或支付失败：${error.message}`, true);
+    setFeedback(purchaseFeedback, `${actionConfig.label}失败：${error.message}`, true);
   } finally {
     if (purchaseSubmit) {
       purchaseSubmit.disabled = false;
-      purchaseSubmit.textContent = `提交订单 ${formatPrice(total)}`;
+      purchaseSubmit.textContent = selectedSku
+        ? actionConfig.key === 'buy'
+          ? actionConfig.submitLabel(formatPrice(total))
+          : actionConfig.submitLabel()
+        : '请选择商品规格';
     }
   }
 }
@@ -2408,23 +2882,48 @@ function closeSidebar() {
   document.body.classList.remove('has-sidebar');
 }
 
+function getActiveSidebarScrollContainer() {
+  if (!sidebar || !sidebar.classList.contains('is-open')) {
+    return null;
+  }
+
+  return sidebar.querySelector('.sidebar__panel');
+}
+
 function getStoredProductById(productId) {
   return products.find((product) => product.id === productId) || null;
 }
 
-function upsertFavorite(product) {
-  const favorites = getStoredFavorites(storage);
+function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {
+  const actualSelectedSku = selectedSku || null;
 
-  if (favorites.some((item) => item.id === product.id)) {
+  if (!actualSelectedSku?.skuId) {
+    setFeedback(sidebarFavoritesFeedback, "请先选择商品规格，再加入收藏。", true);
+    if (openSidebarAfterSuccess) {
+      openSidebar("favorites");
+    }
+    return getStoredFavorites(storage);
+  }
+
+  const favorites = getStoredFavorites(storage);
+  const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;
+
+  if (favorites.some((item) => item.id === favoriteId)) {
+    if (openSidebarAfterSuccess) {
+      openSidebar("favorites");
+    }
     return favorites;
   }
 
   const nextFavorites = [
     ...favorites,
     {
-      id: product.id,
-      name: product.name,
-      price: product.price,
+      id: favoriteId,
+      productId: product.id,
+      skuId: actualSelectedSku.skuId,
+      skuName: actualSelectedSku.skuName || '默认规格',
+      name: `${product.name} / ${actualSelectedSku.skuName || "默认规格"}`,
+      price: actualSelectedSku.price,
       badge: product.badge,
       category: product.category,
       image: product.image,
@@ -2432,6 +2931,9 @@ function upsertFavorite(product) {
   ];
 
   saveStoredFavorites(storage, nextFavorites);
+  if (openSidebarAfterSuccess) {
+    openSidebar("favorites");
+  }
   return nextFavorites;
 }
 
@@ -2504,6 +3006,14 @@ function isCartItemSelected(selectedIds, itemId) {
 
 function toggleCartSelection(itemId) {
   const selectedIds = getStoredCartSelections(storage);
+  const cart = getStoredCart(storage);
+  const item = cart.find((cartItem) => cartItem.id === itemId);
+
+  if (item && !isCartItemCheckoutable(item)) {
+    setFeedback(sidebarCartFeedback, `该商品暂不能结算：${getCartItemInvalidReason(item)}`, true);
+    return selectedIds;
+  }
+
   const nextSelectedIds = selectedIds.includes(itemId)
     ? selectedIds.filter((id) => id !== itemId)
     : [...selectedIds, itemId];
@@ -2681,16 +3191,19 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
       const subtotal = getCartItemTotal(item);
       const isSelected = isCartItemSelected(selectedIds, item.id);
       const availableStock = Math.max(0, Number(item.availableStock || 0));
-      const canIncrease = availableStock > 0 && quantity < availableStock;
+      const invalidReason = getCartItemInvalidReason(item);
+      const isInvalid = Boolean(invalidReason);
+      const canIncrease = !isInvalid && availableStock > 0 && quantity < availableStock;
 
       return `
-        <article class="cart-item ${isSelected ? 'is-selected' : ''}" data-cart-item-id="${item.id}">
+        <article class="cart-item ${isSelected ? 'is-selected' : ''} ${isInvalid ? 'cart-item--invalid' : ''}" data-cart-item-id="${item.id}">
           <button
             class="cart-item__select"
             type="button"
             data-cart-select-id="${item.id}"
-            aria-label="${isSelected ? '取消选择' : '选择商品'}"
+            aria-label="${isInvalid ? invalidReason : (isSelected ? '取消选择' : '选择商品')}"
             aria-pressed="${isSelected ? 'true' : 'false'}"
+            ${isInvalid ? 'disabled' : ''}
           >
             <span class="cart-item__select-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -2708,6 +3221,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                 <p class="cart-item__meta">${item.category || '商品'}</p>
               </div>
               <div class="cart-item__right-actions">
+                <span class="cart-item__status-badge ${isInvalid ? 'cart-item__status-badge--invalid' : 'cart-item__status-badge--valid'}">${isInvalid ? '无效商品' : '可结算'}</span>
                 <strong class="cart-item__subtotal">${formatCartMoney(subtotal)}</strong>
                 <button
                   class="cart-item__delete"
@@ -2741,6 +3255,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                 </div>
               </div>
             </div>
+            ${isInvalid ? `<p class="cart-item__warning">${escapeHtml(invalidReason)}</p>` : ''}
           </div>
         </article>
       `;
@@ -2755,6 +3270,7 @@ function renderCartSummary(cart, selectedIds) {
 
   const cartItems = Array.isArray(cart) ? cart : [];
   const safeSelectedIds = Array.isArray(selectedIds) ? selectedIds : [];
+  const invalidItems = getInvalidCartItems(cartItems);
   const selectedTotals = getCartTotals(cartItems, safeSelectedIds);
   const allTotals = getCartTotals(cartItems, null);
   const paymentLabel = getPaymentMethodLabel(activeCartPaymentMethod);
@@ -2768,6 +3284,7 @@ function renderCartSummary(cart, selectedIds) {
         <span>购物车共 ${allTotals.totalQuantity} 件，已选 ${selectedTotals.totalQuantity} 件</span>
         <strong>${formatCartMoney(selectedTotals.totalAmount)}</strong>
       </div>
+      ${invalidItems.length ? `<p class="cart-summary__warning">购物车中有 ${invalidItems.length} 件无效商品，请先处理后再结算。</p>` : ''}
 
      <div class="cart-summary__address">
         <span>收货地址</span>
@@ -2849,29 +3366,6 @@ function renderSidebar() {
 
   renderSidebarDbAddressList();
 
-  // const orderView = renderOrderItems(getStoredOrders(storage));
-  // if (ordersList) {
-  //   if (orderView.emptyState) {
-  //     ordersList.innerHTML = `<p class="orders-empty">${orderView.emptyState}</p>`;
-  //   } else {
-  //     ordersList.innerHTML = orderView.items
-  //       .map(
-  //         (order) => `
-  //           <article class="order-card">
-  //             <div class="order-card__header">
-  //               <strong>${order.orderNo}</strong>
-  //               <span>${order.status}</span>
-  //             </div>
-  //             <p>${order.items.join(' 路 ')}</p>
-  //             <p>合计：${formatPrice(order.totalPrice)}</p>
-  //             <p>${order.createdAt}</p>
-  //           </article>
-  //         `,
-  //       )
-  //       .join('');
-  //   }
-  // }
-
   if (ordersList) {
     ordersList.innerHTML = `<p class="orders-empty">正在加载数据库订单...</p>`;
   }
@@ -2879,8 +3373,16 @@ function renderSidebar() {
   renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
-  renderCartShelf(cartList, cart, '暂无购物车', selectedIds);
-  renderCartSummary(cart, selectedIds);
+  const invalidItems = getInvalidCartItems(cart);
+  const invalidItemIds = new Set(invalidItems.map((item) => item.id));
+  const validSelectedIds = selectedIds.filter((id) => !invalidItemIds.has(id) && cart.some((item) => item.id === id));
+
+  if (validSelectedIds.length !== selectedIds.length) {
+    saveStoredCartSelections(storage, validSelectedIds);
+  }
+
+  renderCartShelf(cartList, cart, '暂无购物车', validSelectedIds);
+  renderCartSummary(cart, validSelectedIds);
 }
 
 function updateHeroParallax() {
@@ -2980,8 +3482,17 @@ function initScrollTools() {
     }
 
     const target = button.dataset.scrollTo;
+    const sidebarPanel = getActiveSidebarScrollContainer();
 
     if (target === "top") {
+      if (sidebarPanel) {
+        sidebarPanel.scrollTo({
+          top: 0,
+          behavior: "smooth",
+        });
+        return;
+      }
+
       const homeTop = !isAdminPage && heroSection
         ? heroSection.offsetTop
         : 0;
@@ -2994,6 +3505,14 @@ function initScrollTools() {
     }
 
     if (target === "bottom") {
+      if (sidebarPanel) {
+        sidebarPanel.scrollTo({
+          top: sidebarPanel.scrollHeight,
+          behavior: "smooth",
+        });
+        return;
+      }
+
       window.scrollTo({
         top: document.documentElement.scrollHeight,
         behavior: "smooth",
@@ -3016,17 +3535,25 @@ function initAdminPage() {
   const statsRows = shell.querySelector('[data-admin-stats-rows]');
   const productList = shell.querySelector('[data-admin-products-list]');
   const productSummary = shell.querySelector('[data-admin-product-summary]');
+  const adminProductSearchInput = shell.querySelector('[data-admin-product-search]');
+  const adminProductSearchClear = shell.querySelector('[data-admin-product-search-clear]');
   const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
   const productForm = shell.querySelector('[data-admin-product-form]');
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
   const imageSelect = shell.querySelector('[data-admin-image-select]');
+  const dashboardTargets = {
+    ordersBody,
+    statsSummary,
+    statsRows,
+    productList,
+    productSummary,
+  };
   let activePanel = 'orders';
   let products = [];
   let orders = [];
   let summary = null;
   let productRows = [];
-  let renderedOrders = null;
   let renderedStats = null;
   let renderedProducts = null;
   const adminProductFilters = [
@@ -3036,9 +3563,41 @@ function initAdminPage() {
     { value: 'OFF_SALE', label: '已下架' },
   ];
   let activeAdminProductFilter = 'ALL';
+  let activeAdminProductSearchKeyword = "";
+
+  function resetAdminDashboardState() {
+    products = [];
+    orders = [];
+    summary = null;
+    productRows = [];
+    renderedStats = null;
+    renderedProducts = null;
+    clearAdminDashboardData(dashboardTargets);
+  }
 
   function getAdminProductFilterLabel(filterValue) {
     return adminProductFilters.find((item) => item.value === filterValue)?.label || '全部';
+  }
+
+  function getAdminProductSearchText(row) {
+    return [
+      row?.product_name,
+      row?.productName,
+      row?.name,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function matchesAdminProductSearch(row) {
+    const keyword = String(activeAdminProductSearchKeyword || "").trim().toLowerCase();
+
+    if (!keyword) {
+      return true;
+    }
+
+    return getAdminProductSearchText(row).includes(keyword);
   }
 
   function getAdminProductSaleState(row) {
@@ -3076,11 +3635,14 @@ function initAdminPage() {
   function getFilteredAdminProductRows(rows) {
     const allRows = Array.isArray(rows) ? rows : [];
 
-    if (activeAdminProductFilter === 'ALL') {
-      return allRows;
-    }
+    return allRows.filter((row) => {
+      const matchStatus =
+        activeAdminProductFilter === 'ALL' ||
+        getAdminProductSaleState(row).key === activeAdminProductFilter;
+      const matchSearch = matchesAdminProductSearch(row);
 
-    return allRows.filter((row) => getAdminProductSaleState(row).key === activeAdminProductFilter);
+      return matchStatus && matchSearch;
+    });
   }
 
   function renderAdminProductFilterBar(counts) {
@@ -3107,39 +3669,94 @@ function initAdminPage() {
       .join('');
   }
 
-  function convertApiOrdersToAdminRows(apiRows) {
-  return apiRows.map((row) => ({
-    orderNo: row.order_no || `订单 ${row.order_id}`,
-    customerName: row.email || `用户 ${row.user_id}`,
-    itemsLabel: `${Number(row.item_kind_count || 0)} 类 / ${Number(row.total_quantity || 0)} 件`,
-    amountLabel: formatPrice(row.total_amount),
-    status: formatOrderStatus(row.status),
-    createdAt: renderOrderDetailValue(row.created_at),
-  }));
-}
-  async function refreshAdminOrdersFromApi() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/admin/orders`);
-    const result = await response.json();
+  function updateAdminProductSearchClearState() {
+    if (adminProductSearchClear) {
+      adminProductSearchClear.hidden = !String(activeAdminProductSearchKeyword || "").trim();
+    }
+  }
 
-    if (!response.ok || !result.success || !Array.isArray(result.data)) {
-      throw new Error(result.detail || "加载后台订单失败");
+  function normalizeAdminOrderRow(row) {
+    const orderId = Number(row?.order_id || 0);
+    const itemKindCount = Number(row?.item_kind_count || 0);
+    const totalQuantity = Number(row?.total_quantity || 0);
+    const totalAmount = Number(row?.total_amount || 0);
+    const status = normalizeStatus(row?.status || "UNKNOWN");
+    const productSummary = String(row?.product_summary || "").trim();
+
+    return {
+      orderId,
+      orderNo: row?.order_no || (orderId ? `订单 ${orderId}` : "订单"),
+      userId: Number(row?.user_id || 0),
+      email: row?.email || "",
+      status,
+      statusLabel: formatOrderStatus(status),
+      totalAmount,
+      itemKindCount,
+      totalQuantity,
+      productSummary: productSummary || `${itemKindCount} 类商品 / ${totalQuantity} 件`,
+      createdAt: renderOrderDetailValue(row?.created_at),
+      updatedAt: renderOrderDetailValue(row?.updated_at),
+    };
+  }
+
+  async function loadAdminOrdersFromApi() {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders`);
+
+    if (!result.success || !Array.isArray(result.data)) {
+      throw new Error(result.detail || "加载数据库订单失败");
     }
 
-    const rows = convertApiOrdersToAdminRows(result.data);
-
-    renderedOrders = {
-      emptyState: rows.length ? "" : "暂无数据库订单",
-      rows,
-    };
-
-    renderOrders();
-
-    console.log("后台订单已切换为数据库订单：", result);
-  } catch (error) {
-    console.error("后台订单加载失败：", error);
+    return result.data.map(normalizeAdminOrderRow);
   }
-}
+
+  function renderAdminOrders(orderList, emptyText = "暂无数据库订单") {
+    if (!ordersBody) {
+      return;
+    }
+
+    const rows = Array.isArray(orderList) ? orderList : [];
+
+    if (!rows.length) {
+      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyText)}</div></td></tr>`;
+      return;
+    }
+
+    ordersBody.innerHTML = rows
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.orderNo)}</td>
+            <td>${escapeHtml(row.email || `用户 ${row.userId || ""}`)}</td>
+            <td>${escapeHtml(row.productSummary || `${row.itemKindCount} 类商品 / ${row.totalQuantity} 件`)}</td>
+            <td>${escapeHtml(formatPrice(row.totalAmount))}</td>
+            <td>${escapeHtml(row.statusLabel || formatOrderStatus(row.status))}</td>
+            <td>${escapeHtml(row.createdAt)}</td>
+          </tr>
+        `,
+      )
+      .join("");
+  }
+
+  async function refreshAdminOrdersFromApi() {
+    try {
+      orders = await loadAdminOrdersFromApi();
+      renderAdminOrders(orders);
+
+      console.log("后台订单已切换为数据库订单：", orders);
+    } catch (error) {
+      console.error("后台订单加载失败：", error);
+
+      if (error.status === 401 || error.status === 403) {
+        clearStoredAdminSession();
+        resetAdminDashboardState();
+        renderAdminAuthState(error.detail || error.message);
+        return;
+      }
+
+      orders = [];
+      renderAdminOrders([], `加载数据库订单失败：${error.message}`);
+    }
+  }
 
 function convertApiStatsToRenderedStats(result) {
   const summary = result.summary || {};
@@ -3189,10 +3806,9 @@ function convertApiStatsToRenderedStats(result) {
 
 async function refreshAdminStatsFromApi() {
   try {
-    const response = await fetch(`${API_BASE_URL}/admin/stats`);
-    const result = await response.json();
+    const result = await adminFetch(`${API_BASE_URL}/admin/stats`);
 
-    if (!response.ok || !result.success) {
+    if (!result.success) {
       throw new Error(result.detail || "加载后台销量统计失败");
     }
 
@@ -3202,6 +3818,12 @@ async function refreshAdminStatsFromApi() {
     console.log("后台销量统计已切换为数据库数据：", result);
   } catch (error) {
     console.error("后台销量统计加载失败：", error);
+
+    if (error.status === 401 || error.status === 403) {
+      clearStoredAdminSession();
+      resetAdminDashboardState();
+      renderAdminAuthState(error.detail || error.message);
+    }
   }
 }
 
@@ -3300,10 +3922,9 @@ function renderAdminInventoryProductsView(adminProducts) {
 }
 
 async function loadAdminProductsFromApi() {
-  const response = await fetch(`${API_BASE_URL}/admin/inventory`);
-  const result = await response.json();
+  const result = await adminFetch(`${API_BASE_URL}/admin/inventory`);
 
-  if (!response.ok || !result.success || !Array.isArray(result.data)) {
+  if (!result.success || !Array.isArray(result.data)) {
     throw new Error(result.detail || "加载后台商品库存列表失败");
   }
 
@@ -3315,10 +3936,9 @@ async function loadAdminProductsFromApi() {
     products = getStoredAdminProducts(storage);
   }
 
-  orders = getStoredMockOrders(storage);
+  orders = [];
   summary = getSalesSummary(products, orders);
   productRows = getProductSalesRows(products, orders);
-  renderedOrders = renderAdminOrdersView(products, orders);
   renderedStats = renderAdminStatsView(summary, productRows);
   renderedProducts = renderAdminProductsView(products);
 }
@@ -3334,6 +3954,13 @@ async function refreshAdminProductsFromApi() {
   } catch (error) {
     console.error("后台商品列表加载失败：", error);
 
+    if (error.status === 401 || error.status === 403) {
+      clearStoredAdminSession();
+      resetAdminDashboardState();
+      renderAdminAuthState(error.detail || error.message);
+      return;
+    }
+
     products = getStoredAdminProducts(storage);
     renderedProducts = renderAdminProductsView(products);
     renderProducts();
@@ -3347,29 +3974,7 @@ async function refreshAdminProductsFromApi() {
 }
 
   function renderOrders() {
-    if (!ordersBody) {
-      return;
-    }
-
-    if (!renderedOrders || renderedOrders.emptyState) {
-      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(renderedOrders.emptyState)}</div></td></tr>`;
-      return;
-    }
-
-    ordersBody.innerHTML = renderedOrders.rows
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.orderNo)}</td>
-            <td>${escapeHtml(row.customerName)}</td>
-            <td>${escapeHtml(row.itemsLabel)}</td>
-            <td>${escapeHtml(row.amountLabel)}</td>
-            <td>${escapeHtml(row.status)}</td>
-            <td>${escapeHtml(row.createdAt)}</td>
-          </tr>
-        `,
-      )
-      .join('');
+    renderAdminOrders(orders);
   }
 
   function renderStats() {
@@ -3417,6 +4022,7 @@ async function refreshAdminProductsFromApi() {
 
   function renderProducts() {
     const allRows = Array.isArray(renderedProducts?.rows) ? renderedProducts.rows : [];
+    const searchKeyword = String(activeAdminProductSearchKeyword || "").trim();
     const counts = {
       all: allRows.length,
       ON_SALE: 0,
@@ -3437,6 +4043,8 @@ async function refreshAdminProductsFromApi() {
       productSummary.innerHTML = "";
     }
 
+    updateAdminProductSearchClearState();
+
     if (!productList) {
       return;
     }
@@ -3449,7 +4057,12 @@ async function refreshAdminProductsFromApi() {
     const filteredRows = getFilteredAdminProductRows(allRows);
 
     if (!filteredRows.length) {
-      productList.innerHTML = `<div class="admin-empty">当前筛选“${escapeHtml(getAdminProductFilterLabel(activeAdminProductFilter))}”暂无商品</div>`;
+      const filterLabel = getAdminProductFilterLabel(activeAdminProductFilter);
+      const emptyText = searchKeyword
+        ? `没有找到名称包含“${searchKeyword}”且符合“${filterLabel}”条件的商品`
+        : `当前筛选“${filterLabel}”暂无商品`;
+
+      productList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyText)}</div>`;
       return;
     }
 
@@ -3580,7 +4193,7 @@ function getAdminImageSrc(imageUrl) {
 }
 
 async function updateAdminSkuStockToApi(skuId, availableStock) {
-  const response = await fetch(`${API_BASE_URL}/admin/inventory/update-stock`, {
+  const result = await adminFetch(`${API_BASE_URL}/admin/inventory/update-stock`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -3591,9 +4204,7 @@ async function updateAdminSkuStockToApi(skuId, availableStock) {
     }),
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "修改库存失败");
   }
 
@@ -3601,7 +4212,7 @@ async function updateAdminSkuStockToApi(skuId, availableStock) {
 }
 
 async function updateAdminProductStatusToApi(productId, status) {
-  const response = await fetch(`${API_BASE_URL}/admin/products/update-status`, {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/update-status`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -3612,9 +4223,7 @@ async function updateAdminProductStatusToApi(productId, status) {
     }),
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "修改商品状态失败");
   }
 
@@ -3622,7 +4231,7 @@ async function updateAdminProductStatusToApi(productId, status) {
 }
 
 async function deleteAdminProductToApi(productId) {
-  const response = await fetch(`${API_BASE_URL}/admin/products/delete`, {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/delete`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -3632,9 +4241,7 @@ async function deleteAdminProductToApi(productId) {
     }),
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "删除商品失败");
   }
 
@@ -3717,14 +4324,12 @@ async function createAdminProductToApi(values, imageFile) {
     formData.append("image", imageFile);
   }
 
-  const response = await fetch(`${API_BASE_URL}/products`, {
+  const result = await adminFetch(`${API_BASE_URL}/products`, {
     method: "POST",
     body: formData,
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "新增商品失败");
   }
 
@@ -3743,28 +4348,68 @@ async function createAdminProductToApi(values, imageFile) {
     });
   }
 
-  refreshAdminData();
-  refreshAdminProductsFromApi();
-  populateImageSelect();
+  async function loadAdminDashboardFromApi() {
+    populateImageSelect();
+    await refreshAdminOrdersFromApi();
+    await refreshAdminStatsFromApi();
+    await refreshAdminProductsFromApi();
+  }
+
+  if (adminLoginForm) {
+    adminLoginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const values = Object.fromEntries(new FormData(adminLoginForm).entries());
+      const email = String(values.email || '').trim();
+      const password = String(values.password || '').trim();
+
+      if (!email || !password) {
+        renderAdminAuthState('请先填写管理员邮箱和密码。');
+        return;
+      }
+
+      try {
+        renderAdminAuthState('正在登录管理员账号...');
+        await loginAdmin(email, password);
+        activePanel = 'orders';
+        syncPanels();
+        renderAdminAuthState('');
+        await loadAdminDashboardFromApi();
+      } catch (error) {
+        console.error('管理员登录失败：', error);
+        clearStoredAdminSession();
+        resetAdminDashboardState();
+        renderAdminAuthState(error.detail || error.message || '管理员登录失败');
+      }
+    });
+  }
+
+  if (adminLogoutButton) {
+    adminLogoutButton.addEventListener('click', () => {
+      clearStoredAdminSession();
+      resetAdminDashboardState();
+      renderAdminAuthState('已退出管理员账号，请重新登录。');
+    });
+  }
 
   navButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    activePanel = button.dataset.adminNavTarget || 'orders';
-    syncPanels();
+    button.addEventListener('click', () => {
+      activePanel = button.dataset.adminNavTarget || 'orders';
+      syncPanels();
 
-    if (activePanel === "orders") {
-      refreshAdminOrdersFromApi();
-    }
+      if (activePanel === "orders") {
+        refreshAdminOrdersFromApi();
+      }
 
-    if (activePanel === "stats") {
-      refreshAdminStatsFromApi();
-    }
+      if (activePanel === "stats") {
+        refreshAdminStatsFromApi();
+      }
 
-    if (activePanel === "products") {
-      refreshAdminProductsFromApi();
-    }
+      if (activePanel === "products") {
+        refreshAdminProductsFromApi();
+      }
+    });
   });
-});
 
   if (productForm) {
     productForm.addEventListener('submit', async (event) => {
@@ -3840,6 +4485,28 @@ async function createAdminProductToApi(values, imageFile) {
 
       activeAdminProductFilter = nextFilter;
       renderProducts();
+    });
+  }
+
+  if (adminProductSearchInput) {
+    adminProductSearchInput.addEventListener("input", (event) => {
+      activeAdminProductSearchKeyword = String(event.target.value || "");
+      updateAdminProductSearchClearState();
+      renderProducts();
+    });
+  }
+
+  if (adminProductSearchClear) {
+    adminProductSearchClear.addEventListener("click", () => {
+      activeAdminProductSearchKeyword = "";
+
+      if (adminProductSearchInput) {
+        adminProductSearchInput.value = "";
+      }
+
+      updateAdminProductSearchClearState();
+      renderProducts();
+      adminProductSearchInput?.focus();
     });
   }
 
@@ -3943,11 +4610,16 @@ async function createAdminProductToApi(values, imageFile) {
 }
 
   syncPanels();
-  renderOrders();
-  renderStats();
-  renderProducts();
-  refreshAdminOrdersFromApi();
-  refreshAdminStatsFromApi();
+  renderAdminAuthState();
+
+  const hasAdminSession = requireAdminSessionBeforeLoading();
+
+  if (hasAdminSession) {
+    loadAdminDashboardFromApi();
+  } else {
+    resetAdminDashboardState();
+    renderAdminAuthState('请先登录管理员账号');
+  }
 }
 
 initScrollTools();
@@ -4342,23 +5014,16 @@ if (productGrid) {
     }
 
     if (actionButton.dataset.purchaseLaunch === 'buy') {
-      const productState = getProductDisplayState(product);
-
-      if (productState.key !== "AVAILABLE") {
-          window.alert(productState.message || "该商品暂不可购买");
-          return;
-        }
-
-        void openPurchaseModal(product).catch((error) => {
-          console.error("立即购买打开失败：", error);
-        });
-        return;
+      void openPurchaseModal(product, 'buy').catch((error) => {
+        console.error("立即购买打开失败：", error);
+      });
+      return;
     }
 
     if (actionButton.dataset.sidebarLaunch === 'favorites') {
-      upsertFavorite(product);
-      setFeedback(sidebarFavoritesFeedback, '已加入收藏夹。');
-      openSidebar('favorites');
+      void openPurchaseModal(product, 'favorites').catch((error) => {
+        console.error("打开收藏弹窗失败：", error);
+      });
       return;
     }
 
@@ -4369,13 +5034,17 @@ if (productGrid) {
     // }
 
     if (actionButton.dataset.sidebarLaunch === 'cart') {
-        addCartToApi(product);
-        return;
-      }
+      void openPurchaseModal(product, 'cart').catch((error) => {
+        console.error("打开购物车弹窗失败：", error);
+      });
+      return;
+    }
 
-      if (actionButton.dataset.sidebarLaunch === 'checkout') {
-        createDirectOrderFromApi(product);
-      }
+    if (actionButton.dataset.sidebarLaunch === 'checkout') {
+      void openPurchaseModal(product, 'buy').catch((error) => {
+        console.error("打开结算弹窗失败：", error);
+      });
+    }
   });
 }
 

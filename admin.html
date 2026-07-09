@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>蓝绒织梦 · 管理后台</title>
     <meta name="description" content="服装店管理后台，用于查看订单、商品管理、新增商品和统计销量与营业额。" />
-    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260709-admin-auth-state" />
   </head>
 
   <body class="admin-page">
@@ -18,8 +18,40 @@
       </button>
     </div>
 
-    <main class="admin-shell" data-admin-shell>
+    <section class="admin-login" data-admin-login-panel hidden aria-hidden="true">
+      <div class="admin-login__panel">
+        <p class="admin-brand__eyebrow">管理员登录</p>
+        <h1>登录后进入后台管理</h1>
+        <p class="admin-login__hint">请输入管理员邮箱和密码，登录成功后才会加载后台订单、商品和统计数据。</p>
+
+        <form class="admin-login__form" data-admin-login-form>
+          <label class="admin-field">
+            <span>邮箱</span>
+            <input type="email" name="email" data-admin-login-email placeholder="admin@example.com" autocomplete="username" />
+          </label>
+
+          <label class="admin-field">
+            <span>密码</span>
+            <input type="password" name="password" data-admin-login-password placeholder="请输入管理员密码" autocomplete="current-password" />
+          </label>
+
+          <button class="admin-submit" type="submit">管理员登录</button>
+        </form>
+
+        <p class="admin-login__feedback" data-admin-login-feedback aria-live="polite"></p>
+
+        <a class="admin-login__home-link" href="./index.html" data-admin-login-home>
+          返回前台
+        </a>
+      </div>
+    </section>
+
+    <main class="admin-shell" data-admin-shell hidden aria-hidden="true">
       <header class="admin-topbar">
+        <div class="admin-topbar__actions">
+          <span class="admin-user-chip" data-admin-current-user>未登录</span>
+          <button class="admin-user-chip admin-user-chip--button" type="button" data-admin-logout hidden disabled>退出登录</button>
+        </div>
         <div class="admin-brand">
           <span class="admin-brand__orb" aria-hidden="true"></span>
           <div>
@@ -75,6 +107,27 @@
 
             <div class="admin-panel__stack">
               <div class="admin-summary" data-admin-product-summary hidden></div>
+
+              <div class="admin-product-search" data-admin-product-search-wrap>
+                <label class="admin-product-search__label" for="admin-product-search-input">搜索商品</label>
+                <div class="admin-product-search__control">
+                  <input
+                    id="admin-product-search-input"
+                    class="admin-product-search__input"
+                    type="search"
+                    placeholder="输入商品名称，例如：连衣裙、外套"
+                    data-admin-product-search
+                  />
+                  <button
+                    class="admin-product-search__clear"
+                    type="button"
+                    data-admin-product-search-clear
+                    hidden
+                  >
+                    清空
+                  </button>
+                </div>
+              </div>
 
               <div class="admin-product-filter" data-admin-product-filter-bar></div>
 
@@ -149,6 +202,6 @@
       </div>
     </main>
 
-    <script type="module" src="./src/main.js?v=20260709-admin-panels"></script>
+    <script type="module" src="./src/main.js?v=20260709-admin-auth-state"></script>
   </body>
 </html>

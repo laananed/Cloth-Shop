@@ -40,6 +40,13 @@ import {
   validateRegistration,
 } from '../src/account-store.js';
 
+function sliceBetween(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = endMarker ? source.indexOf(endMarker, start >= 0 ? start : 0) : source.length;
+
+  return source.slice(start, end);
+}
+
 test('site copy keeps the one-page brand-led direction', () => {
   const copy = getSiteCopy();
 
@@ -150,12 +157,15 @@ test('purchase flow exposes modal hooks in the source and markup', () => {
   assert.ok(mainJs.includes('renderPurchaseModal'));
   assert.ok(mainJs.includes('createDirectOrderFromApi'));
   assert.ok(mainJs.includes('data-purchase-launch="buy"'));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
 });
 
 test('purchase modal source keeps product selection before derived state', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderStart = mainJs.indexOf('function renderPurchaseModal() {');
-  const renderEnd = mainJs.indexOf('async function openPurchaseModal(product) {', renderStart);
+  const renderEnd = mainJs.indexOf("async function openPurchaseModal(product, action = 'buy') {", renderStart);
 
   assert.ok(renderStart >= 0);
   assert.ok(renderEnd > renderStart);
@@ -165,13 +175,80 @@ test('purchase modal source keeps product selection before derived state', () =>
   const selectedSkuIndex = renderBody.indexOf('const selectedSku = getPurchaseSelectedSku(product);');
   const productStateIndex = renderBody.indexOf('getProductDisplayState(product)');
   const selectedSkuOnSaleIndex = renderBody.indexOf('selectedSkuOnSale');
+  const addressToggleIndex = renderBody.indexOf('purchaseAddressSection.hidden = !actionConfig.showAddress;');
+  const paymentToggleIndex = renderBody.indexOf('purchasePaymentSection.hidden = !actionConfig.showPayment;');
 
   assert.ok(productIndex >= 0);
   assert.ok(selectedSkuIndex >= 0);
   assert.ok(productStateIndex >= 0);
   assert.ok(selectedSkuOnSaleIndex >= 0);
+  assert.ok(addressToggleIndex >= 0);
+  assert.ok(paymentToggleIndex >= 0);
   assert.ok(productIndex < productStateIndex);
   assert.ok(selectedSkuIndex < selectedSkuOnSaleIndex);
+});
+
+test('purchase modal routes actions through the shared selection flow', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+  const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {', 'function normalizePayMethod(method) {');
+  const favoriteBody = sliceBetween(mainJs, 'function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {', 'function upsertCartItem(product) {');
+  const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {', 'function openSidebar(section = \'account\') {');
+  const buyBranchStart = mainJs.indexOf("if (actionButton.dataset.purchaseLaunch === 'buy') {");
+  const buyBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {", buyBranchStart);
+  const buyBranchBody = mainJs.slice(buyBranchStart, buyBranchEnd);
+  const favoritesBranchStart = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {");
+  const favoritesBranchEnd = mainJs.indexOf("// if (actionButton.dataset.sidebarLaunch === 'cart') {", favoritesBranchStart);
+  const favoritesBranchBody = mainJs.slice(favoritesBranchStart, favoritesBranchEnd);
+  const cartBranchStart = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'cart') {", favoritesBranchStart);
+  const cartBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'checkout') {", cartBranchStart);
+  const cartBranchBody = mainJs.slice(cartBranchStart, cartBranchEnd);
+
+  assert.ok(mainJs.includes('activePurchaseAction'));
+  assert.ok(mainJs.includes('getPurchaseActionConfig'));
+  assert.ok(mainJs.includes('canOpenProductActionModal'));
+  assert.ok(mainJs.includes('purchaseAddressSection.hidden = !actionConfig.showAddress;'));
+  assert.ok(mainJs.includes('purchasePaymentSection.hidden = !actionConfig.showPayment;'));
+  assert.ok(mainJs.includes('purchaseTotalSection.hidden = !actionConfig.showTotal;'));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(mainJs.includes('addCartToApi(activePurchaseProduct, selectedSku, quantity, { openSidebarAfterSuccess: false })'));
+  assert.ok(mainJs.includes('upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false })'));
+  assert.match(
+    mainJs,
+    /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId)\s*\)/,
+  );
+  assert.ok(mainJs.includes('请先选择商品规格。'));
+
+  assert.ok(!renderModalBody.includes('skuList.length <= 1'));
+  assert.ok(renderModalBody.includes('purchaseSkuOptions.innerHTML = skuList'));
+  assert.ok(renderModalBody.includes('暂无可选规格'));
+  assert.ok(renderModalBody.includes('purchaseSubmit.textContent = product'));
+
+  assert.ok(addCartBody.includes('const actualSelectedSku = selectedSku || null;'));
+  assert.ok(addCartBody.includes('const skuId = actualSelectedSku?.skuId;'));
+  assert.ok(addCartBody.includes('quantity: nextQuantity'));
+  assert.ok(addCartBody.includes('openSidebarAfterSuccess'));
+  assert.ok(!addCartBody.includes('getPurchaseSelectedSku(product)'));
+
+  assert.ok(favoriteBody.includes('const actualSelectedSku = selectedSku || null;'));
+  assert.ok(favoriteBody.includes('const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;'));
+  assert.ok(favoriteBody.includes('skuId: actualSelectedSku.skuId'));
+  assert.ok(favoriteBody.includes('skuName: actualSelectedSku.skuName || \'默认规格\''));
+  assert.ok(!favoriteBody.includes('favorites.some((item) => item.id === product.id)'));
+
+  assert.ok(directOrderBody.includes('const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;'));
+  assert.ok(directOrderBody.includes('const skuId = selectedSku?.skuId;'));
+  assert.ok(directOrderBody.includes('throw new Error("请先选择商品规格。")'));
+  assert.ok(!directOrderBody.includes('getActionSelectedSku(product)'));
+
+  assert.ok(buyBranchBody.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(favoritesBranchBody.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(cartBranchBody.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(!buyBranchBody.includes('validateSkuBeforeProductAction'));
+  assert.ok(!favoritesBranchBody.includes('validateSkuBeforeProductAction'));
+  assert.ok(!cartBranchBody.includes('validateSkuBeforeProductAction'));
 });
 
 test('purchase button click handling does not require a sidebar action hook', () => {
@@ -179,6 +256,23 @@ test('purchase button click handling does not require a sidebar action hook', ()
 
   assert.ok(mainJs.includes("event.target.closest('button')"));
   assert.ok(mainJs.indexOf("dataset.purchaseLaunch === 'buy'") < mainJs.indexOf("dataset.sidebarLaunch === 'favorites'"));
+});
+
+test('scroll tools route sidebar and page scrolling through the right targets', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const indexHtml = readFileSync('index.html', 'utf8');
+  const adminHtml = readFileSync('admin.html', 'utf8');
+  const initScrollToolsBody = sliceBetween(mainJs, 'function initScrollTools() {', 'function initAdminPage() {');
+
+  assert.ok(mainJs.includes('function getActiveSidebarScrollContainer()'));
+  assert.ok(mainJs.includes('.sidebar__panel'));
+  assert.ok(initScrollToolsBody.includes('sidebarPanel.scrollTo({'));
+  assert.ok(mainJs.includes('window.scrollTo({'));
+  assert.ok(mainJs.includes('[data-scroll-to]'));
+  assert.ok(mainJs.includes('scrollHeight'));
+  assert.ok(mainJs.includes('sidebar.classList.contains(\'is-open\')'));
+  assert.ok(indexHtml.includes('data-scroll-tools'));
+  assert.ok(adminHtml.includes('data-scroll-tools'));
 });
 
 test('sales ranks are derived from the highest sales first', () => {
@@ -667,6 +761,27 @@ test('admin product management source includes logical delete wiring', () => {
   assert.ok(backend.includes('WHERE product_id = %s'));
 });
 
+test('admin orders source is wired to database orders and not mock render helpers', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('@app.get("/admin/orders")') || mainJs.includes('/admin/orders'));
+  assert.ok(mainJs.includes('async function loadAdminOrdersFromApi()'));
+  assert.ok(mainJs.includes('function renderAdminOrders('));
+  assert.ok(mainJs.includes('async function refreshAdminOrdersFromApi()'));
+  assert.ok(mainJs.includes('data-admin-orders-body'));
+  assert.ok(mainJs.includes('REFUNDED'));
+  assert.ok(mainJs.includes('已退款'));
+
+  const adminOrdersSectionStart = mainJs.indexOf('async function loadAdminOrdersFromApi()');
+  const adminOrdersSectionEnd = mainJs.indexOf('function convertApiStatsToRenderedStats(result)', adminOrdersSectionStart);
+  const adminOrdersSection = mainJs.slice(adminOrdersSectionStart, adminOrdersSectionEnd);
+
+  assert.ok(adminOrdersSectionStart >= 0);
+  assert.ok(adminOrdersSectionEnd > adminOrdersSectionStart);
+  assert.ok(!adminOrdersSection.includes('getStoredMockOrders(storage)'));
+  assert.ok(!adminOrdersSection.includes('renderAdminOrdersView(products, orders)'));
+});
+
 test('admin product filtering source wiring is present', () => {
   const html = readFileSync('admin.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
@@ -681,6 +796,169 @@ test('admin product filtering source wiring is present', () => {
   assert.ok(mainJs.includes('productSummary.hidden = true'));
 });
 
+test('admin product search source wiring is present', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(html.includes('data-admin-product-search'));
+  assert.ok(html.includes('data-admin-product-search-clear'));
+  assert.ok(mainJs.includes('activeAdminProductSearchKeyword'));
+  assert.ok(mainJs.includes('getAdminProductSearchText'));
+  assert.ok(mainJs.includes('matchesAdminProductSearch'));
+  assert.ok(mainJs.includes('data-admin-product-search'));
+  assert.ok(mainJs.includes('data-admin-product-search-clear'));
+  assert.ok(mainJs.includes('getFilteredAdminProductRows(rows)'));
+  assert.ok(mainJs.includes('matchesAdminProductSearch(row)'));
+  assert.ok(styles.includes('.admin-product-search'));
+  assert.ok(styles.includes('.admin-product-search__input'));
+});
+
+test('admin authentication source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const sql = readFileSync('07_create_admin_user.sql', 'utf8');
+
+  assert.ok(backend.includes('@app.post("/admin/login")'));
+  assert.ok(backend.includes('AdminLoginRequest'));
+  assert.ok(backend.includes('require_admin_user('));
+  assert.ok(backend.includes('Header(None)'));
+  assert.ok(backend.includes('@app.get("/admin/orders")'));
+  assert.ok(backend.includes('@app.get("/admin/stats")'));
+  assert.ok(backend.includes('@app.get("/admin/inventory")'));
+  assert.ok(backend.includes('@app.post("/admin/inventory/update-stock")'));
+  assert.ok(backend.includes('@app.post("/admin/products/update-status")'));
+  assert.ok(backend.includes('@app.post("/admin/products/delete")'));
+  assert.ok(backend.includes('@app.post("/products")'));
+  assert.ok(backend.includes('require_admin_user(authorization)'));
+
+  assert.ok(html.includes('data-admin-login-panel'));
+  assert.ok(html.includes('data-admin-login-form'));
+  assert.ok(html.includes('data-admin-login-feedback'));
+  assert.ok(html.includes('data-admin-login-email'));
+  assert.ok(html.includes('data-admin-login-password'));
+  assert.ok(html.includes('data-admin-current-user'));
+  assert.ok(html.includes('data-admin-logout'));
+  assert.ok(html.includes('data-admin-shell'));
+  assert.ok(html.includes('./src/styles.css?v=20260709-admin-auth-state'));
+  assert.ok(html.includes('./src/main.js?v=20260709-admin-auth-state'));
+
+  assert.ok(mainJs.includes('ADMIN_SESSION_STORAGE_KEY'));
+  assert.ok(mainJs.includes('getStoredAdminSession'));
+  assert.ok(mainJs.includes('saveStoredAdminSession'));
+  assert.ok(mainJs.includes('clearStoredAdminSession'));
+  assert.ok(mainJs.includes('getAdminAuthHeaders'));
+  assert.ok(mainJs.includes('adminFetch'));
+  assert.ok(mainJs.includes('loginAdmin'));
+  assert.ok(mainJs.includes('renderAdminAuthState'));
+  assert.ok(mainJs.includes('requireAdminSessionBeforeLoading'));
+  assert.ok(mainJs.includes('sessionStorage'));
+  assert.ok(mainJs.includes('/admin/login'));
+  assert.ok(mainJs.includes('Authorization'));
+
+  assert.ok(styles.includes('.admin-login'));
+  assert.ok(styles.includes('.admin-login__panel'));
+  assert.ok(styles.includes('.admin-login__form'));
+  assert.ok(styles.includes('.admin-login__feedback'));
+  assert.ok(styles.includes('.admin-user-chip'));
+
+  assert.ok(sql.includes('admin@example.com'));
+  assert.ok(sql.includes('admin123456'));
+  assert.ok(sql.includes('is_admin'));
+});
+
+test('admin auth hidden UI state is enforced by CSS and source state', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const authStateBody = sliceBetween(mainJs, 'function renderAdminAuthState', 'async function loginAdmin');
+
+  assert.ok(html.includes('data-admin-login-home'));
+  assert.match(html, /<a[^>]+class="admin-login__home-link"[^>]+href="\.\/index\.html"[^>]+data-admin-login-home[\s\S]*?返回前台[\s\S]*?<\/a>/);
+  assert.match(html, /<button[^>]+data-admin-logout[^>]+hidden[^>]+disabled[^>]*>/);
+  assert.match(
+    styles,
+    /\.admin-login\[hidden\],[\s\S]*?\.admin-shell\[hidden\],[\s\S]*?\.admin-user-chip\[hidden\],[\s\S]*?\[data-admin-logout\]\[hidden\]\s*\{[\s\S]*?display:\s*none\s*!important;[\s\S]*?\}/,
+  );
+  assert.ok(styles.includes('.admin-login__home-link'));
+  assert.ok(mainJs.includes('function getAdminIdentityLabel('));
+  assert.ok(mainJs.includes('function setAdminIdentityVisible('));
+  assert.ok(authStateBody.includes('adminLoginPanel.hidden = isLoggedIn'));
+  assert.ok(authStateBody.includes('adminShell.hidden = !isLoggedIn'));
+  assert.ok(authStateBody.includes('adminLogoutButton.hidden = !isLoggedIn'));
+  assert.ok(authStateBody.includes('adminLogoutButton.disabled = !isLoggedIn'));
+  assert.ok(authStateBody.includes("adminLogoutButton.setAttribute('aria-hidden', String(!isLoggedIn))"));
+  assert.ok(authStateBody.includes('setAdminIdentityVisible(isLoggedIn, session)'));
+  assert.ok(authStateBody.includes("document.body.classList.toggle('is-admin-authenticated', isLoggedIn)"));
+});
+
+test('admin initialization binds controls before session-gated loading', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const initStart = mainJs.indexOf('function initAdminPage() {');
+  const initEnd = mainJs.indexOf('initScrollTools();', initStart);
+  const initBody = mainJs.slice(initStart, initEnd);
+  const sessionCheckIndex = initBody.indexOf('const hasAdminSession = requireAdminSessionBeforeLoading();');
+  const loginBindingIndex = initBody.indexOf("adminLoginForm.addEventListener('submit'");
+  const logoutBindingIndex = initBody.indexOf("adminLogoutButton.addEventListener('click'");
+  const navBindingIndex = initBody.indexOf("navButtons.forEach((button) =>");
+
+  assert.ok(initStart >= 0);
+  assert.ok(initEnd > initStart);
+  assert.ok(sessionCheckIndex >= 0);
+  assert.ok(loginBindingIndex >= 0 && loginBindingIndex < sessionCheckIndex);
+  assert.ok(logoutBindingIndex >= 0 && logoutBindingIndex < sessionCheckIndex);
+  assert.ok(navBindingIndex >= 0 && navBindingIndex < sessionCheckIndex);
+  assert.doesNotMatch(
+    initBody,
+    /renderProducts\(\);\s*refreshAdminOrdersFromApi\(\);\s*refreshAdminStatsFromApi\(\);/,
+  );
+});
+
+test('admin auth state clears dashboard data on logout and auth failure', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const initStart = mainJs.indexOf('function initAdminPage() {');
+  const initEnd = mainJs.indexOf('initScrollTools();', initStart);
+  const initBody = mainJs.slice(initStart, initEnd);
+  const clearStart = mainJs.indexOf('function clearAdminDashboardData(');
+  const clearEnd = mainJs.indexOf('function getAdminAuthHeaders()', clearStart);
+  const clearBody = mainJs.slice(clearStart, clearEnd);
+  const logoutStart = initBody.indexOf("adminLogoutButton.addEventListener('click'");
+  const logoutEnd = initBody.indexOf('});', logoutStart);
+  const logoutBody = initBody.slice(logoutStart, logoutEnd);
+
+  assert.ok(mainJs.includes('function clearAdminDashboardData('));
+  assert.ok(mainJs.includes('ordersBody.innerHTML = `<tr><td colspan="6">'));
+  assert.ok(mainJs.includes('statsSummary.innerHTML = \'\';'));
+  assert.ok(mainJs.includes('statsRows.innerHTML = \'\';'));
+  assert.ok(mainJs.includes('productList.innerHTML = `<div class="admin-empty">'));
+  assert.ok(mainJs.includes('function resetAdminDashboardState()'));
+  assert.ok(clearStart >= 0);
+  assert.ok(clearEnd > clearStart);
+  assert.doesNotMatch(clearBody, /\borders\s*=\s*\[\]/);
+  assert.doesNotMatch(clearBody, /\bsummary\s*=\s*null/);
+  assert.ok(initBody.includes('resetAdminDashboardState();'));
+  assert.ok(initBody.includes("renderAdminAuthState('请先登录管理员账号')"));
+  assert.ok(mainJs.includes('renderAdminAuthState(\'已退出管理员账号，请重新登录。\')'));
+  assert.ok(mainJs.includes('function setAdminIdentityVisible('));
+  assert.ok(mainJs.includes('node.hidden = !isLoggedIn'));
+  assert.ok(mainJs.includes('node.textContent = label'));
+  assert.ok(initStart >= 0);
+  assert.ok(initEnd > initStart);
+  assert.ok(initBody.includes('const dashboardTargets = {'));
+  assert.ok(initBody.includes('clearAdminDashboardData(dashboardTargets);'));
+  assert.ok(logoutStart >= 0);
+  assert.ok(logoutBody.includes('clearStoredAdminSession();'));
+  assert.ok(logoutBody.includes('resetAdminDashboardState();'));
+  assert.ok(logoutBody.includes("renderAdminAuthState('已退出管理员账号，请重新登录。')"));
+  assert.doesNotMatch(logoutBody, /loadAdminDashboardFromApi|refreshAdminData/);
+  assert.ok(initBody.includes('if (hasAdminSession) {'));
+  assert.ok(initBody.includes('} else {'));
+  assert.ok(initBody.includes("activePanel = button.dataset.adminNavTarget || 'orders';"));
+  assert.ok(initBody.includes('syncPanels();'));
+});
+
 test('refund order backend wiring is present in source and sql', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const sql = readFileSync('06_add_refund_order.sql', 'utf8');
@@ -692,6 +970,31 @@ test('refund order backend wiring is present in source and sql', () => {
   assert.ok(sql.includes('REFUNDED'));
   assert.ok(sql.includes('REFUND_RESTORE'));
   assert.ok(sql.includes('product_sales_stat'));
+});
+
+test('cart invalid-item source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(backend.includes('product_status'));
+  assert.ok(backend.includes('product_is_deleted'));
+  assert.ok(backend.includes('sku_status'));
+  assert.ok(backend.includes('sku_is_deleted'));
+  assert.ok(mainJs.includes('function getCartItemInvalidReason(item)'));
+  assert.ok(mainJs.includes('function isCartItemCheckoutable(item)'));
+  assert.ok(mainJs.includes('function getInvalidCartItems(cartItems)'));
+  assert.ok(mainJs.includes('cart-item--invalid'));
+  assert.ok(mainJs.includes('cart-item__warning'));
+  assert.ok(mainJs.includes('商品已下架'));
+  assert.ok(mainJs.includes('商品已删除'));
+  assert.ok(mainJs.includes('当前规格已下架'));
+  assert.ok(mainJs.includes('当前规格已删除'));
+  assert.ok(mainJs.includes('库存不足'));
+  assert.ok(mainJs.includes('getInvalidCartItems(selectedCartItems)'));
+  assert.ok(mainJs.includes('getCartItemInvalidReason(item)'));
+  assert.ok(styles.includes('.cart-item--invalid'));
+  assert.ok(styles.includes('.cart-item__warning'));
 });
 
 test('frontend purchase record refund wiring is present', () => {

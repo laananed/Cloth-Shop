@@ -110,6 +110,13 @@ const ordersList = document.querySelector('[data-orders-list]');
 const accountEmail = document.querySelector('[data-account-email]');
 const accountDisplayName = document.querySelector('[data-account-display-name]');
 const isAdminPage = Boolean(document.querySelector('[data-admin-shell]'));
+const ADMIN_SESSION_STORAGE_KEY = 'cloth_shop_admin_session';
+const adminShell = document.querySelector('[data-admin-shell]');
+const adminLoginPanel = document.querySelector('[data-admin-login-panel]');
+const adminLoginForm = document.querySelector('[data-admin-login-form]');
+const adminLoginFeedback = document.querySelector('[data-admin-login-feedback]');
+const adminCurrentUser = document.querySelector('[data-admin-current-user]');
+const adminLogoutButton = document.querySelector('[data-admin-logout]');
 
 const storage = window.localStorage;
 const pageRoot = document.documentElement;
@@ -127,6 +134,173 @@ let isCartCheckoutSubmitting = false;
 let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
 const refundingOrderIds = new Set();
+
+function getStoredAdminSession() {
+  try {
+    const raw = sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+
+    return {
+      adminToken: String(parsed.admin_token || parsed.adminToken || '').trim(),
+      email: String(parsed.email || '').trim(),
+      adminUserId: Number(parsed.admin_user_id || parsed.adminUserId || 0),
+    };
+  } catch (error) {
+    console.warn('读取管理员登录态失败：', error);
+    return null;
+  }
+}
+
+function saveStoredAdminSession(session) {
+  sessionStorage.setItem(
+    ADMIN_SESSION_STORAGE_KEY,
+    JSON.stringify({
+      admin_token: String(session?.adminToken || session?.admin_token || '').trim(),
+      email: String(session?.email || '').trim(),
+      admin_user_id: Number(session?.adminUserId || session?.admin_user_id || 0),
+      created_at: new Date().toISOString(),
+    }),
+  );
+}
+
+function clearStoredAdminSession() {
+  sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+}
+
+function getAdminAuthHeaders() {
+  const session = getStoredAdminSession();
+  const headers = {};
+
+  if (session?.adminToken) {
+    headers.Authorization = `Bearer ${session.adminToken}`;
+  }
+
+  return headers;
+}
+
+async function adminFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const authHeaders = getAdminAuthHeaders();
+
+  if (authHeaders.Authorization) {
+    headers.set('Authorization', authHeaders.Authorization);
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  let result = null;
+
+  try {
+    result = await response.json();
+  } catch (error) {
+    result = null;
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    const authError = new Error(result?.detail || '管理员登录已失效，请重新登录');
+    authError.status = response.status;
+    authError.detail = result?.detail || authError.message;
+    throw authError;
+  }
+
+  if (!response.ok) {
+    const error = new Error(result?.detail || `请求失败：${response.status}`);
+    error.status = response.status;
+    error.detail = result?.detail || error.message;
+    throw error;
+  }
+
+  return result;
+}
+
+function renderAdminAuthState(message = '') {
+  const session = getStoredAdminSession();
+  const isLoggedIn = Boolean(session?.adminToken);
+
+  if (adminShell) {
+    adminShell.hidden = !isLoggedIn;
+    adminShell.setAttribute('aria-hidden', String(!isLoggedIn));
+  }
+
+  if (adminLoginPanel) {
+    adminLoginPanel.hidden = isLoggedIn;
+    adminLoginPanel.setAttribute('aria-hidden', String(isLoggedIn));
+  }
+
+  if (adminCurrentUser) {
+    adminCurrentUser.textContent = isLoggedIn
+      ? `${session.email || '管理员'} · ID ${session.adminUserId || ''}`.trim()
+      : '未登录';
+  }
+
+  if (adminLogoutButton) {
+    adminLogoutButton.hidden = !isLoggedIn;
+  }
+
+  if (adminLoginFeedback) {
+    adminLoginFeedback.textContent = String(message || '');
+    adminLoginFeedback.classList.toggle('is-error', Boolean(message));
+  }
+
+  if (adminLoginForm) {
+    const emailInput = adminLoginForm.querySelector('[data-admin-login-email]');
+    const passwordInput = adminLoginForm.querySelector('[data-admin-login-password]');
+
+    if (emailInput) {
+      emailInput.value = isLoggedIn ? session.email || '' : emailInput.value;
+    }
+
+    if (passwordInput && !isLoggedIn) {
+      passwordInput.value = '';
+    }
+  }
+}
+
+async function loginAdmin(email, password) {
+  const response = await fetch(`${API_BASE_URL}/admin/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      password,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    const error = new Error(result.detail || '管理员登录失败');
+    error.status = response.status;
+    throw error;
+  }
+
+  saveStoredAdminSession(result);
+  renderAdminAuthState('');
+
+  return result;
+}
+
+function requireAdminSessionBeforeLoading() {
+  const session = getStoredAdminSession();
+
+  renderAdminAuthState(session?.adminToken ? '' : '请先登录管理员账号');
+
+  return Boolean(session?.adminToken);
+}
 
 const purchasePaymentMethods = [
   { value: 'alipay', label: '支付宝' },
@@ -3450,10 +3624,9 @@ function initAdminPage() {
   }
 
   async function loadAdminOrdersFromApi() {
-    const response = await fetch(`${API_BASE_URL}/admin/orders`);
-    const result = await response.json();
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders`);
 
-    if (!response.ok || !result.success || !Array.isArray(result.data)) {
+    if (!result.success || !Array.isArray(result.data)) {
       throw new Error(result.detail || "加载数据库订单失败");
     }
 
@@ -3496,6 +3669,12 @@ function initAdminPage() {
       console.log("后台订单已切换为数据库订单：", orders);
     } catch (error) {
       console.error("后台订单加载失败：", error);
+
+      if (error.status === 401 || error.status === 403) {
+        clearStoredAdminSession();
+        renderAdminAuthState(error.detail || error.message);
+        return;
+      }
 
       orders = [];
       renderAdminOrders([], `加载数据库订单失败：${error.message}`);
@@ -3550,10 +3729,9 @@ function convertApiStatsToRenderedStats(result) {
 
 async function refreshAdminStatsFromApi() {
   try {
-    const response = await fetch(`${API_BASE_URL}/admin/stats`);
-    const result = await response.json();
+    const result = await adminFetch(`${API_BASE_URL}/admin/stats`);
 
-    if (!response.ok || !result.success) {
+    if (!result.success) {
       throw new Error(result.detail || "加载后台销量统计失败");
     }
 
@@ -3563,6 +3741,11 @@ async function refreshAdminStatsFromApi() {
     console.log("后台销量统计已切换为数据库数据：", result);
   } catch (error) {
     console.error("后台销量统计加载失败：", error);
+
+    if (error.status === 401 || error.status === 403) {
+      clearStoredAdminSession();
+      renderAdminAuthState(error.detail || error.message);
+    }
   }
 }
 
@@ -3661,10 +3844,9 @@ function renderAdminInventoryProductsView(adminProducts) {
 }
 
 async function loadAdminProductsFromApi() {
-  const response = await fetch(`${API_BASE_URL}/admin/inventory`);
-  const result = await response.json();
+  const result = await adminFetch(`${API_BASE_URL}/admin/inventory`);
 
-  if (!response.ok || !result.success || !Array.isArray(result.data)) {
+  if (!result.success || !Array.isArray(result.data)) {
     throw new Error(result.detail || "加载后台商品库存列表失败");
   }
 
@@ -3693,6 +3875,12 @@ async function refreshAdminProductsFromApi() {
     console.log("后台上架新品列表已切换为数据库库存数据：", products);
   } catch (error) {
     console.error("后台商品列表加载失败：", error);
+
+    if (error.status === 401 || error.status === 403) {
+      clearStoredAdminSession();
+      renderAdminAuthState(error.detail || error.message);
+      return;
+    }
 
     products = getStoredAdminProducts(storage);
     renderedProducts = renderAdminProductsView(products);
@@ -3926,7 +4114,7 @@ function getAdminImageSrc(imageUrl) {
 }
 
 async function updateAdminSkuStockToApi(skuId, availableStock) {
-  const response = await fetch(`${API_BASE_URL}/admin/inventory/update-stock`, {
+  const result = await adminFetch(`${API_BASE_URL}/admin/inventory/update-stock`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -3937,9 +4125,7 @@ async function updateAdminSkuStockToApi(skuId, availableStock) {
     }),
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "修改库存失败");
   }
 
@@ -3947,7 +4133,7 @@ async function updateAdminSkuStockToApi(skuId, availableStock) {
 }
 
 async function updateAdminProductStatusToApi(productId, status) {
-  const response = await fetch(`${API_BASE_URL}/admin/products/update-status`, {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/update-status`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -3958,9 +4144,7 @@ async function updateAdminProductStatusToApi(productId, status) {
     }),
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "修改商品状态失败");
   }
 
@@ -3968,7 +4152,7 @@ async function updateAdminProductStatusToApi(productId, status) {
 }
 
 async function deleteAdminProductToApi(productId) {
-  const response = await fetch(`${API_BASE_URL}/admin/products/delete`, {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/delete`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -3978,9 +4162,7 @@ async function deleteAdminProductToApi(productId) {
     }),
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "删除商品失败");
   }
 
@@ -4063,14 +4245,12 @@ async function createAdminProductToApi(values, imageFile) {
     formData.append("image", imageFile);
   }
 
-  const response = await fetch(`${API_BASE_URL}/products`, {
+  const result = await adminFetch(`${API_BASE_URL}/products`, {
     method: "POST",
     body: formData,
   });
 
-  const result = await response.json();
-
-  if (!response.ok || !result.success) {
+  if (!result.success) {
     throw new Error(result.detail || "新增商品失败");
   }
 
@@ -4089,9 +4269,59 @@ async function createAdminProductToApi(values, imageFile) {
     });
   }
 
-  refreshAdminData();
-  refreshAdminProductsFromApi();
-  populateImageSelect();
+  async function loadAdminDashboardFromApi() {
+    populateImageSelect();
+    await refreshAdminOrdersFromApi();
+    await refreshAdminStatsFromApi();
+    await refreshAdminProductsFromApi();
+  }
+
+  const hasAdminSession = requireAdminSessionBeforeLoading();
+
+  if (adminLoginForm) {
+    adminLoginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const values = Object.fromEntries(new FormData(adminLoginForm).entries());
+      const email = String(values.email || '').trim();
+      const password = String(values.password || '').trim();
+
+      if (!email || !password) {
+        renderAdminAuthState('请先填写管理员邮箱和密码。');
+        return;
+      }
+
+      try {
+        renderAdminAuthState('正在登录管理员账号...');
+        await loginAdmin(email, password);
+        activePanel = 'orders';
+        syncPanels();
+        await loadAdminDashboardFromApi();
+        renderAdminAuthState('');
+      } catch (error) {
+        console.error('管理员登录失败：', error);
+        clearStoredAdminSession();
+        renderAdminAuthState(error.detail || error.message || '管理员登录失败');
+      }
+    });
+  }
+
+  if (adminLogoutButton) {
+    adminLogoutButton.addEventListener('click', () => {
+      clearStoredAdminSession();
+      orders = [];
+      products = [];
+      summary = null;
+      productRows = [];
+      renderedStats = null;
+      renderedProducts = null;
+      renderAdminAuthState('已退出管理员账号，请重新登录。');
+    });
+  }
+
+  if (hasAdminSession) {
+    loadAdminDashboardFromApi();
+  }
 
   navButtons.forEach((button) => {
   button.addEventListener('click', () => {

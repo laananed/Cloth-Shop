@@ -18,8 +18,36 @@
       </button>
     </div>
 
-    <main class="admin-shell" data-admin-shell>
+    <section class="admin-login" data-admin-login-panel hidden aria-hidden="true">
+      <div class="admin-login__panel">
+        <p class="admin-brand__eyebrow">管理员登录</p>
+        <h1>登录后进入后台管理</h1>
+        <p class="admin-login__hint">请输入管理员邮箱和密码，登录成功后才会加载后台订单、商品和统计数据。</p>
+
+        <form class="admin-login__form" data-admin-login-form>
+          <label class="admin-field">
+            <span>邮箱</span>
+            <input type="email" name="email" data-admin-login-email placeholder="admin@example.com" autocomplete="username" />
+          </label>
+
+          <label class="admin-field">
+            <span>密码</span>
+            <input type="password" name="password" data-admin-login-password placeholder="请输入管理员密码" autocomplete="current-password" />
+          </label>
+
+          <button class="admin-submit" type="submit">管理员登录</button>
+        </form>
+
+        <p class="admin-login__feedback" data-admin-login-feedback aria-live="polite"></p>
+      </div>
+    </section>
+
+    <main class="admin-shell" data-admin-shell hidden aria-hidden="true">
       <header class="admin-topbar">
+        <div class="admin-topbar__actions">
+          <span class="admin-user-chip" data-admin-current-user>未登录</span>
+          <button class="admin-user-chip admin-user-chip--button" type="button" data-admin-logout>退出登录</button>
+        </div>
         <div class="admin-brand">
           <span class="admin-brand__orb" aria-hidden="true"></span>
           <div>

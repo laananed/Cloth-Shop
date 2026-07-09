@@ -814,6 +814,59 @@ test('admin product search source wiring is present', () => {
   assert.ok(styles.includes('.admin-product-search__input'));
 });
 
+test('admin authentication source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const sql = readFileSync('07_create_admin_user.sql', 'utf8');
+
+  assert.ok(backend.includes('@app.post("/admin/login")'));
+  assert.ok(backend.includes('AdminLoginRequest'));
+  assert.ok(backend.includes('require_admin_user('));
+  assert.ok(backend.includes('Header(None)'));
+  assert.ok(backend.includes('@app.get("/admin/orders")'));
+  assert.ok(backend.includes('@app.get("/admin/stats")'));
+  assert.ok(backend.includes('@app.get("/admin/inventory")'));
+  assert.ok(backend.includes('@app.post("/admin/inventory/update-stock")'));
+  assert.ok(backend.includes('@app.post("/admin/products/update-status")'));
+  assert.ok(backend.includes('@app.post("/admin/products/delete")'));
+  assert.ok(backend.includes('@app.post("/products")'));
+  assert.ok(backend.includes('require_admin_user(authorization)'));
+
+  assert.ok(html.includes('data-admin-login-panel'));
+  assert.ok(html.includes('data-admin-login-form'));
+  assert.ok(html.includes('data-admin-login-feedback'));
+  assert.ok(html.includes('data-admin-login-email'));
+  assert.ok(html.includes('data-admin-login-password'));
+  assert.ok(html.includes('data-admin-current-user'));
+  assert.ok(html.includes('data-admin-logout'));
+  assert.ok(html.includes('data-admin-shell'));
+
+  assert.ok(mainJs.includes('ADMIN_SESSION_STORAGE_KEY'));
+  assert.ok(mainJs.includes('getStoredAdminSession'));
+  assert.ok(mainJs.includes('saveStoredAdminSession'));
+  assert.ok(mainJs.includes('clearStoredAdminSession'));
+  assert.ok(mainJs.includes('getAdminAuthHeaders'));
+  assert.ok(mainJs.includes('adminFetch'));
+  assert.ok(mainJs.includes('loginAdmin'));
+  assert.ok(mainJs.includes('renderAdminAuthState'));
+  assert.ok(mainJs.includes('requireAdminSessionBeforeLoading'));
+  assert.ok(mainJs.includes('sessionStorage'));
+  assert.ok(mainJs.includes('/admin/login'));
+  assert.ok(mainJs.includes('Authorization'));
+
+  assert.ok(styles.includes('.admin-login'));
+  assert.ok(styles.includes('.admin-login__panel'));
+  assert.ok(styles.includes('.admin-login__form'));
+  assert.ok(styles.includes('.admin-login__feedback'));
+  assert.ok(styles.includes('.admin-user-chip'));
+
+  assert.ok(sql.includes('admin@example.com'));
+  assert.ok(sql.includes('admin123456'));
+  assert.ok(sql.includes('is_admin'));
+});
+
 test('refund order backend wiring is present in source and sql', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const sql = readFileSync('06_add_refund_order.sql', 'utf8');

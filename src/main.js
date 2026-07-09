@@ -2857,6 +2857,65 @@ async function refreshAdminStatsFromApi() {
   }
 }
 
+function convertApiRowsToAdminProducts(apiRows) {
+  const productMap = new Map();
+
+  apiRows.forEach((row) => {
+    const productId = Number(row.product_id);
+    const skuId = Number(row.sku_id);
+
+    if (!productId || !skuId) {
+      return;
+    }
+
+    const price = Number(row.price || 0);
+    const availableStock = Number(row.available_stock || 0);
+    const lockedStock = Number(row.locked_stock || 0);
+    const sales = Number(row.total_sold_count || 0);
+    const imageUrl = String(row.image_url || "").trim();
+
+    if (!productMap.has(productId)) {
+      productMap.set(productId, {
+        id: `db-product-${productId}`,
+        productId,
+        name: row.product_name || "未命名商品",
+        category: row.category_name || "未分类",
+        price,
+        badge: "数据库商品",
+        status: row.product_status || "UNKNOWN",
+        image: imageUrl,
+        imageLabel: imageUrl ? imageUrl.split("/").pop() : "暂无图片",
+        createdAt: row.product_created_at || "",
+        skuCount: 0,
+        stock: 0,
+        lockedStock: 0,
+        sales: 0,
+        skuList: [],
+      });
+    }
+
+    const product = productMap.get(productId);
+
+    product.skuCount += 1;
+    product.stock += availableStock;
+    product.lockedStock += lockedStock;
+    product.sales += sales;
+    product.price = Math.min(product.price, price);
+
+    product.skuList.push({
+      skuId,
+      skuName: row.sku_name || "默认规格",
+      price,
+      status: row.sku_status || "UNKNOWN",
+      availableStock,
+      lockedStock,
+      sales,
+    });
+  });
+
+  return Array.from(productMap.values());
+}
+
 async function loadAdminProductsFromApi() {
   const response = await fetch(`${API_BASE_URL}/products`);
   const result = await response.json();

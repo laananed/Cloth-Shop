@@ -2550,6 +2550,44 @@ button:disabled,
   text-transform: uppercase;
 }
 
+.admin-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-order-action-button {
+  appearance: none;
+  border: 1px solid rgba(105, 174, 230, 0.22);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-order-action-button--primary {
+  color: white;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.admin-order-detail-row td {
+  padding-top: 0;
+  border-bottom: 0;
+}
+
+.admin-order-detail-container {
+  margin-top: 10px;
+}
+
+.admin-order-detail-container .order-detail {
+  margin-top: 0;
+}
+
 .admin-grid {
   display: grid;
   grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);

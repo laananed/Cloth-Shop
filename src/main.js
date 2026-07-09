@@ -220,7 +220,7 @@ function clearAdminDashboardData(targets = {}) {
   const emptyMessage = '请先登录管理员账号';
 
   if (ordersBody) {
-    ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyMessage)}</div></td></tr>`;
+    ordersBody.innerHTML = `<tr><td colspan="7"><div class="admin-empty">${escapeHtml(emptyMessage)}</div></td></tr>`;
   }
 
   if (statsSummary) {
@@ -3545,6 +3545,7 @@ function initAdminPage() {
     productSummary,
   };
   let activePanel = 'orders';
+  let activeAdminOrderDetailId = null;
   let products = [];
   let orders = [];
   let summary = null;
@@ -3670,6 +3671,90 @@ function initAdminPage() {
     }
   }
 
+  function getAdminOrderDetailRow(orderId) {
+    return ordersBody?.querySelector(`[data-admin-order-detail-row="${orderId}"]`) || null;
+  }
+
+  function getAdminOrderDetailContainer(orderId) {
+    return ordersBody?.querySelector(`[data-admin-order-detail-container="${orderId}"]`) || null;
+  }
+
+  function collapseAdminOrderDetail(orderId) {
+    const row = getAdminOrderDetailRow(orderId);
+    const container = getAdminOrderDetailContainer(orderId);
+
+    if (row) {
+      row.hidden = true;
+    }
+
+    if (container) {
+      container.innerHTML = '';
+    }
+
+    if (activeAdminOrderDetailId === orderId) {
+      activeAdminOrderDetailId = null;
+    }
+  }
+
+  function expandAdminOrderDetailRow(orderId) {
+    const row = getAdminOrderDetailRow(orderId);
+
+    if (row) {
+      row.hidden = false;
+    }
+
+    activeAdminOrderDetailId = orderId;
+  }
+
+  async function loadAdminOrderDetailFromApi(orderId) {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/${orderId}`);
+
+    if (!result.success) {
+      throw new Error(result.detail || '加载后台订单详情失败');
+    }
+
+    return result;
+  }
+
+  async function shipAdminOrderToApi(orderId, remark = '管理员后台发货') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/ship`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '后台发货失败');
+    }
+
+    return result;
+  }
+
+  async function renderAdminOrderDetail(orderId, detail = null) {
+    const row = getAdminOrderDetailRow(orderId);
+    const container = getAdminOrderDetailContainer(orderId);
+
+    if (!row || !container) {
+      return;
+    }
+
+    expandAdminOrderDetailRow(orderId);
+    container.innerHTML = '<p class="order-detail__loading">正在加载订单详情...</p>';
+
+    try {
+      const detailData = detail || await loadAdminOrderDetailFromApi(orderId);
+      container.innerHTML = renderApiOrderDetail(detailData);
+    } catch (error) {
+      console.error('加载后台订单详情失败：', error);
+      container.innerHTML = `<p class="order-detail__empty">加载订单详情失败：${escapeHtml(error.message)}</p>`;
+    }
+  }
+
   function normalizeAdminOrderRow(row) {
     const orderId = Number(row?.order_id || 0);
     const itemKindCount = Number(row?.item_kind_count || 0);
@@ -3712,13 +3797,19 @@ function initAdminPage() {
     const rows = Array.isArray(orderList) ? orderList : [];
 
     if (!rows.length) {
-      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyText)}</div></td></tr>`;
+      ordersBody.innerHTML = `<tr><td colspan="7"><div class="admin-empty">${escapeHtml(emptyText)}</div></td></tr>`;
       return;
     }
 
     ordersBody.innerHTML = rows
       .map(
-        (row) => `
+        (row) => {
+          const isExpanded = activeAdminOrderDetailId === row.orderId;
+          const canShip = row.status === 'PAID';
+          const detailButtonLabel = isExpanded ? '收起详情' : '查看详情';
+          const detailRowHidden = isExpanded ? '' : ' hidden';
+
+          return `
           <tr>
             <td>${escapeHtml(row.orderNo)}</td>
             <td>${escapeHtml(row.email || `用户 ${row.userId || ""}`)}</td>
@@ -3726,8 +3817,38 @@ function initAdminPage() {
             <td>${escapeHtml(formatPrice(row.totalAmount))}</td>
             <td>${escapeHtml(row.statusLabel || formatOrderStatus(row.status))}</td>
             <td>${escapeHtml(row.createdAt)}</td>
+            <td>
+              <div class="admin-order-actions">
+                <button
+                  class="admin-order-action-button"
+                  type="button"
+                  data-admin-order-detail-id="${row.orderId}"
+                >
+                  ${escapeHtml(detailButtonLabel)}
+                </button>
+                ${
+                  canShip
+                    ? `
+                      <button
+                        class="admin-order-action-button admin-order-action-button--primary"
+                        type="button"
+                        data-admin-order-ship-id="${row.orderId}"
+                      >
+                        发货
+                      </button>
+                    `
+                    : ''
+                }
+              </div>
+            </td>
           </tr>
-        `,
+          <tr class="admin-order-detail-row" data-admin-order-detail-row="${row.orderId}"${detailRowHidden}>
+            <td colspan="7">
+              <div class="admin-order-detail-container" data-admin-order-detail-container="${row.orderId}"></div>
+            </td>
+          </tr>
+        `;
+        },
       )
       .join("");
   }
@@ -3736,6 +3857,10 @@ function initAdminPage() {
     try {
       orders = await loadAdminOrdersFromApi();
       renderAdminOrders(orders);
+
+      if (activeAdminOrderDetailId) {
+        await renderAdminOrderDetail(activeAdminOrderDetailId);
+      }
 
       console.log("后台订单已切换为数据库订单：", orders);
     } catch (error) {
@@ -4501,6 +4626,65 @@ async function createAdminProductToApi(values, imageFile) {
       updateAdminProductSearchClearState();
       renderProducts();
       adminProductSearchInput?.focus();
+    });
+  }
+
+  if (ordersBody) {
+    ordersBody.addEventListener("click", async (event) => {
+      const detailButton = event.target.closest("[data-admin-order-detail-id]");
+      const shipButton = event.target.closest("[data-admin-order-ship-id]");
+
+      if (detailButton) {
+        const orderId = Number(detailButton.dataset.adminOrderDetailId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        if (activeAdminOrderDetailId === orderId) {
+          collapseAdminOrderDetail(orderId);
+          renderAdminOrders(orders);
+          return;
+        }
+
+        activeAdminOrderDetailId = orderId;
+        renderAdminOrders(orders);
+        await renderAdminOrderDetail(orderId);
+        return;
+      }
+
+      if (shipButton) {
+        const orderId = Number(shipButton.dataset.adminOrderShipId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要给这个已支付订单发货吗？发货后状态会变为已发货。");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          shipButton.disabled = true;
+          shipButton.textContent = "发货中...";
+
+          await shipAdminOrderToApi(orderId, "管理员后台发货");
+          activeAdminOrderDetailId = orderId;
+          await refreshAdminOrdersFromApi();
+        } catch (error) {
+          console.error("后台发货失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">发货失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          window.alert(`发货失败：${error.message}`);
+        }
+      }
     });
   }
 

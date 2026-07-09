@@ -945,6 +945,39 @@ test('admin orders source is wired to database orders and not mock render helper
   assert.ok(!adminOrdersSection.includes('renderAdminOrdersView(products, orders)'));
 });
 
+test('admin order detail and ship source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const html = readFileSync('admin.html', 'utf8');
+
+  assert.ok(backend.includes('query_order_detail('));
+  assert.ok(backend.includes('@app.get("/admin/orders/{order_id}")'));
+  assert.ok(backend.includes('@app.post("/admin/orders/ship")'));
+  assert.ok(backend.includes('AdminShipOrderRequest'));
+  assert.ok(backend.includes('FOR UPDATE'));
+  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED')"));
+  assert.ok(backend.includes('require_admin_user(authorization)'));
+
+  assert.ok(mainJs.includes('loadAdminOrderDetailFromApi'));
+  assert.ok(mainJs.includes('shipAdminOrderToApi'));
+  assert.ok(mainJs.includes('data-admin-order-detail-id'));
+  assert.ok(mainJs.includes('data-admin-order-ship-id'));
+  assert.ok(mainJs.includes('data-admin-order-detail-container'));
+
+  assert.ok(html.includes('操作'));
+});
+
+test('admin order status labels include shipped and the orders table keeps the operation column', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const html = readFileSync('admin.html', 'utf8');
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(mainJs.includes('SHIPPED'));
+  assert.ok(mainJs.includes('已发货'));
+  assert.ok(html.includes('<th>操作</th>'));
+  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED')"));
+});
+
 test('admin product filtering source wiring is present', () => {
   const html = readFileSync('admin.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
@@ -1092,7 +1125,7 @@ test('admin auth state clears dashboard data on logout and auth failure', () => 
   const logoutBody = initBody.slice(logoutStart, logoutEnd);
 
   assert.ok(mainJs.includes('function clearAdminDashboardData('));
-  assert.ok(mainJs.includes('ordersBody.innerHTML = `<tr><td colspan="6">'));
+  assert.ok(mainJs.includes('ordersBody.innerHTML = `<tr><td colspan="7">'));
   assert.ok(mainJs.includes('statsSummary.innerHTML = \'\';'));
   assert.ok(mainJs.includes('statsRows.innerHTML = \'\';'));
   assert.ok(mainJs.includes('productList.innerHTML = `<div class="admin-empty">'));

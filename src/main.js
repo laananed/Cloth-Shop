@@ -2911,6 +2911,7 @@ function initAdminPage() {
   const productSummary = shell.querySelector('[data-admin-product-summary]');
   const productForm = shell.querySelector('[data-admin-product-form]');
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
+  const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
   const imageSelect = shell.querySelector('[data-admin-image-select]');
   let activePanel = 'orders';
   let products = [];
@@ -3152,7 +3153,7 @@ async function refreshAdminProductsFromApi() {
     renderProducts();
 
     setFeedback(
-      productFeedback,
+      productManageFeedback || productFeedback,
       `后台商品列表加载数据库失败，暂时显示本地模拟商品：${error.message}`,
       true
     );
@@ -3525,6 +3526,10 @@ async function createAdminProductToApi(values, imageFile) {
     if (activePanel === "stats") {
       refreshAdminStatsFromApi();
     }
+
+    if (activePanel === "products") {
+      refreshAdminProductsFromApi();
+    }
   });
 });
 
@@ -3596,7 +3601,7 @@ async function createAdminProductToApi(values, imageFile) {
       const nextStock = Number(input?.value);
 
       if (!Number.isInteger(nextStock) || nextStock < 0) {
-        setFeedback(productFeedback, "库存必须是大于等于 0 的整数。", true);
+        setFeedback(productManageFeedback || productFeedback, "库存必须是大于等于 0 的整数。", true);
         return;
       }
 

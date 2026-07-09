@@ -290,25 +290,28 @@
           </div>
           <p>轻互动展示，不打扰浏览。</p>
         </div>
-        <div class="product-search">
+        <div class="product-search product-search--glass">
+          <div class="product-search__header">
             <label class="product-search__label" for="product-search-input">搜索商品</label>
-            <div class="product-search__control">
-              <input
-                id="product-search-input"
-                class="product-search__input"
-                type="search"
-                placeholder="搜索商品名、分类或规格，例如：S、XL、外套"
-                data-product-search
-              />
-              <button
-                class="product-search__clear"
-                type="button"
-                data-product-search-clear
-              >
-                清空
-              </button>
-            </div>
+            <span class="product-search__hint">支持商品名、分类或规格关键词</span>
           </div>
+          <div class="product-search__control">
+            <input
+              id="product-search-input"
+              class="product-search__input"
+              type="search"
+              placeholder="搜索商品名、分类或规格，例如：S、XL、外套"
+              data-product-search
+            />
+            <button
+              class="product-search__clear"
+              type="button"
+              data-product-search-clear
+            >
+              清空
+            </button>
+          </div>
+        </div>
         <div class="product-grid" data-product-grid></div>
       </section>
 
@@ -334,3 +337,4 @@
     <script type="module" src="./src/main.js?v=20260707e"></script>
   </body>
 </html>
+

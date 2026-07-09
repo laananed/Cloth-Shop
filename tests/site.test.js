@@ -441,6 +441,27 @@ test('backend and frontend source files do not contain obvious mojibake fragment
   assert.ok(mainJs.includes('无法发货'));
 });
 
+test('index html keeps the restored document structure and the search hook markup', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mojibakeFragments = ['?/title', '?/button', '?/p', '?/h3', '?/span', '?/strong', 'Ʒ', '֧Ʒ', '͹ؼ'];
+
+  assert.ok(html.includes('<title>蓝笙织梦 · 二次元服装售卖首页</title>'));
+  assert.ok(html.includes('./src/styles.css'));
+  assert.ok(html.includes('./src/main.js'));
+  assert.ok(html.includes('data-product-search'));
+  assert.ok(html.includes('data-product-search-clear'));
+  assert.ok(html.includes('data-product-grid'));
+  assert.ok(html.includes('data-product-count'));
+  assert.ok(html.includes('data-active-collection'));
+  assert.ok(html.includes('data-sidebar'));
+  assert.ok(html.includes('data-purchase-modal'));
+  assert.ok(html.includes('清空'));
+
+  for (const fragment of mojibakeFragments) {
+    assert.ok(!html.includes(fragment), `index.html should not contain mojibake fragment: ${fragment}`);
+  }
+});
+
 test('sales rank labels use the full catalog while sorting still keeps sellable products first', () => {
   const products = [
     {

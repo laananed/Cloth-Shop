@@ -533,6 +533,52 @@ def query_user_addresses(conn, user_id: int):
         return cursor.fetchall()
 
 
+def query_cart_rows(conn, user_id: int):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                u.id AS user_id,
+                u.email,
+                c.id AS cart_id,
+                ci.id AS cart_item_id,
+                p.id AS product_id,
+                p.name AS product_name,
+                p.status AS product_status,
+                p.is_deleted AS product_is_deleted,
+                s.id AS sku_id,
+                s.sku_name,
+                s.status AS sku_status,
+                s.is_deleted AS sku_is_deleted,
+                s.price,
+                ci.quantity,
+                (ci.quantity * s.price) AS item_amount,
+                COALESCE(i.available_stock, 0) AS available_stock,
+                COALESCE(i.locked_stock, 0) AS locked_stock,
+                c.status AS cart_status,
+                ci.created_at,
+                ci.updated_at
+            FROM `user` u
+            JOIN cart c
+              ON u.id = c.user_id
+            JOIN cart_item ci
+              ON c.id = ci.cart_id
+            JOIN product_sku s
+              ON ci.sku_id = s.id
+            JOIN product p
+              ON s.product_id = p.id
+            LEFT JOIN inventory i
+              ON s.id = i.sku_id
+            WHERE u.id = %s
+              AND u.is_deleted = 0
+              AND c.status = 'ACTIVE'
+            ORDER BY ci.id
+            """,
+            (user_id,)
+        )
+        return cursor.fetchall()
+
+
 @app.get("/addresses/user/{user_id}")
 def get_user_addresses(user_id: int):
     """
@@ -801,30 +847,7 @@ def get_cart(user_id: int):
     """
     try:
         with get_db() as conn:
-            with conn.cursor() as cursor:
-                sql = """
-                    SELECT
-                        user_id,
-                        email,
-                        cart_id,
-                        cart_item_id,
-                        product_id,
-                        product_name,
-                        sku_id,
-                        sku_name,
-                        price,
-                        quantity,
-                        item_amount,
-                        available_stock,
-                        cart_status,
-                        created_at,
-                        updated_at
-                    FROM v_user_cart_detail
-                    WHERE user_id = %s
-                    ORDER BY cart_item_id
-                """
-                cursor.execute(sql, (user_id,))
-                rows = cursor.fetchall()
+            rows = query_cart_rows(conn, user_id)
 
         total_amount = sum(float(row["item_amount"]) for row in rows)
 
@@ -861,32 +884,7 @@ def add_to_cart(req: CartAddRequest):
                 conn.commit()
 
                 # 加入成功后，再查询一次用户购物车，方便前端直接刷新页面
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            user_id,
-                            email,
-                            cart_id,
-                            cart_item_id,
-                            product_id,
-                            product_name,
-                            sku_id,
-                            sku_name,
-                            price,
-                            quantity,
-                            item_amount,
-                            available_stock,
-                            cart_status,
-                            created_at,
-                            updated_at
-                        FROM v_user_cart_detail
-                        WHERE user_id = %s
-                        ORDER BY cart_item_id
-                        """,
-                        (req.user_id,)
-                    )
-                    rows = cursor.fetchall()
+                rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
                 conn.rollback()
@@ -938,32 +936,7 @@ def update_cart_quantity(req: CartUpdateQuantityRequest):
 
                 conn.commit()
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            user_id,
-                            email,
-                            cart_id,
-                            cart_item_id,
-                            product_id,
-                            product_name,
-                            sku_id,
-                            sku_name,
-                            price,
-                            quantity,
-                            item_amount,
-                            available_stock,
-                            cart_status,
-                            created_at,
-                            updated_at
-                        FROM v_user_cart_detail
-                        WHERE user_id = %s
-                        ORDER BY cart_item_id
-                        """,
-                        (req.user_id,)
-                    )
-                    rows = cursor.fetchall()
+                rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
                 conn.rollback()
@@ -1013,32 +986,7 @@ def delete_cart_item(req: CartDeleteItemRequest):
 
                 conn.commit()
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            user_id,
-                            email,
-                            cart_id,
-                            cart_item_id,
-                            product_id,
-                            product_name,
-                            sku_id,
-                            sku_name,
-                            price,
-                            quantity,
-                            item_amount,
-                            available_stock,
-                            cart_status,
-                            created_at,
-                            updated_at
-                        FROM v_user_cart_detail
-                        WHERE user_id = %s
-                        ORDER BY cart_item_id
-                        """,
-                        (req.user_id,)
-                    )
-                    rows = cursor.fetchall()
+                rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
                 conn.rollback()

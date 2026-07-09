@@ -792,6 +792,31 @@ test('refund order backend wiring is present in source and sql', () => {
   assert.ok(sql.includes('product_sales_stat'));
 });
 
+test('cart invalid-item source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(backend.includes('product_status'));
+  assert.ok(backend.includes('product_is_deleted'));
+  assert.ok(backend.includes('sku_status'));
+  assert.ok(backend.includes('sku_is_deleted'));
+  assert.ok(mainJs.includes('function getCartItemInvalidReason(item)'));
+  assert.ok(mainJs.includes('function isCartItemCheckoutable(item)'));
+  assert.ok(mainJs.includes('function getInvalidCartItems(cartItems)'));
+  assert.ok(mainJs.includes('cart-item--invalid'));
+  assert.ok(mainJs.includes('cart-item__warning'));
+  assert.ok(mainJs.includes('商品已下架'));
+  assert.ok(mainJs.includes('商品已删除'));
+  assert.ok(mainJs.includes('当前规格已下架'));
+  assert.ok(mainJs.includes('当前规格已删除'));
+  assert.ok(mainJs.includes('库存不足'));
+  assert.ok(mainJs.includes('getInvalidCartItems(selectedCartItems)'));
+  assert.ok(mainJs.includes('getCartItemInvalidReason(item)'));
+  assert.ok(styles.includes('.cart-item--invalid'));
+  assert.ok(styles.includes('.cart-item__warning'));
+});
+
 test('frontend purchase record refund wiring is present', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
 

@@ -624,6 +624,22 @@ body.has-modal {
   box-shadow: 0 16px 34px rgba(75, 143, 223, 0.14);
 }
 
+.cart-item--invalid {
+  border-color: rgba(194, 92, 92, 0.3);
+  background:
+    linear-gradient(180deg, rgba(255, 246, 246, 0.96), rgba(255, 238, 238, 0.9)),
+    rgba(255, 255, 255, 0.5);
+  box-shadow: 0 14px 30px rgba(194, 92, 92, 0.08);
+}
+
+.cart-item--invalid.is-selected {
+  border-color: rgba(194, 92, 92, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 236, 236, 0.96), rgba(255, 228, 228, 0.9)),
+    rgba(255, 255, 255, 0.5);
+  box-shadow: 0 16px 32px rgba(194, 92, 92, 0.12);
+}
+
 .cart-item__select {
   position: relative;
   align-self: center;
@@ -640,6 +656,11 @@ body.has-modal {
 
 .cart-item__select:hover {
   border-color: rgba(105, 174, 230, 0.9);
+}
+
+.cart-item__select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .cart-item__select-icon {
@@ -668,6 +689,32 @@ body.has-modal {
   opacity: 1;
   transform: scale(1);
   color: white;
+}
+
+.cart-item__right-actions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.cart-item__status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cart-item__status-badge--valid {
+  color: #4f8f57;
+  background: rgba(113, 173, 116, 0.14);
+}
+
+.cart-item__status-badge--invalid {
+  color: #b95454;
+  background: rgba(194, 92, 92, 0.12);
 }
 
 .cart-item__thumb-wrap {
@@ -716,6 +763,14 @@ body.has-modal {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.5;
+}
+
+.cart-item__warning {
+  margin: 0;
+  color: #b95454;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  font-weight: 600;
 }
 
 .cart-item__subtotal {
@@ -792,6 +847,18 @@ body.has-modal {
   width: 100%;
   display: grid;
   gap: 14px;
+}
+
+.cart-summary__warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(194, 92, 92, 0.2);
+  background: rgba(255, 246, 246, 0.92);
+  color: #b95454;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  font-weight: 600;
 }
 
 .cart-summary__address,

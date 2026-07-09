@@ -507,6 +507,49 @@ function findOverStockCartItems(cartItems) {
   });
 }
 
+function getCartItemInvalidReason(item) {
+  const productIsDeleted = Number(item?.productIsDeleted ?? item?.product_is_deleted ?? 0);
+  const productStatus = normalizeStatus(item?.productStatus || item?.product_status || item?.status || "");
+  const skuIsDeleted = Number(item?.skuIsDeleted ?? item?.sku_is_deleted ?? 0);
+  const skuStatus = normalizeStatus(item?.skuStatus || item?.sku_status || item?.skuStatusLabel || "");
+  const availableStock = Math.max(0, Number(item?.availableStock ?? item?.available_stock ?? 0));
+  const quantity = Math.max(1, Number(item?.quantity || 1));
+
+  if (productIsDeleted === 1) {
+    return "商品已删除，不能结算";
+  }
+
+  if (productStatus && productStatus !== "ON_SALE") {
+    return "商品已下架，不能结算";
+  }
+
+  if (skuIsDeleted === 1) {
+    return "当前规格已删除，不能结算";
+  }
+
+  if (skuStatus && skuStatus !== "ON_SALE") {
+    return "当前规格已下架，不能结算";
+  }
+
+  if (availableStock <= 0) {
+    return "当前规格已售罄，不能结算";
+  }
+
+  if (quantity > availableStock) {
+    return `库存不足，仅剩 ${availableStock} 件，不能结算`;
+  }
+
+  return "";
+}
+
+function isCartItemCheckoutable(item) {
+  return !getCartItemInvalidReason(item);
+}
+
+function getInvalidCartItems(cartItems) {
+  return (Array.isArray(cartItems) ? cartItems : []).filter((item) => !isCartItemCheckoutable(item));
+}
+
 function setSelectedSku(productId, skuId) {
   selectedSkuByProductId.set(productId, Number(skuId));
   updateView();
@@ -771,6 +814,20 @@ function convertApiCartRows(apiRows) {
       products.find((product) => product.productId === Number(row.product_id)) ||
       products.find((product) => product.skuId === Number(row.sku_id)) ||
       products[0];
+    const productStatus = normalizeStatus(row.product_status || "ON_SALE");
+    const productIsDeleted = Number(row.product_is_deleted || 0);
+    const skuStatus = normalizeStatus(row.sku_status || "ON_SALE");
+    const skuIsDeleted = Number(row.sku_is_deleted || 0);
+    const availableStock = Number(row.available_stock || 0);
+    const quantity = Number(row.quantity || 1);
+    const invalidReason = getCartItemInvalidReason({
+      productStatus,
+      productIsDeleted,
+      skuStatus,
+      skuIsDeleted,
+      availableStock,
+      quantity,
+    });
 
     return {
       id: `sku-${row.sku_id}`,
@@ -785,8 +842,19 @@ function convertApiCartRows(apiRows) {
       image: matchedProduct?.image || staticProducts[0]?.image || "",
 
       price: Number(row.price || 0),
-      quantity: Number(row.quantity || 1),
-      availableStock: Number(row.available_stock || 0),
+      quantity,
+      availableStock,
+      lockedStock: Number(row.locked_stock || 0),
+      productStatus,
+      productIsDeleted,
+      skuStatus,
+      skuIsDeleted,
+      productIsValid: productIsDeleted !== 1 && productStatus === "ON_SALE",
+      skuIsValid: skuIsDeleted !== 1 && skuStatus === "ON_SALE",
+      invalidReason,
+      checkoutable: !invalidReason,
+      cartStatus: String(row.cart_status || "").trim(),
+      itemAmount: Number(row.item_amount || 0),
     };
   });
 }
@@ -1114,13 +1182,15 @@ async function submitCartCheckout() {
   const selectedIds = getStoredCartSelections(storage);
   const selectedCartItemIds = getSelectedCartItemIds(cart, selectedIds);
   const selectedCartItems = cart.filter((item) => selectedIds.includes(item.id));
-  const overStockItems = findOverStockCartItems(selectedCartItems);
+  const invalidCartItems = getInvalidCartItems(selectedCartItems);
 
-  if (overStockItems.length) {
-    const itemNames = overStockItems.map((item) => item.name).join("、");
+  if (invalidCartItems.length) {
+    const itemNames = invalidCartItems
+      .map((item) => `${item.name}（${getCartItemInvalidReason(item)}）`)
+      .join("、");
     setFeedback(
       sidebarCartFeedback,
-      `提交订单失败：以下商品库存不足或购买数量超过库存：${itemNames}`,
+      `提交订单失败：以下商品暂不能结算：${itemNames}`,
       true
     );
     return;
@@ -2695,6 +2765,14 @@ function isCartItemSelected(selectedIds, itemId) {
 
 function toggleCartSelection(itemId) {
   const selectedIds = getStoredCartSelections(storage);
+  const cart = getStoredCart(storage);
+  const item = cart.find((cartItem) => cartItem.id === itemId);
+
+  if (item && !isCartItemCheckoutable(item)) {
+    setFeedback(sidebarCartFeedback, `该商品暂不能结算：${getCartItemInvalidReason(item)}`, true);
+    return selectedIds;
+  }
+
   const nextSelectedIds = selectedIds.includes(itemId)
     ? selectedIds.filter((id) => id !== itemId)
     : [...selectedIds, itemId];
@@ -2872,16 +2950,19 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
       const subtotal = getCartItemTotal(item);
       const isSelected = isCartItemSelected(selectedIds, item.id);
       const availableStock = Math.max(0, Number(item.availableStock || 0));
-      const canIncrease = availableStock > 0 && quantity < availableStock;
+      const invalidReason = getCartItemInvalidReason(item);
+      const isInvalid = Boolean(invalidReason);
+      const canIncrease = !isInvalid && availableStock > 0 && quantity < availableStock;
 
       return `
-        <article class="cart-item ${isSelected ? 'is-selected' : ''}" data-cart-item-id="${item.id}">
+        <article class="cart-item ${isSelected ? 'is-selected' : ''} ${isInvalid ? 'cart-item--invalid' : ''}" data-cart-item-id="${item.id}">
           <button
             class="cart-item__select"
             type="button"
             data-cart-select-id="${item.id}"
-            aria-label="${isSelected ? '取消选择' : '选择商品'}"
+            aria-label="${isInvalid ? invalidReason : (isSelected ? '取消选择' : '选择商品')}"
             aria-pressed="${isSelected ? 'true' : 'false'}"
+            ${isInvalid ? 'disabled' : ''}
           >
             <span class="cart-item__select-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -2899,6 +2980,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                 <p class="cart-item__meta">${item.category || '商品'}</p>
               </div>
               <div class="cart-item__right-actions">
+                <span class="cart-item__status-badge ${isInvalid ? 'cart-item__status-badge--invalid' : 'cart-item__status-badge--valid'}">${isInvalid ? '无效商品' : '可结算'}</span>
                 <strong class="cart-item__subtotal">${formatCartMoney(subtotal)}</strong>
                 <button
                   class="cart-item__delete"
@@ -2932,6 +3014,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                 </div>
               </div>
             </div>
+            ${isInvalid ? `<p class="cart-item__warning">${escapeHtml(invalidReason)}</p>` : ''}
           </div>
         </article>
       `;
@@ -2946,6 +3029,7 @@ function renderCartSummary(cart, selectedIds) {
 
   const cartItems = Array.isArray(cart) ? cart : [];
   const safeSelectedIds = Array.isArray(selectedIds) ? selectedIds : [];
+  const invalidItems = getInvalidCartItems(cartItems);
   const selectedTotals = getCartTotals(cartItems, safeSelectedIds);
   const allTotals = getCartTotals(cartItems, null);
   const paymentLabel = getPaymentMethodLabel(activeCartPaymentMethod);
@@ -2959,6 +3043,7 @@ function renderCartSummary(cart, selectedIds) {
         <span>购物车共 ${allTotals.totalQuantity} 件，已选 ${selectedTotals.totalQuantity} 件</span>
         <strong>${formatCartMoney(selectedTotals.totalAmount)}</strong>
       </div>
+      ${invalidItems.length ? `<p class="cart-summary__warning">购物车中有 ${invalidItems.length} 件无效商品，请先处理后再结算。</p>` : ''}
 
      <div class="cart-summary__address">
         <span>收货地址</span>
@@ -3047,8 +3132,16 @@ function renderSidebar() {
   renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
-  renderCartShelf(cartList, cart, '暂无购物车', selectedIds);
-  renderCartSummary(cart, selectedIds);
+  const invalidItems = getInvalidCartItems(cart);
+  const invalidItemIds = new Set(invalidItems.map((item) => item.id));
+  const validSelectedIds = selectedIds.filter((id) => !invalidItemIds.has(id) && cart.some((item) => item.id === id));
+
+  if (validSelectedIds.length !== selectedIds.length) {
+    saveStoredCartSelections(storage, validSelectedIds);
+  }
+
+  renderCartShelf(cartList, cart, '暂无购物车', validSelectedIds);
+  renderCartSummary(cart, validSelectedIds);
 }
 
 function updateHeroParallax() {

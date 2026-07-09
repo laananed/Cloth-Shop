@@ -146,6 +146,32 @@ test('purchase flow exposes modal hooks in the source and markup', () => {
   assert.ok(html.includes('data-purchase-payment-options'));
   assert.ok(mainJs.includes('data-purchase-launch'));
   assert.ok(mainJs.includes('data-purchase-total'));
+  assert.ok(mainJs.includes('openPurchaseModal'));
+  assert.ok(mainJs.includes('renderPurchaseModal'));
+  assert.ok(mainJs.includes('createDirectOrderFromApi'));
+  assert.ok(mainJs.includes('data-purchase-launch="buy"'));
+});
+
+test('purchase modal source keeps product selection before derived state', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderStart = mainJs.indexOf('function renderPurchaseModal() {');
+  const renderEnd = mainJs.indexOf('async function openPurchaseModal(product) {', renderStart);
+
+  assert.ok(renderStart >= 0);
+  assert.ok(renderEnd > renderStart);
+
+  const renderBody = mainJs.slice(renderStart, renderEnd);
+  const productIndex = renderBody.indexOf('const product = activePurchaseProduct;');
+  const selectedSkuIndex = renderBody.indexOf('const selectedSku = getPurchaseSelectedSku(product);');
+  const productStateIndex = renderBody.indexOf('getProductDisplayState(product)');
+  const selectedSkuOnSaleIndex = renderBody.indexOf('selectedSkuOnSale');
+
+  assert.ok(productIndex >= 0);
+  assert.ok(selectedSkuIndex >= 0);
+  assert.ok(productStateIndex >= 0);
+  assert.ok(selectedSkuOnSaleIndex >= 0);
+  assert.ok(productIndex < productStateIndex);
+  assert.ok(selectedSkuIndex < selectedSkuOnSaleIndex);
 });
 
 test('purchase button click handling does not require a sidebar action hook', () => {
@@ -625,6 +651,59 @@ test('admin product view prepares cards for the product list', () => {
   assert.ok(rendered.rows.length > 0);
   assert.equal(typeof rendered.rows[0].name, 'string');
   assert.equal(typeof rendered.rows[0].priceLabel, 'string');
+});
+
+test('admin product management source includes logical delete wiring', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(mainJs.includes('async function deleteAdminProductToApi(productId)'));
+  assert.ok(mainJs.includes('data-admin-product-delete-id'));
+  assert.ok(mainJs.includes('确定要删除这个商品吗？删除后前台和后台默认商品列表将不再显示，但历史订单数据不会被物理删除。'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
+  assert.ok(backend.includes('@app.post("/admin/products/delete")'));
+  assert.ok(backend.includes('AdminProductDeleteRequest'));
+  assert.ok(backend.includes("SET is_deleted = 1, status = 'OFF_SALE'"));
+  assert.ok(backend.includes('WHERE product_id = %s'));
+});
+
+test('admin product filtering source wiring is present', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(html.includes('data-admin-product-filter-bar'));
+  assert.ok(html.includes('data-admin-product-summary') && html.includes('hidden'));
+  assert.ok(mainJs.includes('activeAdminProductFilter'));
+  assert.ok(mainJs.includes('data-admin-product-filter'));
+  assert.ok(mainJs.includes('SOLD_OUT'));
+  assert.ok(mainJs.includes('OFF_SALE'));
+  assert.ok(mainJs.includes('ON_SALE'));
+  assert.ok(mainJs.includes('productSummary.hidden = true'));
+});
+
+test('refund order backend wiring is present in source and sql', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const sql = readFileSync('06_add_refund_order.sql', 'utf8');
+
+  assert.ok(backend.includes('RefundOrderRequest'));
+  assert.ok(backend.includes('@app.post("/orders/refund")'));
+  assert.ok(backend.includes('sp_refund_paid_order'));
+  assert.ok(sql.includes('sp_refund_paid_order'));
+  assert.ok(sql.includes('REFUNDED'));
+  assert.ok(sql.includes('REFUND_RESTORE'));
+  assert.ok(sql.includes('product_sales_stat'));
+});
+
+test('frontend purchase record refund wiring is present', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('REFUNDED'));
+  assert.ok(mainJs.includes('已退款'));
+  assert.ok(mainJs.includes('data-order-refund-id'));
+  assert.ok(mainJs.includes('refundOrderFromApi'));
+  assert.ok(mainJs.includes('handleRefundOrder'));
+  assert.ok(mainJs.includes('refundingOrderIds'));
+  assert.ok(mainJs.includes('/orders/refund'));
 });
 
 test('front page exposes a visible admin entry point', () => {

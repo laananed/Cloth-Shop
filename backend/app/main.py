@@ -118,6 +118,15 @@ class ProductCreateRequest(BaseModel):
     price: float = Field(..., gt=0, description="SKU 售价")
     available_stock: int = Field(..., ge=0, description="初始可用库存")
 
+class AdminStockUpdateRequest(BaseModel):
+    sku_id: int = Field(..., gt=0, description="要修改库存的 SKU ID")
+    available_stock: int = Field(..., ge=0, description="新的可用库存数量")
+
+
+class AdminProductStatusUpdateRequest(BaseModel):
+    product_id: int = Field(..., gt=0, description="要修改状态的商品 ID")
+    status: str = Field(..., description="商品状态：ON_SALE 或 OFF_SALE")
+
 @app.get("/")
 def root():
     return {
@@ -174,6 +183,8 @@ def get_products():
                         product_created_at,
                         product_updated_at
                     FROM v_product_detail
+                    WHERE product_status = 'ON_SALE'
+                      AND sku_status = 'ON_SALE'
                     ORDER BY product_id, sku_id
                 """
                 cursor.execute(sql)
@@ -1762,6 +1773,285 @@ def get_admin_stats():
             status_code=500,
             detail=f"查询后台销量统计失败：{str(e)}"
         )
+
+@app.get("/admin/inventory")
+def get_admin_inventory():
+    """
+    后台库存列表。
+    显示所有未逻辑删除的商品 SKU，包括上架和下架商品。
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        category_id,
+                        category_name,
+                        product_id,
+                        product_name,
+                        image_url,
+                        product_status,
+                        sku_id,
+                        sku_name,
+                        price,
+                        sku_status,
+                        available_stock,
+                        locked_stock,
+                        total_sold_count,
+                        total_sales_amount,
+                        product_created_at,
+                        product_updated_at
+                    FROM v_product_detail
+                    ORDER BY product_id DESC, sku_id ASC
+                    """
+                )
+                rows = cursor.fetchall()
+
+        return {
+            "success": True,
+            "message": "查询后台库存列表成功",
+            "count": len(rows),
+            "data": jsonable_encoder(rows)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询后台库存列表失败：{str(e)}"
+        )
+
+
+@app.post("/admin/inventory/update-stock")
+def update_admin_stock(req: AdminStockUpdateRequest):
+    """
+    后台修改 SKU 可用库存。
+    注意：这里修改的是 available_stock，不直接修改 locked_stock。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    # 1. 确认 SKU 存在且未被逻辑删除
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM product_sku
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.sku_id,)
+                    )
+                    sku = cursor.fetchone()
+
+                    if not sku:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="SKU 不存在或已删除"
+                        )
+
+                    # 2. 锁定库存行，避免并发修改
+                    cursor.execute(
+                        """
+                        SELECT id, locked_stock
+                        FROM inventory
+                        WHERE sku_id = %s
+                        FOR UPDATE
+                        """,
+                        (req.sku_id,)
+                    )
+                    inventory = cursor.fetchone()
+
+                    # 3. 如果库存记录不存在，则新建；存在则更新
+                    if inventory:
+                        cursor.execute(
+                            """
+                            UPDATE inventory
+                            SET available_stock = %s
+                            WHERE sku_id = %s
+                            """,
+                            (req.available_stock, req.sku_id)
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO inventory(
+                                sku_id,
+                                available_stock,
+                                locked_stock
+                            )
+                            VALUES(%s, %s, 0)
+                            """,
+                            (req.sku_id, req.available_stock)
+                        )
+
+                conn.commit()
+
+                # 4. 返回修改后的库存详情
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            category_id,
+                            category_name,
+                            product_id,
+                            product_name,
+                            image_url,
+                            product_status,
+                            sku_id,
+                            sku_name,
+                            price,
+                            sku_status,
+                            available_stock,
+                            locked_stock,
+                            total_sold_count,
+                            total_sales_amount,
+                            product_created_at,
+                            product_updated_at
+                        FROM v_product_detail
+                        WHERE sku_id = %s
+                        """,
+                        (req.sku_id,)
+                    )
+                    row = cursor.fetchone()
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "库存修改成功",
+            "data": jsonable_encoder(row)
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"库存修改失败：{str(e)}"
+        )
+
+
+@app.post("/admin/products/update-status")
+def update_admin_product_status(req: AdminProductStatusUpdateRequest):
+    """
+    后台修改商品上下架状态。
+    第一版：商品和该商品下全部 SKU 状态保持一致。
+    """
+    new_status = req.status.strip().upper()
+
+    if new_status not in {"ON_SALE", "OFF_SALE"}:
+        raise HTTPException(
+            status_code=400,
+            detail="商品状态只能是 ON_SALE 或 OFF_SALE"
+        )
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    # 1. 确认商品存在且未删除
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM product
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.product_id,)
+                    )
+                    product = cursor.fetchone()
+
+                    if not product:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="商品不存在或已删除"
+                        )
+
+                    # 2. 修改商品主表状态
+                    cursor.execute(
+                        """
+                        UPDATE product
+                        SET status = %s
+                        WHERE id = %s
+                        """,
+                        (new_status, req.product_id)
+                    )
+
+                    # 3. 第一版同步修改该商品下面全部 SKU 状态
+                    cursor.execute(
+                        """
+                        UPDATE product_sku
+                        SET status = %s
+                        WHERE product_id = %s
+                          AND is_deleted = 0
+                        """,
+                        (new_status, req.product_id)
+                    )
+
+                conn.commit()
+
+                # 4. 返回修改后的商品详情
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            category_id,
+                            category_name,
+                            product_id,
+                            product_name,
+                            image_url,
+                            product_status,
+                            sku_id,
+                            sku_name,
+                            price,
+                            sku_status,
+                            available_stock,
+                            locked_stock,
+                            total_sold_count,
+                            total_sales_amount,
+                            product_created_at,
+                            product_updated_at
+                        FROM v_product_detail
+                        WHERE product_id = %s
+                        ORDER BY sku_id ASC
+                        """,
+                        (req.product_id,)
+                    )
+                    rows = cursor.fetchall()
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "商品状态修改成功",
+            "product_id": req.product_id,
+            "status": new_status,
+            "data": jsonable_encoder(rows)
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"商品状态修改失败：{str(e)}"
+        )
+
 
 @app.get("/orders/{order_id}")
 def get_order_detail(order_id: int):

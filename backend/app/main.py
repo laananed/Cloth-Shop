@@ -183,8 +183,6 @@ def get_products():
                         product_created_at,
                         product_updated_at
                     FROM v_product_detail
-                    WHERE product_status = 'ON_SALE'
-                      AND sku_status = 'ON_SALE'
                     ORDER BY product_id, sku_id
                 """
                 cursor.execute(sql)

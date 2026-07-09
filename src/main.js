@@ -195,6 +195,64 @@ async function testLoadProductsFromApi() {
   }
 }
 
+function normalizeStatus(status) {
+  return String(status || "").trim().toUpperCase();
+}
+
+function isOnSale(status) {
+  return normalizeStatus(status) === "ON_SALE";
+}
+
+function getProductDisplayState(product) {
+  const productOnSale = isOnSale(product.productStatus || product.status);
+
+  if (!productOnSale) {
+    return {
+      key: "OFF_SALE",
+      label: "已下架",
+      message: "该商品已下架，暂不可购买",
+      priority: 2,
+    };
+  }
+
+  const hasAvailableSku = (product.skuList || []).some((sku) => {
+    return isOnSale(sku.skuStatus || sku.status) && Number(sku.availableStock || 0) > 0;
+  });
+
+  if (!hasAvailableSku) {
+    return {
+      key: "SOLD_OUT",
+      label: "已售罄",
+      message: "该商品库存不足，暂不可购买",
+      priority: 1,
+    };
+  }
+
+  return {
+    key: "AVAILABLE",
+    label: "可购买",
+    message: "",
+    priority: 0,
+  };
+}
+
+function compareProductsForCustomer(a, b) {
+  const stateA = getProductDisplayState(a);
+  const stateB = getProductDisplayState(b);
+
+  if (stateA.priority !== stateB.priority) {
+    return stateA.priority - stateB.priority;
+  }
+
+  const salesDiff = Number(b.sales || 0) - Number(a.sales || 0);
+  if (salesDiff !== 0) {
+    return salesDiff;
+  }
+
+  return Number(b.productId || 0) - Number(a.productId || 0);
+}
+
+
 function convertApiProducts(apiRows) {
   const productMap = new Map();
 
@@ -224,6 +282,7 @@ function convertApiProducts(apiRows) {
 
         name: row.product_name,
         category: row.category_name,
+        productStatus: normalizeStatus(row.product_status || "ON_SALE"),
         badge: "数据库商品",
 
         price: Number(row.price || 0),
@@ -239,6 +298,7 @@ function convertApiProducts(apiRows) {
             price: Number(row.price || 0),
             availableStock: Number(row.available_stock || 0),
             lockedStock: Number(row.locked_stock || 0),
+            skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
           },
         ],
 
@@ -265,6 +325,7 @@ function convertApiProducts(apiRows) {
       price: Number(row.price || 0),
       availableStock: Number(row.available_stock || 0),
       lockedStock: Number(row.locked_stock || 0),
+      skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
     });
 
     product.price = Math.min(product.price, Number(row.price || 0));
@@ -273,11 +334,19 @@ function convertApiProducts(apiRows) {
     product.lockedStock += Number(row.locked_stock || 0);
   });
 
-  return Array.from(productMap.values()).map((product) => {
-    product.detail = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
-    product.skuId = product.defaultSkuId;
-    return product;
-  });
+  return Array.from(productMap.values())
+    .map((product) => {
+      const state = getProductDisplayState(product);
+
+      product.detail = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
+      product.skuId = product.defaultSkuId;
+      product.saleState = state.key;
+      product.saleStateLabel = state.label;
+      product.saleStateMessage = state.message;
+
+      return product;
+    })
+    .sort(compareProductsForCustomer);
 }
 
 async function loadProductsFromApi() {
@@ -396,21 +465,28 @@ function renderProductSkuOptions(product) {
   }
 
   const selectedSku = getSelectedSku(product);
+  const productOnSale = isOnSale(product.productStatus || product.status);
 
   return `
     <div class="product-card__sku-options" aria-label="选择商品规格">
       ${skuList
-        .map(
-          (sku) => `
+        .map((sku) => {
+          const skuDisabled =
+            !productOnSale ||
+            !isOnSale(sku.skuStatus || sku.status) ||
+            Number(sku.availableStock || 0) <= 0;
+
+          return `
             <button
-              class="product-card__sku-button ${Number(sku.skuId) === Number(selectedSku?.skuId) ? 'is-active' : ''}"
+              class="product-card__sku-button ${Number(sku.skuId) === Number(selectedSku?.skuId) ? 'is-active' : ''} ${skuDisabled ? 'is-disabled' : ''}"
               type="button"
               data-product-sku-id="${sku.skuId}"
+              ${skuDisabled ? 'disabled' : ''}
             >
-              ${escapeHtml(sku.skuName || '默认规格')}
+              ${escapeHtml(sku.skuName || '默认规格')}${skuDisabled ? '（无货）' : ''}
             </button>
-          `,
-        )
+          `;
+        })
         .join('')}
     </div>
   `;
@@ -666,6 +742,19 @@ async function addCartToApi(product) {
   const selectedSku = getSelectedSku(product);
   const skuId = selectedSku?.skuId || product.defaultSkuId || product.skuId;
   const availableStock = getSkuAvailableStock(selectedSku);
+  const productState = getProductDisplayState(product);
+
+  if (productState.key !== "AVAILABLE") {
+    setFeedback(sidebarCartFeedback, `加入购物车失败：${productState.message}`, true);
+    openSidebar("cart");
+    return;
+  }
+
+  if (!isOnSale(selectedSku?.skuStatus || "ON_SALE")) {
+    setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格已下架。", true);
+    openSidebar("cart");
+    return;
+  }
 
   if (availableStock <= 0) {
     setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格库存不足。", true);
@@ -1639,13 +1728,22 @@ function renderProducts() {
       const displayPrice = Number(selectedSku?.price ?? product.price ?? 0);
       const selectedSkuName = selectedSku?.skuName || '默认规格';
       const selectedStock = Number(selectedSku?.availableStock ?? product.availableStock ?? 0);
-      const isSelectedSkuInStock = selectedStock > 0;
-      const stockLabel = getStockLabel(selectedStock);
+      const productState = getProductDisplayState(product);
+      const productStateClass = `product-card--${productState.key.toLowerCase()}`;
+      const isProductAvailable = productState.key === "AVAILABLE";
+      const isSelectedSkuPurchasable =
+        isProductAvailable &&
+        isOnSale(selectedSku?.skuStatus || "ON_SALE") &&
+        selectedStock > 0;
+      const stockLabel = productState.key === "OFF_SALE"
+        ? "已下架"
+        : getStockLabel(selectedStock);
 
       return `
-        <article class="product-card ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
+        <article class="product-card ${productStateClass} ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
+          <div class="product-card__state product-card__state--${productState.key.toLowerCase()}">${productState.label}</div>
           <div class="product-card__art" aria-hidden="true">
             <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" style="${getProductImageStyle(product)}" loading="lazy" decoding="async" />
             <span class="product-card__art-overlay"></span>
@@ -1693,7 +1791,7 @@ function renderProducts() {
                   `
             }
             ${renderProductSkuOptions(product)}
-            <p class="product-card__sku-current ${isSelectedSkuInStock ? '' : 'is-sold-out'}">
+            <p class="product-card__sku-current ${isSelectedSkuPurchasable ? '' : 'is-sold-out'}">
               当前规格：${escapeHtml(selectedSkuName)}，${escapeHtml(stockLabel)}
             </p>
             <div class="product-card__footer">
@@ -1709,7 +1807,7 @@ function renderProducts() {
                   class="ghost-button ghost-button--icon ghost-button--icon-outline"
                   aria-label="加入购物车"
                   data-sidebar-launch="cart"
-                  ${isSelectedSkuInStock ? '' : 'disabled'}
+                  ${isSelectedSkuPurchasable ? '' : 'disabled'}
                 >
                   <span class="ghost-button__icon">${getCartIcon()}</span>
                 </button>
@@ -1717,9 +1815,9 @@ function renderProducts() {
                   type="button"
                   class="ghost-button ghost-button--solid ghost-button--buy"
                   data-purchase-launch="buy"
-                  ${isSelectedSkuInStock ? '' : 'disabled'}
+                  ${isSelectedSkuPurchasable ? '' : 'disabled'}
                 >
-                  ${isSelectedSkuInStock ? '立即购买' : '已售罄'}
+                  ${isSelectedSkuPurchasable ? '立即购买' : productState.label}
                 </button>
                     `
                     : `
@@ -1887,6 +1985,8 @@ function renderPurchaseModal() {
   }
 
   const selectedAddress = getDbAddressById(activePurchaseAddressId) || getDefaultDbAddress();
+  const productState = getProductDisplayState(product);
+  const selectedSkuOnSale = isOnSale(selectedSku?.skuStatus || "ON_SALE");
 
 if (selectedAddress) {
   activePurchaseAddressId = Number(selectedAddress.id);
@@ -1901,7 +2001,12 @@ if (selectedAddress) {
     availableStock > 0 ? availableStock : 1
   );
   const total = product ? displayPrice * quantity : 0;
-  const canSubmitPurchase = Boolean(product) && availableStock > 0 && quantity <= availableStock;
+  const canSubmitPurchase =
+    Boolean(product) &&
+    productState.key === "AVAILABLE" &&
+    selectedSkuOnSale &&
+    availableStock > 0 &&
+    quantity <= availableStock;
 
   if (purchaseTitle) {
     purchaseTitle.textContent = product?.name || '立即购买';
@@ -1952,18 +2057,24 @@ if (selectedAddress) {
       purchaseSkuOptions.innerHTML = '<p class="purchase-empty">默认规格</p>';
     } else {
       purchaseSkuOptions.innerHTML = skuList
-        .map(
-          (sku) => `
+        .map((sku) => {
+          const skuDisabled =
+            productState.key !== "AVAILABLE" ||
+            !isOnSale(sku.skuStatus || sku.status) ||
+            Number(sku.availableStock || 0) <= 0;
+
+          return `
             <button
               type="button"
-              class="purchase-sku ${Number(sku.skuId) === Number(selectedSku?.skuId) ? 'is-active' : ''}"
+              class="purchase-sku ${Number(sku.skuId) === Number(selectedSku?.skuId) ? 'is-active' : ''} ${skuDisabled ? 'is-disabled' : ''}"
               data-purchase-sku-id="${sku.skuId}"
+              ${skuDisabled ? 'disabled' : ''}
             >
-              <span>${escapeHtml(sku.skuName || '默认规格')}</span>
+              <span>${escapeHtml(sku.skuName || '默认规格')}${skuDisabled ? '（无货）' : ''}</span>
               <small>${formatPrice(sku.price)} · 库存 ${Number(sku.availableStock || 0)} 件</small>
             </button>
-          `,
-        )
+          `;
+        })
         .join('');
     }
   }
@@ -1996,7 +2107,9 @@ if (selectedAddress) {
     purchaseSubmit.textContent = product
       ? canSubmitPurchase
         ? `提交订单 ${formatPrice(total)}`
-        : '当前规格库存不足'
+        : productState.key === "OFF_SALE"
+          ? "商品已下架"
+          : "当前规格库存不足"
       : '请选择商品';
   }
 
@@ -2085,6 +2198,17 @@ async function submitPurchaseOrder() {
   const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
   const total = Number(selectedSku?.price ?? activePurchaseProduct.price ?? 0) * quantity;
   const availableStock = getSkuAvailableStock(selectedSku);
+  const productState = getProductDisplayState(activePurchaseProduct);
+
+  if (productState.key !== "AVAILABLE") {
+    setFeedback(purchaseFeedback, `提交订单失败：${productState.message}`, true);
+    return;
+  }
+
+  if (!isOnSale(selectedSku?.skuStatus || "ON_SALE")) {
+    setFeedback(purchaseFeedback, "提交订单失败：当前规格已下架。", true);
+    return;
+  }
 
   if (availableStock <= 0) {
     setFeedback(purchaseFeedback, "提交订单失败：当前规格库存不足。", true);
@@ -2905,15 +3029,26 @@ function convertApiRowsToAdminProducts(apiRows) {
     product.skuList.push({
       skuId,
       skuName: row.sku_name || "默认规格",
-      price,
-      status: row.sku_status || "UNKNOWN",
-      availableStock,
-      lockedStock,
-      sales,
+      price: Number(row.price || 0),
+      availableStock: Number(row.available_stock || 0),
+      lockedStock: Number(row.locked_stock || 0),
+      sales: Number(row.total_sold_count || 0),
+      skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
     });
   });
 
-  return Array.from(productMap.values());
+  return Array.from(productMap.values())
+    .map((product) => {
+      const state = getProductDisplayState(product);
+
+      return {
+        ...product,
+        saleState: state.key,
+        saleStateLabel: state.label,
+        saleStateMessage: state.message,
+      };
+    })
+    .sort(compareProductsForCustomer);
 }
 
 function renderAdminInventoryProductsView(adminProducts) {
@@ -2921,11 +3056,13 @@ function renderAdminInventoryProductsView(adminProducts) {
     emptyState: adminProducts.length ? null : "暂无商品数据",
     rows: adminProducts.map((product) => ({
       id: product.id,
+      productId: product.productId,
       name: product.name,
       category: product.category,
       priceLabel: formatPrice(product.price),
       badge: product.badge || "数据库商品",
-      status: product.status || "UNKNOWN",
+      status: normalizeStatus(product.status || "UNKNOWN"),
+      image: product.image || "",
       imageLabel: product.imageLabel || "暂无图片",
       createdAt: product.createdAt || "",
 
@@ -2933,6 +3070,7 @@ function renderAdminInventoryProductsView(adminProducts) {
       stock: product.stock || 0,
       lockedStock: product.lockedStock || 0,
       sales: product.sales || 0,
+      skuList: Array.isArray(product.skuList) ? product.skuList : [],
     })),
   };
 }
@@ -3072,20 +3210,86 @@ async function refreshAdminProductsFromApi() {
     }
 
     productList.innerHTML = renderedProducts.rows
-      .map(
-        (row) => `
-          <article class="admin-row">
+  .map((row) => {
+    const imageSrc = getAdminImageSrc(row.image);
+    const isOnSaleProduct = normalizeStatus(row.status) === "ON_SALE";
+    const statusLabel = isOnSaleProduct ? "在售" : "已下架";
+    const nextStatus = isOnSaleProduct ? "OFF_SALE" : "ON_SALE";
+    const nextStatusText = isOnSaleProduct ? "下架商品" : "重新上架";
+
+    return `
+      <article class="admin-row admin-product-row" data-admin-product-id="${row.productId}">
+        <div class="admin-product-row__main">
+          <div class="admin-product-thumb-wrap">
+            ${
+              imageSrc
+                ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 预览图" loading="lazy" decoding="async" />`
+                : `<div class="admin-product-thumb admin-product-thumb--empty">暂无图</div>`
+            }
+          </div>
+
+          <div class="admin-product-row__content">
             <div class="admin-row__header">
               <strong>${escapeHtml(row.name)}</strong>
               <span>${escapeHtml(row.priceLabel)}</span>
             </div>
+
             <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
-            <span>${escapeHtml(row.status)} · ${escapeHtml(row.imageLabel)}</span>
+            <span>状态：${escapeHtml(statusLabel)} · ${escapeHtml(row.imageLabel)}</span>
             <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
-          </article>
-        `,
-      )
-      .join('');
+
+            <div class="admin-sku-list">
+              ${row.skuList
+                .map((sku) => {
+                  const skuStatusLabel = normalizeStatus(sku.skuStatus) === "ON_SALE" ? "在售" : "已下架";
+
+                  return `
+                    <div class="admin-sku-row" data-admin-sku-row="${sku.skuId}">
+                      <div class="admin-sku-row__info">
+                        <strong>${escapeHtml(sku.skuName || "默认规格")}</strong>
+                        <span>SKU ID：${escapeHtml(sku.skuId)} · ${escapeHtml(skuStatusLabel)} · 锁定 ${escapeHtml(sku.lockedStock || 0)} · 销量 ${escapeHtml(sku.sales || 0)}</span>
+                      </div>
+
+                      <label class="admin-stock-editor">
+                        <span>可用库存</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value="${escapeHtml(sku.availableStock || 0)}"
+                          data-admin-stock-input="${sku.skuId}"
+                        />
+                      </label>
+
+                      <button
+                        type="button"
+                        class="ghost-button ghost-button--small ghost-button--solid"
+                        data-admin-stock-save="${sku.skuId}"
+                      >
+                        更新库存
+                      </button>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+
+            <div class="admin-product-row__actions">
+              <button
+                type="button"
+                class="ghost-button ghost-button--small ${isOnSaleProduct ? "ghost-button--danger" : "ghost-button--solid"}"
+                data-admin-product-status-id="${row.productId}"
+                data-admin-product-next-status="${nextStatus}"
+              >
+                ${nextStatusText}
+              </button>
+            </div>
+          </div>
+        </div>
+      </article>
+    `;
+  })
+  .join('');
   }
 
   function populateImageSelect() {
@@ -3106,6 +3310,66 @@ async function refreshAdminProductsFromApi() {
     }
   }
 
+function getAdminImageSrc(imageUrl) {
+  const url = String(imageUrl || "").trim();
+
+  if (!url) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  if (url.startsWith("/")) {
+    return `${API_BASE_URL}${url}`;
+  }
+
+  return url;
+}
+
+async function updateAdminSkuStockToApi(skuId, availableStock) {
+  const response = await fetch(`${API_BASE_URL}/admin/inventory/update-stock`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      sku_id: Number(skuId),
+      available_stock: Number(availableStock),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "修改库存失败");
+  }
+
+  return result;
+}
+
+async function updateAdminProductStatusToApi(productId, status) {
+  const response = await fetch(`${API_BASE_URL}/admin/products/update-status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      product_id: Number(productId),
+      status,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "修改商品状态失败");
+  }
+
+  return result;
+}
+  
 async function createAdminProductToApi(values, imageFile) {
   const formData = new FormData();
 
@@ -3219,6 +3483,73 @@ async function createAdminProductToApi(values, imageFile) {
       }
     });
   }
+  if (productList) {
+  productList.addEventListener("click", async (event) => {
+    const stockButton = event.target.closest("[data-admin-stock-save]");
+    const statusButton = event.target.closest("[data-admin-product-status-id]");
+
+    if (stockButton) {
+      const skuId = Number(stockButton.dataset.adminStockSave);
+      const input = productList.querySelector(`[data-admin-stock-input="${skuId}"]`);
+      const nextStock = Number(input?.value);
+
+      if (!Number.isInteger(nextStock) || nextStock < 0) {
+        setFeedback(productFeedback, "库存必须是大于等于 0 的整数。", true);
+        return;
+      }
+
+      try {
+        stockButton.disabled = true;
+        stockButton.textContent = "更新中...";
+
+        await updateAdminSkuStockToApi(skuId, nextStock);
+        setFeedback(productFeedback, `SKU ${skuId} 库存已更新为 ${nextStock}。`);
+
+        await refreshAdminProductsFromApi();
+      } catch (error) {
+        console.error("后台修改库存失败：", error);
+        setFeedback(productFeedback, `修改库存失败：${error.message}`, true);
+      }
+
+      return;
+    }
+
+    if (statusButton) {
+      const productId = Number(statusButton.dataset.adminProductStatusId);
+      const nextStatus = statusButton.dataset.adminProductNextStatus;
+
+      if (!Number.isInteger(productId) || productId <= 0) {
+        setFeedback(productFeedback, "商品 ID 不正确，无法修改状态。", true);
+        return;
+      }
+
+      if (!["ON_SALE", "OFF_SALE"].includes(nextStatus)) {
+        setFeedback(productFeedback, "商品状态不正确，无法修改。", true);
+        return;
+      }
+
+      const actionText = nextStatus === "ON_SALE" ? "重新上架" : "下架";
+      const confirmed = window.confirm(`确定要${actionText}这个商品吗？`);
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        statusButton.disabled = true;
+        statusButton.textContent = "处理中...";
+
+        await updateAdminProductStatusToApi(productId, nextStatus);
+        setFeedback(productFeedback, `商品 ${productId} 已${actionText}。`);
+
+        await refreshAdminProductsFromApi();
+      } catch (error) {
+        console.error("后台修改商品状态失败：", error);
+        setFeedback(productFeedback, `修改商品状态失败：${error.message}`, true);
+      }
+    }
+  });
+}
 
   syncPanels();
   renderOrders();
@@ -3606,8 +3937,15 @@ if (productGrid) {
     }
 
     if (actionButton.dataset.purchaseLaunch === 'buy') {
-      openPurchaseModal(product);
-      return;
+      const productState = getProductDisplayState(product);
+
+      if (productState.key !== "AVAILABLE") {
+          window.alert(productState.message || "该商品暂不可购买");
+          return;
+        }
+
+        openPurchaseModal(product);
+        return;
     }
 
     if (actionButton.dataset.sidebarLaunch === 'favorites') {
@@ -3625,6 +3963,7 @@ if (productGrid) {
 
     if (actionButton.dataset.sidebarLaunch === 'cart') {
         addCartToApi(product);
+        return;
       }
 
       if (actionButton.dataset.sidebarLaunch === 'checkout') {

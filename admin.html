@@ -113,6 +113,17 @@
                   <input type="number" name="stock" min="0" step="1" value="20" placeholder="20" />
                 </label>
 
+
+                <label class="admin-field admin-field--wide">
+                  <span>多 SKU 设置（可选）</span>
+                  <textarea
+                    name="skuRows"
+                    rows="5"
+                    placeholder="一行一个 SKU：SKU名称|价格|库存&#10;例如：白色S码|399|10&#10;白色M码|399|8&#10;灰色L码|429|5"
+                  ></textarea>
+                  <small>填写后优先使用多 SKU；不填写则使用上面的 SKU 名称和初始库存。</small>
+                </label>
+
                 <label class="admin-field">
                   <span>标签</span>
                   <input type="text" name="badge" placeholder="新品 / 热卖 / 推荐" />

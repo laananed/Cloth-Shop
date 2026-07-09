@@ -200,6 +200,106 @@ def get_products():
             detail=f"查询商品列表失败：{str(e)}"
         )
 
+
+def parse_product_skus(
+    skus_json: str | None,
+    sku_name: str,
+    price: float,
+    available_stock: int
+):
+    """
+    解析后台上架商品时传入的 SKU 列表。
+    如果 skus_json 为空，则回退为单 SKU。
+    """
+    if not skus_json or not skus_json.strip():
+        return [
+            {
+                "sku_name": (sku_name or "默认规格").strip() or "默认规格",
+                "price": float(price),
+                "available_stock": int(available_stock),
+            }
+        ]
+
+    try:
+        sku_rows = json.loads(skus_json)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="多 SKU 数据格式错误，必须是 JSON 数组"
+        )
+
+    if not isinstance(sku_rows, list) or not sku_rows:
+        raise HTTPException(
+            status_code=400,
+            detail="多 SKU 至少需要填写一条规格"
+        )
+
+    parsed_rows = []
+    seen_names = set()
+
+    for index, row in enumerate(sku_rows, start=1):
+        if not isinstance(row, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条 SKU 格式错误"
+            )
+
+        current_name = str(row.get("sku_name") or "").strip()
+        current_price = row.get("price")
+        current_stock = row.get("available_stock")
+
+        if not current_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条 SKU 名称不能为空"
+            )
+
+        if current_name in seen_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"SKU 名称重复：{current_name}"
+            )
+
+        try:
+            current_price = float(current_price)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条 SKU 价格不正确"
+            )
+
+        try:
+            current_stock = int(current_stock)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条 SKU 库存不正确"
+            )
+
+        if current_price <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条 SKU 价格必须大于 0"
+            )
+
+        if current_stock < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条 SKU 库存不能小于 0"
+            )
+
+        seen_names.add(current_name)
+
+        parsed_rows.append(
+            {
+                "sku_name": current_name,
+                "price": current_price,
+                "available_stock": current_stock,
+            }
+        )
+
+    return parsed_rows
+
 @app.post("/products")
 async def create_product(
     category_name: str = Form(...),
@@ -207,6 +307,7 @@ async def create_product(
     sku_name: str = Form("默认规格"),
     price: float = Form(...),
     available_stock: int = Form(...),
+    skus_json: str | None = Form(None),
     image: UploadFile | None = File(None),
 ):
     """
@@ -229,6 +330,12 @@ async def create_product(
 
     if available_stock < 0:
         raise HTTPException(status_code=400, detail="初始库存不能小于 0")
+    sku_rows = parse_product_skus(
+        skus_json=skus_json,
+        sku_name=sku_name,
+        price=price,
+        available_stock=available_stock
+    )
 
     image_url = None
 
@@ -282,46 +389,55 @@ async def create_product(
                     product_id = cursor.lastrowid
 
                     # 3. 写入 product_sku 表
-                    cursor.execute(
-                        """
-                        INSERT INTO product_sku(
-                            product_id,
-                            sku_name,
-                            price,
-                            status,
-                            is_deleted
-                        )
-                        VALUES(%s, %s, %s, 'ON_SALE', 0)
-                        """,
-                        (product_id, sku_name, price)
-                    )
-                    sku_id = cursor.lastrowid
+                    sku_ids = []
 
-                    # 4. 写入 inventory 表，初始化库存
-                    cursor.execute(
-                        """
-                        INSERT INTO inventory(
-                            sku_id,
-                            available_stock,
-                            locked_stock
+                    for sku_row in sku_rows:
+                        cursor.execute(
+                            """
+                            INSERT INTO product_sku(
+                                product_id,
+                                sku_name,
+                                price,
+                                status,
+                                is_deleted
+                            )
+                            VALUES(%s, %s, %s, 'ON_SALE', 0)
+                            """,
+                            (
+                                product_id,
+                                sku_row["sku_name"],
+                                sku_row["price"],
+                            )
                         )
-                        VALUES(%s, %s, 0)
-                        """,
-                        (sku_id, available_stock)
-                    )
+                        sku_id = cursor.lastrowid
+                        sku_ids.append(sku_id)
 
-                    # 5. 写入 product_sales_stat 表，初始化销量统计
-                    cursor.execute(
-                        """
-                        INSERT INTO product_sales_stat(
-                            sku_id,
-                            total_sold_count,
-                            total_sales_amount
+                        cursor.execute(
+                            """
+                            INSERT INTO inventory(
+                                sku_id,
+                                available_stock,
+                                locked_stock
+                            )
+                            VALUES(%s, %s, 0)
+                            """,
+                            (
+                                sku_id,
+                                sku_row["available_stock"],
+                            )
                         )
-                        VALUES(%s, 0, 0.00)
-                        """,
-                        (sku_id,)
-                    )
+
+                        cursor.execute(
+                            """
+                            INSERT INTO product_sales_stat(
+                                sku_id,
+                                total_sold_count,
+                                total_sales_amount
+                            )
+                            VALUES(%s, 0, 0.00)
+                            """,
+                            (sku_id,)
+                        )
 
                 conn.commit()
 
@@ -362,7 +478,8 @@ async def create_product(
             "success": True,
             "message": "新增商品成功",
             "product_id": product_id,
-            "sku_id": sku_id,
+            "sku_ids": sku_ids,
+            "sku_count": len(sku_ids),
             "image_url": image_url,
             "data": jsonable_encoder(rows)
         }

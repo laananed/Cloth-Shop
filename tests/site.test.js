@@ -423,6 +423,19 @@ test('backend product queries expose inventory_updated_at from the view', () => 
   assert.ok(!mainJs.includes('暂不可售'));
 });
 
+test('backend product endpoints expose product image collections and accept multiple uploads', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(backend.includes('def query_product_images('));
+  assert.ok(backend.includes('product_image'));
+  assert.ok(backend.includes('images: list[UploadFile] | None = File(None)'));
+  assert.ok(backend.includes('image_url'));
+  assert.ok(backend.includes('image_count'));
+  assert.ok(backend.includes('sort_order'));
+  assert.ok(backend.includes('is_main'));
+  assert.ok(backend.includes('"source": "product.image_url"'));
+  assert.ok(backend.includes('FROM v_product_detail'));
+});
 test('backend and frontend source files do not contain obvious mojibake fragments', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');

@@ -56,6 +56,53 @@ def build_product_image_filename(original_filename: str) -> str:
     import uuid
     return f"{uuid.uuid4().hex}{suffix}"
 
+def query_product_images(conn, product_ids: list[int]) -> dict[int, list[dict]]:
+    ids = sorted({int(product_id) for product_id in product_ids if product_id is not None})
+    if not ids:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(ids))
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT id, product_id, image_url, sort_order, is_main
+            FROM product_image
+            WHERE is_deleted = 0
+              AND product_id IN ({placeholders})
+            ORDER BY product_id, is_main DESC, sort_order ASC, id ASC
+            """,
+            ids
+        )
+        rows = cursor.fetchall()
+
+    image_map = {product_id: [] for product_id in ids}
+    for row in rows:
+        image_map.setdefault(row["product_id"], []).append({
+            "id": row["id"],
+            "image_url": row["image_url"],
+            "sort_order": row["sort_order"],
+            "is_main": row["is_main"],
+        })
+    return image_map
+
+
+def attach_product_images(conn, rows: list[dict]) -> list[dict]:
+    image_map = query_product_images(conn, [row.get("product_id") for row in rows])
+    for row in rows:
+        product_id = row.get("product_id")
+        images = image_map.get(product_id, [])
+        if not images and row.get("image_url"):
+            images = [{
+                "id": None,
+                "image_url": row["image_url"],
+                "sort_order": 0,
+                "is_main": 1,
+                "source": "product.image_url",
+            }]
+        row["images"] = images
+        row["image_count"] = len(images)
+    return rows
+
 
 def create_admin_token(admin_user_id: int) -> str:
     expires_at = int(time.time()) + ADMIN_TOKEN_TTL_SECONDS
@@ -471,6 +518,7 @@ def get_products():
                 """
                 cursor.execute(sql)
                 rows = cursor.fetchall()
+                rows = attach_product_images(conn, rows)
 
         return {
             "success": True,
@@ -639,6 +687,7 @@ async def create_product(
     available_stock: int = Form(...),
     skus_json: str | None = Form(None),
     image: UploadFile | None = File(None),
+    images: list[UploadFile] | None = File(None),
     authorization: str | None = Header(None),
 ):
     """
@@ -670,24 +719,32 @@ async def create_product(
         available_stock=available_stock
     )
 
-    image_url = None
+    uploaded_images = []
+    if image:
+        uploaded_images.append(image)
+    if images:
+        uploaded_images.extend(images)
 
-    if image and image.filename:
-        image_filename = build_product_image_filename(image.filename)
-        image_path = PRODUCT_UPLOAD_DIR / image_filename
+    saved_images = []
+    max_size = 8 * 1024 * 1024
+    for uploaded_image in uploaded_images:
+        if not uploaded_image or not uploaded_image.filename:
+            continue
 
-        content = await image.read()
+        image_filename = build_product_image_filename(uploaded_image.filename)
+        content = await uploaded_image.read()
 
         if not content:
             raise HTTPException(status_code=400, detail="上传的图片文件为空")
 
-        max_size = 8 * 1024 * 1024
         if len(content) > max_size:
-            raise HTTPException(status_code=400, detail="鍥剧墖涓嶈兘瓒呰繃 8MB")
+            raise HTTPException(status_code=400, detail="图片不能超过 8MB")
 
+        image_path = PRODUCT_UPLOAD_DIR / image_filename
         image_path.write_bytes(content)
-        image_url = f"/uploads/products/{image_filename}"
+        saved_images.append(f"/uploads/products/{image_filename}")
 
+    image_url = saved_images[0] if saved_images else None
     try:
         with get_db() as conn:
             try:
@@ -720,6 +777,26 @@ async def create_product(
                         (category_id, product_name, image_url)
                     )
                     product_id = cursor.lastrowid
+                    # 3. 保存商品图片扩展记录，第一张图片兼容为主图。
+                    for sort_order, saved_image_url in enumerate(saved_images):
+                        cursor.execute(
+                            """
+                            INSERT INTO product_image(
+                                product_id,
+                                image_url,
+                                sort_order,
+                                is_main,
+                                is_deleted
+                            )
+                            VALUES(%s, %s, %s, %s, 0)
+                            """,
+                            (
+                                product_id,
+                                saved_image_url,
+                                sort_order,
+                                1 if sort_order == 0 else 0,
+                            )
+                        )
 
                     # 3. 鍐欏叆 product_sku 琛?
                     sku_ids = []
@@ -803,6 +880,7 @@ async def create_product(
                         (product_id,)
                     )
                     rows = cursor.fetchall()
+                    rows = attach_product_images(conn, rows)
 
             except Exception:
                 conn.rollback()
@@ -2717,6 +2795,7 @@ def get_admin_inventory(authorization: str | None = Header(None)):
                     """
                 )
                 rows = cursor.fetchall()
+                rows = attach_product_images(conn, rows)
 
         return {
             "success": True,
@@ -2825,6 +2904,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                         (req.sku_id,)
                     )
                     row = cursor.fetchone()
+                    attach_product_images(conn, [row])
 
             except HTTPException:
                 conn.rollback()
@@ -2940,6 +3020,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                         (req.product_id,)
                     )
                     rows = cursor.fetchall()
+                    rows = attach_product_images(conn, rows)
 
             except HTTPException:
                 conn.rollback()

@@ -1131,6 +1131,21 @@ test('admin product search source wiring is present', () => {
   assert.ok(styles.includes('.admin-product-search__input'));
 });
 
+test('admin product management supports multi-image upload and previews', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(html, /name="image"[^>]*multiple/);
+  assert.match(html, /第一张[^<]*主图/);
+  assert.ok(html.includes('data-admin-image-preview'));
+  assert.ok(mainJs.includes('formData.append("images", file)'));
+  assert.ok(mainJs.includes('getProductImages('));
+  assert.ok(mainJs.includes('image_count'));
+  assert.ok(mainJs.includes('URL.createObjectURL'));
+  assert.ok(styles.includes('.admin-image-preview'));
+  assert.ok(styles.includes('.admin-product-thumbnails'));
+});
 test('admin authentication source wiring is present', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const html = readFileSync('admin.html', 'utf8');

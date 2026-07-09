@@ -175,8 +175,10 @@
               </label>
 
               <label class="admin-field">
-                <span>商品主图</span>
-                <input type="file" name="image" accept="image/*" />
+                <span>商品图片</span>
+                <input type="file" name="image" accept="image/*" multiple />
+                <small>可选择多张图片，第一张将作为主图。</small>
+                <div class="admin-image-preview" data-admin-image-preview hidden aria-live="polite"></div>
               </label>
 
               <label class="admin-field">

@@ -3573,6 +3573,8 @@ function initAdminPage() {
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
   const imageSelect = shell.querySelector('[data-admin-image-select]');
+  const productImageInput = shell.querySelector('input[type="file"][name="image"]');
+  const productImagePreview = shell.querySelector('[data-admin-image-preview]');
   const dashboardTargets = {
     ordersBody,
     statsSummary,
@@ -4084,6 +4086,34 @@ async function refreshAdminStatsFromApi() {
   }
 }
 
+function getProductImages(product) {
+  const sourceImages = Array.isArray(product?.images)
+    ? product.images
+    : Array.isArray(product?.product_images)
+      ? product.product_images
+      : [];
+
+  if (sourceImages.length > 0) {
+    return sourceImages
+      .filter((image) => image && image.image_url)
+      .map((image) => ({
+        id: image.id ?? null,
+        image_url: String(image.image_url),
+        is_main: Number(image.is_main || 0),
+        sort_order: Number(image.sort_order || 0),
+      }));
+  }
+
+  const imageUrl = String(product?.image_url || product?.image || '').trim();
+  return imageUrl
+    ? [{ id: null, image_url: imageUrl, is_main: 1, sort_order: 0 }]
+    : [];
+}
+
+function getProductImageCount(product) {
+  const count = Number(product?.image_count);
+  return Number.isFinite(count) && count >= 0 ? count : getProductImages(product).length;
+}
 function convertApiRowsToAdminProducts(apiRows) {
   const productMap = new Map();
 
@@ -4111,6 +4141,8 @@ function convertApiRowsToAdminProducts(apiRows) {
         badge: "数据库商品",
         status: row.product_status || "UNKNOWN",
         image: imageUrl,
+        images: getProductImages(row),
+        imageCount: getProductImageCount(row),
         imageLabel: imageUrl ? imageUrl.split("/").pop() : "暂无图片",
         createdAt: row.product_created_at || "",
         skuCount: 0,
@@ -4166,6 +4198,8 @@ function renderAdminInventoryProductsView(adminProducts) {
       status: normalizeStatus(product.status || "UNKNOWN"),
       image: product.image || "",
       imageLabel: product.imageLabel || "暂无图片",
+      images: getProductImages(product),
+      imageCount: getProductImageCount(product),
       createdAt: product.createdAt || "",
 
       skuCount: product.skuCount || 0,
@@ -4324,7 +4358,9 @@ async function refreshAdminProductsFromApi() {
 
     productList.innerHTML = filteredRows
       .map((row) => {
-        const imageSrc = getAdminImageSrc(row.image);
+        const imageItems = getProductImages(row).slice(0, 4);
+        const imageSrc = getAdminImageSrc(imageItems[0]?.image_url || row.image);
+        const imageCount = getProductImageCount(row);
         const isOnSaleProduct = getAdminProductSaleState(row).key === "ON_SALE";
         const statusLabel = getAdminProductSaleState(row).label;
         const nextStatus = isOnSaleProduct ? "OFF_SALE" : "ON_SALE";
@@ -4336,9 +4372,14 @@ async function refreshAdminProductsFromApi() {
               <div class="admin-product-thumb-wrap">
                 ${
                   imageSrc
-                    ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 预览图" loading="lazy" decoding="async" />`
+                    ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 主图" loading="lazy" decoding="async" />`
                     : `<div class="admin-product-thumb admin-product-thumb--empty">暂无图</div>`
                 }
+                ${imageItems.length > 1 ? `
+                  <div class="admin-product-thumbnails" aria-label="${escapeHtml(row.name)} 图片预览">
+                    ${imageItems.map((image) => `<img src="${escapeHtml(getAdminImageSrc(image.image_url))}" alt="" loading="lazy" decoding="async" />`).join("")}
+                  </div>
+                ` : ""}
               </div>
 
               <div class="admin-product-row__content">
@@ -4348,7 +4389,7 @@ async function refreshAdminProductsFromApi() {
                 </div>
 
                 <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
-                <span>状态：${escapeHtml(statusLabel)} · ${escapeHtml(row.imageLabel)}</span>
+                <span>状态：${escapeHtml(statusLabel)} · 图片 ${escapeHtml(imageCount)} 张 · ${escapeHtml(row.imageLabel)}</span>
                 <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
 
                 <div class="admin-sku-list">
@@ -4559,7 +4600,7 @@ function parseAdminSkuRows(values) {
 }
 
 
-async function createAdminProductToApi(values, imageFile) {
+async function createAdminProductToApi(values, imageFiles = []) {
   const formData = new FormData();
   const skuRows = Array.isArray(values.skuRows)
     ? values.skuRows
@@ -4576,9 +4617,10 @@ async function createAdminProductToApi(values, imageFile) {
 
   formData.append("skus_json", JSON.stringify(skuRows));
 
-  if (imageFile) {
-    formData.append("image", imageFile);
-  }
+  const files = Array.isArray(imageFiles) ? imageFiles : imageFiles ? [imageFiles] : [];
+  files.forEach((file) => {
+    formData.append("images", file);
+  });
 
   const result = await adminFetch(`${API_BASE_URL}/products`, {
     method: "POST",
@@ -4667,13 +4709,42 @@ async function createAdminProductToApi(values, imageFile) {
     });
   });
 
+  let productPreviewUrls = [];
+
+  function renderProductImagePreview() {
+    productPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+    productPreviewUrls = [];
+
+    if (!productImagePreview) {
+      return;
+    }
+
+    const files = Array.from(productImageInput?.files || []);
+    if (!files.length) {
+      productImagePreview.hidden = true;
+      productImagePreview.innerHTML = "";
+      return;
+    }
+
+    productPreviewUrls = files.slice(0, 4).map((file) => URL.createObjectURL(file));
+    productImagePreview.hidden = false;
+    productImagePreview.innerHTML = `
+      <p class="admin-image-preview__note">第 1 张将作为主图，共选择 ${escapeHtml(files.length)} 张</p>
+      <div class="admin-image-preview__grid">
+        ${productPreviewUrls.map((url, index) => `<img src="${escapeHtml(url)}" alt="本地图片 ${index + 1}" />`).join("")}
+      </div>
+    `;
+  }
+
+  if (productImageInput) {
+    productImageInput.addEventListener("change", renderProductImagePreview);
+  }
   if (productForm) {
     productForm.addEventListener('submit', async (event) => {
       event.preventDefault();
 
       const values = Object.fromEntries(new FormData(productForm).entries());
-      const imageInput = productForm.querySelector('input[type="file"][name="image"]');
-      const imageFile = imageInput?.files?.[0] || null;
+      const imageFiles = Array.from(productImageInput?.files || []);
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
       const skuName = String(values.skuName || "默认规格").trim() || "默认规格";
@@ -4702,7 +4773,7 @@ async function createAdminProductToApi(values, imageFile) {
           category,
           skuRows,
         },
-        imageFile
+        imageFiles
       );
 
         setFeedback(
@@ -4711,6 +4782,7 @@ async function createAdminProductToApi(values, imageFile) {
         );
 
         productForm.reset();
+        renderProductImagePreview();
 
         if (imageSelect?.options.length) {
           imageSelect.selectedIndex = 0;

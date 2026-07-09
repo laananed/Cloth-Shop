@@ -3684,6 +3684,48 @@ button.sku-option--disabled {
 }
 
 
+.admin-image-preview {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(105, 174, 230, 0.18);
+  background: rgba(248, 251, 255, 0.72);
+}
+
+.admin-image-preview__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.admin-image-preview__grid,
+.admin-product-thumbnails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-image-preview__grid img,
+.admin-product-thumbnails img {
+  width: 58px;
+  height: 72px;
+  border-radius: 10px;
+  object-fit: cover;
+  object-position: center top;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.admin-product-thumbnails {
+  max-width: 96px;
+  margin-top: 8px;
+}
+
+.admin-product-thumbnails img {
+  width: 42px;
+  height: 52px;
+}
 .admin-product-row__main {
   display: grid;
   grid-template-columns: 96px 1fr;

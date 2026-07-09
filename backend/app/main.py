@@ -287,7 +287,8 @@ def get_products():
                         total_sold_count,
                         total_sales_amount,
                         product_created_at,
-                        product_updated_at
+                        product_updated_at,
+                        inventory_updated_at
                     FROM v_product_detail
                     ORDER BY product_id, sku_id
                 """
@@ -617,7 +618,8 @@ async def create_product(
                             total_sold_count,
                             total_sales_amount,
                             product_created_at,
-                            product_updated_at
+                            product_updated_at,
+                            inventory_updated_at
                         FROM v_product_detail
                         WHERE product_id = %s
                         ORDER BY sku_id
@@ -2154,7 +2156,8 @@ def get_admin_inventory(authorization: str | None = Header(None)):
                         total_sold_count,
                         total_sales_amount,
                         product_created_at,
-                        product_updated_at
+                        product_updated_at,
+                        inventory_updated_at
                     FROM v_product_detail
                     ORDER BY product_id DESC, sku_id ASC
                     """
@@ -2260,7 +2263,8 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                             total_sold_count,
                             total_sales_amount,
                             product_created_at,
-                            product_updated_at
+                            product_updated_at,
+                            inventory_updated_at
                         FROM v_product_detail
                         WHERE sku_id = %s
                         """,
@@ -2373,7 +2377,8 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                             total_sold_count,
                             total_sales_amount,
                             product_created_at,
-                            product_updated_at
+                            product_updated_at,
+                            inventory_updated_at
                         FROM v_product_detail
                         WHERE product_id = %s
                         ORDER BY sku_id ASC

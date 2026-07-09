@@ -634,7 +634,7 @@ async function loadProductsFromApi() {
     }
 
     products = convertApiProducts(result.data);
-    salesRankMap = getSalesRankMap(products.filter(isProductSellable));
+    salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
 
     updateView();
@@ -648,7 +648,7 @@ async function loadProductsFromApi() {
 
     // 失败时保留原来的静态商品，页面不会空白
     products = staticProducts;
-    salesRankMap = getSalesRankMap(products.filter(isProductSellable));
+    salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
     updateView();
   }
@@ -2207,14 +2207,11 @@ function renderProducts() {
       const isPrimaryDetail = product.detailLayout === 'price-sales-rank';
       const isSplitDetail = product.detailLayout === 'split';
       const isPurchaseUi = product.purchaseLayout === 'buy';
-      const productSellable = isProductSellable(product);
-      const salesRank = productSellable ? salesRankMap.get(product.id) : null;
+      const salesRank = salesRankMap.get(product.id);
       const isTopSeller = salesRank === 1;
-      const salesRankLabel = !productSellable
-        ? '暂不可售'
-        : isTopSeller
-          ? '网站销量第一'
-          : formatSalesRank(salesRank);
+      const salesRankLabel = isTopSeller
+        ? '网站销量第一'
+        : formatSalesRank(salesRank);
       const selectedSku = getExplicitSelectedSku(product);
       const displayPrice = Number(selectedSku?.price ?? product.price ?? 0);
       const selectedSkuName = selectedSku?.skuName || '请选择规格';

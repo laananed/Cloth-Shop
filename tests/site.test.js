@@ -410,9 +410,53 @@ test('backend product queries expose inventory_updated_at from the view', () => 
   assert.ok(backend.includes('post("/admin/inventory/update-stock")'));
   assert.ok(backend.includes('post("/admin/products/update-status")'));
   assert.ok(backend.includes('post("/products")'));
-  assert.ok(mainJs.includes('getSalesRankMap(products.filter(isProductSellable))'));
-  assert.ok(mainJs.includes('!productSellable'));
-  assert.ok(mainJs.includes("'暂不可售'"));
+  assert.ok(mainJs.includes('getSalesRankMap(products)'));
+  assert.ok(mainJs.includes("salesRankLabel = isTopSeller"));
+  assert.ok(!mainJs.includes('暂不可售'));
+});
+
+test('sales rank labels use the full catalog while sorting still keeps sellable products first', () => {
+  const products = [
+    {
+      id: 'product-1',
+      productId: 1,
+      sales: 100,
+      productStatus: 'OFF_SALE',
+      productUpdatedAt: '2026-07-01T10:00:00',
+      skuList: [
+        { skuId: 11, skuStatus: 'OFF_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-01T10:00:00' },
+      ],
+    },
+    {
+      id: 'product-2',
+      productId: 2,
+      sales: 80,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-02T10:00:00',
+      skuList: [
+        { skuId: 21, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-02T10:00:00' },
+      ],
+    },
+    {
+      id: 'product-3',
+      productId: 3,
+      sales: 60,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-03T10:00:00',
+      skuList: [
+        { skuId: 31, skuStatus: 'ON_SALE', availableStock: 2, inventoryUpdatedAt: '2026-07-03T10:00:00' },
+      ],
+    },
+  ];
+
+  const sorted = [...products].sort(compareProductsForCustomer);
+  const rankMap = getSalesRankMap(products);
+
+  assert.deepEqual(sorted.map((product) => product.id), ['product-3', 'product-1', 'product-2']);
+  assert.equal(rankMap.get('product-1'), 1);
+  assert.equal(rankMap.get('product-2'), 2);
+  assert.equal(rankMap.get('product-3'), 3);
+  assert.equal(formatSalesRank(rankMap.get('product-3')), '销量第3名');
 });
 
 test('auth modal shell stays closed on load', () => {

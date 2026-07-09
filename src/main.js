@@ -1,5 +1,5 @@
 ﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260705a';
-import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260705a';
+import { compareProductsBySales, formatSalesRank, getSalesRankMap, parseSalesValue } from './ranking.js?v=20260705a';
 import {
   buildPurchaseOrder,
   getCartItemTotal,
@@ -515,19 +515,7 @@ function getProductDisplayState(product) {
 }
 
 function compareProductsForCustomer(a, b) {
-  const stateA = getProductDisplayState(a);
-  const stateB = getProductDisplayState(b);
-
-  if (stateA.priority !== stateB.priority) {
-    return stateA.priority - stateB.priority;
-  }
-
-  const salesDiff = Number(b.sales || 0) - Number(a.sales || 0);
-  if (salesDiff !== 0) {
-    return salesDiff;
-  }
-
-  return Number(b.productId || 0) - Number(a.productId || 0);
+  return compareProductsBySales(a, b);
 }
 
 
@@ -564,7 +552,7 @@ function convertApiProducts(apiRows) {
         badge: "数据库商品",
 
         price: Number(row.price || 0),
-        sales: Number(row.total_sold_count || 0),
+        sales: parseSalesValue(row.total_sold_count),
 
         availableStock: Number(row.available_stock || 0),
         lockedStock: Number(row.locked_stock || 0),
@@ -607,7 +595,7 @@ function convertApiProducts(apiRows) {
     });
 
     product.price = Math.min(product.price, Number(row.price || 0));
-    product.sales += Number(row.total_sold_count || 0);
+    product.sales += parseSalesValue(row.total_sold_count);
     product.availableStock += Number(row.available_stock || 0);
     product.lockedStock += Number(row.locked_stock || 0);
   });
@@ -2187,7 +2175,7 @@ function filteredProducts() {
       !keyword || getProductSearchText(product).includes(keyword);
 
     return matchCategory && matchKeyword;
-  });
+  }).sort(compareProductsForCustomer);
 }
 
 function renderProducts() {

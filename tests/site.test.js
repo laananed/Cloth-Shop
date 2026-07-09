@@ -10,7 +10,7 @@ import {
   getProducts,
   getSiteCopy,
 } from '../src/content.js';
-import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
+import { compareProductsBySales, formatSalesRank, getSalesRankMap, parseSalesValue } from '../src/ranking.js';
 import {
   buildPurchaseOrder,
   getCartItemTotal,
@@ -294,6 +294,24 @@ test('sales ranks are derived from the highest sales first', () => {
   assert.equal(rankMap.get(highest.id), 1);
   assert.equal(rankMap.get(lowest.id), products.length);
   assert.equal(formatSalesRank(rankMap.get(highest.id)).includes(String(rankMap.get(highest.id))), true);
+});
+
+test('sales comparisons keep the highest total sales first regardless of stock state or sales string format', () => {
+  const products = [
+    { id: 'product-10', productId: 10, sales: 8, productStatus: 'SOLD_OUT' },
+    { id: 'product-2', productId: 2, sales: '3' },
+    { id: 'product-3', productId: 3, sales: '2k' },
+    { id: 'product-4', productId: 4, sales: 0 },
+  ];
+
+  assert.equal(parseSalesValue('5.2k'), 5200);
+  assert.equal(parseSalesValue(12), 12);
+  assert.deepEqual([...products].sort(compareProductsBySales).map((product) => product.id), ['product-3', 'product-10', 'product-2', 'product-4']);
+  assert.equal(getSalesRankMap(products).get('product-3'), 1);
+  assert.equal(getSalesRankMap(products).get('product-10'), 2);
+  assert.equal(getSalesRankMap(products).get('product-2'), 3);
+  assert.equal(getSalesRankMap(products).get('product-4'), 4);
+  assert.equal(formatSalesRank(2), '销量第2名');
 });
 
 test('auth modal shell stays closed on load', () => {

@@ -2456,6 +2456,10 @@ button:disabled,
   gap: 14px;
 }
 
+.admin-products-layout {
+  grid-template-columns: 1fr;
+}
+
 .admin-summary,
 .admin-list,
 .admin-summary-grid,
@@ -2975,4 +2979,27 @@ body::after {
 
 .section {
   background: rgba(248, 252, 255, 0.24);
+}
+
+
+.admin-products-layout {
+  display: grid;
+  gap: 24px;
+}
+
+.admin-products-layout .admin-panel__stack {
+  width: 100%;
+}
+
+.admin-products-layout .admin-form {
+  width: 100%;
+}
+
+.admin-form__header {
+  margin-bottom: 12px;
+}
+
+.admin-form__header h3 {
+  margin: 4px 0 0;
+  font-size: 20px;
 }

@@ -2858,6 +2858,39 @@ function escapeHtml(value) {
   });
 }
 
+function initScrollTools() {
+  const scrollTools = document.querySelector("[data-scroll-tools]");
+
+  if (!scrollTools) {
+    return;
+  }
+
+  scrollTools.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-scroll-to]");
+
+    if (!button) {
+      return;
+    }
+
+    const target = button.dataset.scrollTo;
+
+    if (target === "top") {
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+      return;
+    }
+
+    if (target === "bottom") {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  });
+}
+
 function initAdminPage() {
   const shell = document.querySelector('[data-admin-shell]');
   if (!shell) {
@@ -3560,6 +3593,8 @@ async function createAdminProductToApi(values, imageFile) {
   refreshAdminOrdersFromApi();
   refreshAdminStatsFromApi();
 }
+
+initScrollTools();
 
 if (isAdminPage) {
   initAdminPage();

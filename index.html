@@ -10,7 +10,18 @@
     />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
+
+
   <body>
+    <div class="scroll-tools" data-scroll-tools aria-label="页面滚动快捷按钮">
+      <button type="button" class="scroll-tool-button" data-scroll-to="top" aria-label="回到页面顶部">
+        ↑
+      </button>
+      <button type="button" class="scroll-tool-button" data-scroll-to="bottom" aria-label="回到页面底部">
+        ↓
+      </button>
+    </div>
+
     <button class="site-menu-button" type="button" data-menu-open aria-label="打开个人中心">☰</button>
 
     <div class="auth-modal" data-auth-modal aria-hidden="true">

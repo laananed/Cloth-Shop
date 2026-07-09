@@ -3321,6 +3321,13 @@ async function refreshAdminProductsFromApi() {
               >
                 ${nextStatusText}
               </button>
+              <button
+                type="button"
+                class="ghost-button ghost-button--small ghost-button--danger"
+                data-admin-product-delete-id="${row.productId}"
+              >
+                删除商品
+              </button>
             </div>
           </div>
         </div>
@@ -3403,6 +3410,26 @@ async function updateAdminProductStatusToApi(productId, status) {
 
   if (!response.ok || !result.success) {
     throw new Error(result.detail || "修改商品状态失败");
+  }
+
+  return result;
+}
+
+async function deleteAdminProductToApi(productId) {
+  const response = await fetch(`${API_BASE_URL}/admin/products/delete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      product_id: Number(productId),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "删除商品失败");
   }
 
   return result;
@@ -3594,6 +3621,7 @@ async function createAdminProductToApi(values, imageFile) {
   productList.addEventListener("click", async (event) => {
     const stockButton = event.target.closest("[data-admin-stock-save]");
     const statusButton = event.target.closest("[data-admin-product-status-id]");
+    const deleteButton = event.target.closest("[data-admin-product-delete-id]");
 
     if (stockButton) {
       const skuId = Number(stockButton.dataset.adminStockSave);
@@ -3616,6 +3644,36 @@ async function createAdminProductToApi(values, imageFile) {
       } catch (error) {
         console.error("后台修改库存失败：", error);
         setFeedback(productFeedback, `修改库存失败：${error.message}`, true);
+      }
+
+      return;
+    }
+
+    if (deleteButton) {
+      const productId = Number(deleteButton.dataset.adminProductDeleteId);
+
+      if (!Number.isInteger(productId) || productId <= 0) {
+        setFeedback(productManageFeedback || productFeedback, "商品 ID 不正确，无法删除。", true);
+        return;
+      }
+
+      const confirmed = window.confirm("确定要删除这个商品吗？删除后前台和后台默认商品列表将不再显示，但历史订单数据不会被物理删除。");
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        deleteButton.disabled = true;
+        deleteButton.textContent = "删除中...";
+
+        await deleteAdminProductToApi(productId);
+        setFeedback(productManageFeedback || productFeedback, `商品 ${productId} 已删除。`);
+
+        await refreshAdminProductsFromApi();
+      } catch (error) {
+        console.error("后台删除商品失败：", error);
+        setFeedback(productManageFeedback || productFeedback, `删除商品失败：${error.message}`, true);
       }
 
       return;
@@ -4122,4 +4180,3 @@ window.requestAnimationFrame(() => {
   updateHeroScrollState();
 });
 }
-

@@ -127,6 +127,10 @@ class AdminProductStatusUpdateRequest(BaseModel):
     product_id: int = Field(..., gt=0, description="要修改状态的商品 ID")
     status: str = Field(..., description="商品状态：ON_SALE 或 OFF_SALE")
 
+
+class AdminProductDeleteRequest(BaseModel):
+    product_id: int = Field(..., gt=0, description="要逻辑删除的商品 ID")
+
 @app.get("/")
 def root():
     return {
@@ -2165,6 +2169,79 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest):
         raise HTTPException(
             status_code=500,
             detail=f"商品状态修改失败：{str(e)}"
+        )
+
+
+@app.post("/admin/products/delete")
+def delete_admin_product(req: AdminProductDeleteRequest):
+    """
+    后台商品逻辑删除。
+    不删除库中的记录，仅标记 product、product_sku 为已删除。
+    """
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM product
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.product_id,)
+                    )
+                    product = cursor.fetchone()
+
+                    if not product:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="商品不存在或已删除"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE product
+                        SET is_deleted = 1, status = 'OFF_SALE'
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.product_id,)
+                    )
+
+                    cursor.execute(
+                        """
+                        UPDATE product_sku
+                        SET is_deleted = 1, status = 'OFF_SALE'
+                        WHERE product_id = %s
+                          AND is_deleted = 0
+                        """,
+                        (req.product_id,)
+                    )
+
+                conn.commit()
+
+                return {
+                    "success": True,
+                    "message": "商品已逻辑删除",
+                    "product_id": req.product_id,
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"商品逻辑删除失败：{str(e)}"
         )
 
 

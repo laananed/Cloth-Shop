@@ -627,6 +627,20 @@ test('admin product view prepares cards for the product list', () => {
   assert.equal(typeof rendered.rows[0].priceLabel, 'string');
 });
 
+test('admin product management source includes logical delete wiring', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(mainJs.includes('async function deleteAdminProductToApi(productId)'));
+  assert.ok(mainJs.includes('data-admin-product-delete-id'));
+  assert.ok(mainJs.includes('确定要删除这个商品吗？删除后前台和后台默认商品列表将不再显示，但历史订单数据不会被物理删除。'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
+  assert.ok(backend.includes('@app.post("/admin/products/delete")'));
+  assert.ok(backend.includes('AdminProductDeleteRequest'));
+  assert.ok(backend.includes("SET is_deleted = 1, status = 'OFF_SALE'"));
+  assert.ok(backend.includes('WHERE product_id = %s'));
+});
+
 test('front page exposes a visible admin entry point', () => {
   const html = readFileSync('index.html', 'utf8');
 

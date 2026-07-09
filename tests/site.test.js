@@ -646,11 +646,13 @@ test('admin product filtering source wiring is present', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
 
   assert.ok(html.includes('data-admin-product-filter-bar'));
+  assert.ok(html.includes('data-admin-product-summary') && html.includes('hidden'));
   assert.ok(mainJs.includes('activeAdminProductFilter'));
   assert.ok(mainJs.includes('data-admin-product-filter'));
   assert.ok(mainJs.includes('SOLD_OUT'));
   assert.ok(mainJs.includes('OFF_SALE'));
   assert.ok(mainJs.includes('ON_SALE'));
+  assert.ok(mainJs.includes('productSummary.hidden = true'));
 });
 
 test('front page exposes a visible admin entry point', () => {

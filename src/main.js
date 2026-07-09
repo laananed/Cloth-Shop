@@ -3323,17 +3323,12 @@ async function refreshAdminProductsFromApi() {
       counts[state.key] += 1;
     });
 
-    if (productSummary) {
-      productSummary.innerHTML = `
-        <p><strong>${counts.all}</strong> 件商品正在管理中</p>
-        <p>在售 <strong>${counts.ON_SALE}</strong> 件</p>
-        <p>售罄 <strong>${counts.SOLD_OUT}</strong> 件</p>
-        <p>已下架 <strong>${counts.OFF_SALE}</strong> 件</p>
-        <p>当前筛选：${escapeHtml(getAdminProductFilterLabel(activeAdminProductFilter))}</p>
-      `;
-    }
-
     renderAdminProductFilterBar(counts);
+
+    if (productSummary) {
+      productSummary.hidden = true;
+      productSummary.innerHTML = "";
+    }
 
     if (!productList) {
       return;

@@ -668,6 +668,18 @@ test('refund order backend wiring is present in source and sql', () => {
   assert.ok(sql.includes('product_sales_stat'));
 });
 
+test('frontend purchase record refund wiring is present', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('REFUNDED'));
+  assert.ok(mainJs.includes('已退款'));
+  assert.ok(mainJs.includes('data-order-refund-id'));
+  assert.ok(mainJs.includes('refundOrderFromApi'));
+  assert.ok(mainJs.includes('handleRefundOrder'));
+  assert.ok(mainJs.includes('refundingOrderIds'));
+  assert.ok(mainJs.includes('/orders/refund'));
+});
+
 test('front page exposes a visible admin entry point', () => {
   const html = readFileSync('index.html', 'utf8');
 

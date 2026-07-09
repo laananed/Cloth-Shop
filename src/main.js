@@ -126,6 +126,7 @@ let dbAddressList = [];
 let isCartCheckoutSubmitting = false;
 let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
+const refundingOrderIds = new Set();
 
 const purchasePaymentMethods = [
   { value: 'alipay', label: '支付宝' },
@@ -181,6 +182,7 @@ const orderStatusFilters = [
   { value: 'PENDING_PAYMENT', label: '待支付' },
   { value: 'PAID', label: '已支付' },
   { value: 'CANCELLED', label: '已取消' },
+  { value: 'REFUNDED', label: '已退款' },
 ];
 let scrollFrame = 0;
 
@@ -1092,6 +1094,7 @@ function formatOrderStatus(status) {
     PENDING_PAYMENT: "待支付",
     PAID: "已支付",
     CANCELLED: "已取消",
+    REFUNDED: "已退款",
     SHIPPED: "已发货",
     COMPLETED: "已完成",
   };
@@ -1189,8 +1192,8 @@ function getOrderCancelHint(status) {
     return "";
   }
 
-  if (status === "PAID") {
-    return "已支付订单不可取消";
+  if (status === "PAID" || status === "REFUNDED") {
+    return "";
   }
 
   if (status === "CANCELLED") {
@@ -1198,6 +1201,49 @@ function getOrderCancelHint(status) {
   }
 
   return "当前状态不可取消";
+}
+
+function canRefundOrder(status) {
+  return status === "PAID";
+}
+
+function getOrderRefundHint(status) {
+  if (status === "REFUNDED") {
+    return "订单已退款";
+  }
+
+  if (status === "PENDING_PAYMENT") {
+    return "待支付订单不能退款，可直接取消";
+  }
+
+  if (status === "CANCELLED") {
+    return "订单已取消";
+  }
+
+  return "";
+}
+
+async function refundOrderFromApi(orderId, remark = "用户在前台购买记录申请退款") {
+  const response = await fetch(`${API_BASE_URL}/orders/refund`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: CURRENT_USER_ID,
+      order_id: Number(orderId),
+      remark,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.detail || "申请退款失败");
+  }
+
+  console.log("订单退款成功：", result);
+  return result;
 }
 
 function setOrderActionFeedback(orderId, message, isError = false) {
@@ -1421,6 +1467,38 @@ async function handleCancelOrder(orderId) {
   }
 }
 
+async function handleRefundOrder(orderId) {
+  if (refundingOrderIds.has(orderId)) {
+    return;
+  }
+
+  const confirmed = window.confirm("确定要申请退款吗？退款成功后订单会变为已退款，库存和销量会同步回滚。");
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    refundingOrderIds.add(orderId);
+    setOrderActionFeedback(orderId, "正在申请退款，请稍候...");
+
+    const result = await refundOrderFromApi(orderId, "用户在前台购买记录申请退款");
+
+    console.log("前台订单退款完整流程成功：", result);
+
+    activeOrderStatusFilter = "REFUNDED";
+
+    await refreshOrdersFromApi();
+    await showOrderDetail(orderId);
+    await loadProductsFromApi();
+  } catch (error) {
+    console.error("申请退款失败：", error);
+    setOrderActionFeedback(orderId, `申请退款失败：${error.message}`, true);
+  } finally {
+    refundingOrderIds.delete(orderId);
+  }
+}
+
 function renderApiOrders(orders) {
   if (!ordersList) {
     return;
@@ -1452,12 +1530,19 @@ function renderApiOrders(orders) {
       .map((order) => {
         const orderId = Number(order.order_id);
         const isCancelling = typeof cancellingOrderIds !== 'undefined' && cancellingOrderIds.has(orderId);
+        const isRefunding = typeof refundingOrderIds !== 'undefined' && refundingOrderIds.has(orderId);
         const cancellable = typeof canCancelOrder === 'function'
           ? canCancelOrder(order.status)
           : order.status === 'PENDING_PAYMENT';
+        const refundable = typeof canRefundOrder === 'function'
+          ? canRefundOrder(order.status)
+          : order.status === 'PAID';
 
         const cancelHint = typeof getOrderCancelHint === 'function'
           ? getOrderCancelHint(order.status)
+          : '';
+        const refundHint = typeof getOrderRefundHint === 'function'
+          ? getOrderRefundHint(order.status)
           : '';
 
         return `
@@ -1491,7 +1576,20 @@ function renderApiOrders(orders) {
                       去支付
                     </button>
                   `
-                  : ""
+                  : refundable
+                    ? `
+                    <button
+                      class="ghost-button ghost-button--small ghost-button--danger"
+                      type="button"
+                      data-order-refund-id="${order.order_id}"
+                      ${isRefunding ? "disabled" : ""}
+                    >
+                      ${isRefunding ? "退款中..." : "申请退款"}
+                    </button>
+                  `
+                    : refundHint
+                      ? `<span class="order-card__hint">${escapeHtml(refundHint)}</span>`
+                      : ""
               }
 
               ${
@@ -3882,6 +3980,18 @@ if (ordersList) {
       }
 
       handleCancelOrder(orderId);
+      return;
+    }
+
+    const refundButton = event.target.closest("[data-order-refund-id]");
+    if (refundButton) {
+      const orderId = Number(refundButton.dataset.orderRefundId);
+
+      if (!Number.isInteger(orderId) || orderId <= 0) {
+        return;
+      }
+
+      handleRefundOrder(orderId);
       return;
     }
 

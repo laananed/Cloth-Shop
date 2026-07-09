@@ -2472,6 +2472,42 @@ button:disabled,
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.admin-product-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-product-filter__button {
+  appearance: none;
+  border: 1px solid rgba(105, 174, 230, 0.18);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 10px 15px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(95, 146, 196, 0.08);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.admin-product-filter__button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(105, 174, 230, 0.3);
+  color: var(--ink);
+}
+
+.admin-product-filter__button.is-active {
+  color: white;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border-color: transparent;
+}
+
 .admin-kpi,
 .admin-row,
 .admin-empty {
@@ -3173,6 +3209,8 @@ button.sku-option--disabled {
 
 .admin-product-row__actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   justify-content: flex-end;
   margin-top: 8px;
 }

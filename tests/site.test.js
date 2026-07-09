@@ -641,6 +641,18 @@ test('admin product management source includes logical delete wiring', () => {
   assert.ok(backend.includes('WHERE product_id = %s'));
 });
 
+test('admin product filtering source wiring is present', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(html.includes('data-admin-product-filter-bar'));
+  assert.ok(mainJs.includes('activeAdminProductFilter'));
+  assert.ok(mainJs.includes('data-admin-product-filter'));
+  assert.ok(mainJs.includes('SOLD_OUT'));
+  assert.ok(mainJs.includes('OFF_SALE'));
+  assert.ok(mainJs.includes('ON_SALE'));
+});
+
 test('front page exposes a visible admin entry point', () => {
   const html = readFileSync('index.html', 'utf8');
 

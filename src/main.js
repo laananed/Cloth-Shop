@@ -2909,6 +2909,7 @@ function initAdminPage() {
   const statsRows = shell.querySelector('[data-admin-stats-rows]');
   const productList = shell.querySelector('[data-admin-products-list]');
   const productSummary = shell.querySelector('[data-admin-product-summary]');
+  const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
   const productForm = shell.querySelector('[data-admin-product-form]');
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
@@ -2921,6 +2922,84 @@ function initAdminPage() {
   let renderedOrders = null;
   let renderedStats = null;
   let renderedProducts = null;
+  const adminProductFilters = [
+    { value: 'ALL', label: '全部' },
+    { value: 'ON_SALE', label: '在售' },
+    { value: 'SOLD_OUT', label: '售罄' },
+    { value: 'OFF_SALE', label: '已下架' },
+  ];
+  let activeAdminProductFilter = 'ALL';
+
+  function getAdminProductFilterLabel(filterValue) {
+    return adminProductFilters.find((item) => item.value === filterValue)?.label || '全部';
+  }
+
+  function getAdminProductSaleState(row) {
+    const status = normalizeStatus(row?.status || row?.productStatus || row?.product_status || row?.saleState || 'UNKNOWN');
+
+    if (status === 'OFF_SALE') {
+      return {
+        key: 'OFF_SALE',
+        label: '已下架',
+      };
+    }
+
+    const skuList = Array.isArray(row?.skuList) ? row.skuList : [];
+    const hasAvailableSku = skuList.some((sku) => {
+      const skuStatus = normalizeStatus(sku?.skuStatus || sku?.status || 'ON_SALE');
+      const availableStock = Number(sku?.availableStock ?? sku?.available_stock ?? 0);
+
+      return skuStatus === 'ON_SALE' && availableStock > 0;
+    });
+    const totalStock = Number(row?.stock ?? row?.availableStock ?? 0);
+
+    if (hasAvailableSku || totalStock > 0) {
+      return {
+        key: 'ON_SALE',
+        label: '在售',
+      };
+    }
+
+    return {
+      key: 'SOLD_OUT',
+      label: '售罄',
+    };
+  }
+
+  function getFilteredAdminProductRows(rows) {
+    const allRows = Array.isArray(rows) ? rows : [];
+
+    if (activeAdminProductFilter === 'ALL') {
+      return allRows;
+    }
+
+    return allRows.filter((row) => getAdminProductSaleState(row).key === activeAdminProductFilter);
+  }
+
+  function renderAdminProductFilterBar(counts) {
+    if (!productFilterBar) {
+      return;
+    }
+
+    productFilterBar.innerHTML = adminProductFilters
+      .map((filter) => {
+        const isActive = filter.value === activeAdminProductFilter;
+        const count = filter.value === 'ALL' ? counts.all : counts[filter.value] || 0;
+
+        return `
+          <button
+            type="button"
+            class="admin-product-filter__button${isActive ? ' is-active' : ''}"
+            data-admin-product-filter="${filter.value}"
+            aria-pressed="${isActive ? 'true' : 'false'}"
+          >
+            ${escapeHtml(filter.label)} (${escapeHtml(count)})
+          </button>
+        `;
+      })
+      .join('');
+  }
+
   function convertApiOrdersToAdminRows(apiRows) {
   return apiRows.map((row) => ({
     orderNo: row.order_no || `订单 ${row.order_id}`,
@@ -3230,111 +3309,136 @@ async function refreshAdminProductsFromApi() {
   }
 
   function renderProducts() {
+    const allRows = Array.isArray(renderedProducts?.rows) ? renderedProducts.rows : [];
+    const counts = {
+      all: allRows.length,
+      ON_SALE: 0,
+      SOLD_OUT: 0,
+      OFF_SALE: 0,
+    };
+
+    allRows.forEach((row) => {
+      const state = getAdminProductSaleState(row);
+
+      counts[state.key] += 1;
+    });
+
     if (productSummary) {
-      const newestProduct = products[0];
       productSummary.innerHTML = `
-        <p><strong>${products.length}</strong> 件商品正在管理中</p>
-        <p>${newestProduct ? `最新上架：${escapeHtml(newestProduct.name)}` : '暂无商品'}</p>
+        <p><strong>${counts.all}</strong> 件商品正在管理中</p>
+        <p>在售 <strong>${counts.ON_SALE}</strong> 件</p>
+        <p>售罄 <strong>${counts.SOLD_OUT}</strong> 件</p>
+        <p>已下架 <strong>${counts.OFF_SALE}</strong> 件</p>
+        <p>当前筛选：${escapeHtml(getAdminProductFilterLabel(activeAdminProductFilter))}</p>
       `;
     }
+
+    renderAdminProductFilterBar(counts);
 
     if (!productList) {
       return;
     }
 
-    if (!renderedProducts || renderedProducts.emptyState) {
+    if (!allRows.length) {
       productList.innerHTML = `<div class="admin-empty">${escapeHtml(renderedProducts?.emptyState || '暂无商品数据')}</div>`;
       return;
     }
 
-    productList.innerHTML = renderedProducts.rows
-  .map((row) => {
-    const imageSrc = getAdminImageSrc(row.image);
-    const isOnSaleProduct = normalizeStatus(row.status) === "ON_SALE";
-    const statusLabel = isOnSaleProduct ? "在售" : "已下架";
-    const nextStatus = isOnSaleProduct ? "OFF_SALE" : "ON_SALE";
-    const nextStatusText = isOnSaleProduct ? "下架商品" : "重新上架";
+    const filteredRows = getFilteredAdminProductRows(allRows);
 
-    return `
-      <article class="admin-row admin-product-row" data-admin-product-id="${row.productId}">
-        <div class="admin-product-row__main">
-          <div class="admin-product-thumb-wrap">
-            ${
-              imageSrc
-                ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 预览图" loading="lazy" decoding="async" />`
-                : `<div class="admin-product-thumb admin-product-thumb--empty">暂无图</div>`
-            }
-          </div>
+    if (!filteredRows.length) {
+      productList.innerHTML = `<div class="admin-empty">当前筛选“${escapeHtml(getAdminProductFilterLabel(activeAdminProductFilter))}”暂无商品</div>`;
+      return;
+    }
 
-          <div class="admin-product-row__content">
-            <div class="admin-row__header">
-              <strong>${escapeHtml(row.name)}</strong>
-              <span>${escapeHtml(row.priceLabel)}</span>
+    productList.innerHTML = filteredRows
+      .map((row) => {
+        const imageSrc = getAdminImageSrc(row.image);
+        const isOnSaleProduct = getAdminProductSaleState(row).key === "ON_SALE";
+        const statusLabel = getAdminProductSaleState(row).label;
+        const nextStatus = isOnSaleProduct ? "OFF_SALE" : "ON_SALE";
+        const nextStatusText = isOnSaleProduct ? "下架商品" : "重新上架";
+
+        return `
+          <article class="admin-row admin-product-row" data-admin-product-id="${row.productId}">
+            <div class="admin-product-row__main">
+              <div class="admin-product-thumb-wrap">
+                ${
+                  imageSrc
+                    ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 预览图" loading="lazy" decoding="async" />`
+                    : `<div class="admin-product-thumb admin-product-thumb--empty">暂无图</div>`
+                }
+              </div>
+
+              <div class="admin-product-row__content">
+                <div class="admin-row__header">
+                  <strong>${escapeHtml(row.name)}</strong>
+                  <span>${escapeHtml(row.priceLabel)}</span>
+                </div>
+
+                <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
+                <span>状态：${escapeHtml(statusLabel)} · ${escapeHtml(row.imageLabel)}</span>
+                <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
+
+                <div class="admin-sku-list">
+                  ${row.skuList
+                    .map((sku) => {
+                      const skuStatusLabel = normalizeStatus(sku.skuStatus) === "ON_SALE" ? "在售" : "已下架";
+
+                      return `
+                        <div class="admin-sku-row" data-admin-sku-row="${sku.skuId}">
+                          <div class="admin-sku-row__info">
+                            <strong>${escapeHtml(sku.skuName || "默认规格")}</strong>
+                            <span>SKU ID：${escapeHtml(sku.skuId)} · ${escapeHtml(skuStatusLabel)} · 锁定 ${escapeHtml(sku.lockedStock || 0)} · 销量 ${escapeHtml(sku.sales || 0)}</span>
+                          </div>
+
+                          <label class="admin-stock-editor">
+                            <span>可用库存</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value="${escapeHtml(sku.availableStock || 0)}"
+                              data-admin-stock-input="${sku.skuId}"
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            class="ghost-button ghost-button--small ghost-button--solid"
+                            data-admin-stock-save="${sku.skuId}"
+                          >
+                            更新库存
+                          </button>
+                        </div>
+                      `;
+                    })
+                    .join("")}
+                </div>
+
+                <div class="admin-product-row__actions">
+                  <button
+                    type="button"
+                    class="ghost-button ghost-button--small ${isOnSaleProduct ? "ghost-button--danger" : "ghost-button--solid"}"
+                    data-admin-product-status-id="${row.productId}"
+                    data-admin-product-next-status="${nextStatus}"
+                  >
+                    ${nextStatusText}
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost-button ghost-button--small ghost-button--danger"
+                    data-admin-product-delete-id="${row.productId}"
+                  >
+                    删除商品
+                  </button>
+                </div>
+              </div>
             </div>
-
-            <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
-            <span>状态：${escapeHtml(statusLabel)} · ${escapeHtml(row.imageLabel)}</span>
-            <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
-
-            <div class="admin-sku-list">
-              ${row.skuList
-                .map((sku) => {
-                  const skuStatusLabel = normalizeStatus(sku.skuStatus) === "ON_SALE" ? "在售" : "已下架";
-
-                  return `
-                    <div class="admin-sku-row" data-admin-sku-row="${sku.skuId}">
-                      <div class="admin-sku-row__info">
-                        <strong>${escapeHtml(sku.skuName || "默认规格")}</strong>
-                        <span>SKU ID：${escapeHtml(sku.skuId)} · ${escapeHtml(skuStatusLabel)} · 锁定 ${escapeHtml(sku.lockedStock || 0)} · 销量 ${escapeHtml(sku.sales || 0)}</span>
-                      </div>
-
-                      <label class="admin-stock-editor">
-                        <span>可用库存</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value="${escapeHtml(sku.availableStock || 0)}"
-                          data-admin-stock-input="${sku.skuId}"
-                        />
-                      </label>
-
-                      <button
-                        type="button"
-                        class="ghost-button ghost-button--small ghost-button--solid"
-                        data-admin-stock-save="${sku.skuId}"
-                      >
-                        更新库存
-                      </button>
-                    </div>
-                  `;
-                })
-                .join("")}
-            </div>
-
-            <div class="admin-product-row__actions">
-              <button
-                type="button"
-                class="ghost-button ghost-button--small ${isOnSaleProduct ? "ghost-button--danger" : "ghost-button--solid"}"
-                data-admin-product-status-id="${row.productId}"
-                data-admin-product-next-status="${nextStatus}"
-              >
-                ${nextStatusText}
-              </button>
-              <button
-                type="button"
-                class="ghost-button ghost-button--small ghost-button--danger"
-                data-admin-product-delete-id="${row.productId}"
-              >
-                删除商品
-              </button>
-            </div>
-          </div>
-        </div>
-      </article>
-    `;
-  })
-  .join('');
+          </article>
+        `;
+      })
+      .join('');
   }
 
   function populateImageSelect() {
@@ -3617,6 +3721,26 @@ async function createAdminProductToApi(values, imageFile) {
       }
     });
   }
+
+  if (productFilterBar) {
+    productFilterBar.addEventListener("click", (event) => {
+      const filterButton = event.target.closest("[data-admin-product-filter]");
+
+      if (!filterButton) {
+        return;
+      }
+
+      const nextFilter = String(filterButton.dataset.adminProductFilter || "ALL").trim().toUpperCase();
+
+      if (!adminProductFilters.some((filter) => filter.value === nextFilter)) {
+        return;
+      }
+
+      activeAdminProductFilter = nextFilter;
+      renderProducts();
+    });
+  }
+
   if (productList) {
   productList.addEventListener("click", async (event) => {
     const stockButton = event.target.closest("[data-admin-stock-save]");

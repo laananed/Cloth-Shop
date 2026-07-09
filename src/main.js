@@ -2916,12 +2916,33 @@ function convertApiRowsToAdminProducts(apiRows) {
   return Array.from(productMap.values());
 }
 
+function renderAdminInventoryProductsView(adminProducts) {
+  return {
+    emptyState: adminProducts.length ? null : "暂无商品数据",
+    rows: adminProducts.map((product) => ({
+      id: product.id,
+      name: product.name,
+      category: product.category,
+      priceLabel: formatPrice(product.price),
+      badge: product.badge || "数据库商品",
+      status: product.status || "UNKNOWN",
+      imageLabel: product.imageLabel || "暂无图片",
+      createdAt: product.createdAt || "",
+
+      skuCount: product.skuCount || 0,
+      stock: product.stock || 0,
+      lockedStock: product.lockedStock || 0,
+      sales: product.sales || 0,
+    })),
+  };
+}
+
 async function loadAdminProductsFromApi() {
-  const response = await fetch(`${API_BASE_URL}/products`);
+  const response = await fetch(`${API_BASE_URL}/admin/inventory`);
   const result = await response.json();
 
   if (!response.ok || !result.success || !Array.isArray(result.data)) {
-    throw new Error(result.detail || "加载后台商品列表失败");
+    throw new Error(result.detail || "加载后台商品库存列表失败");
   }
 
   return convertApiRowsToAdminProducts(result.data);
@@ -2943,18 +2964,16 @@ async function loadAdminProductsFromApi() {
 async function refreshAdminProductsFromApi() {
   try {
     products = await loadAdminProductsFromApi();
-    refreshAdminData();
-    renderOrders();
-    renderStats();
+    renderedProducts = renderAdminInventoryProductsView(products);
+
     renderProducts();
 
-    console.log("后台商品列表已切换为数据库数据：", products);
+    console.log("后台上架新品列表已切换为数据库库存数据：", products);
   } catch (error) {
     console.error("后台商品列表加载失败：", error);
+
     products = getStoredAdminProducts(storage);
-    refreshAdminData();
-    renderOrders();
-    renderStats();
+    renderedProducts = renderAdminProductsView(products);
     renderProducts();
 
     setFeedback(
@@ -3036,7 +3055,7 @@ async function refreshAdminProductsFromApi() {
 
   function renderProducts() {
     if (productSummary) {
-      const newestProduct = products.at(-1);
+      const newestProduct = products[0];
       productSummary.innerHTML = `
         <p><strong>${products.length}</strong> 件商品正在管理中</p>
         <p>${newestProduct ? `最新上架：${escapeHtml(newestProduct.name)}` : '暂无商品'}</p>

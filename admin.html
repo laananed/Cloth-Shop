@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>蓝绒织梦 · 管理后台</title>
     <meta name="description" content="服装店管理后台，用于查看订单、商品管理、新增商品和统计销量与营业额。" />
-    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260709-admin-auth-state" />
   </head>
 
   <body class="admin-page">
@@ -39,6 +39,10 @@
         </form>
 
         <p class="admin-login__feedback" data-admin-login-feedback aria-live="polite"></p>
+
+        <a class="admin-login__home-link" href="./index.html" data-admin-login-home>
+          返回前台
+        </a>
       </div>
     </section>
 
@@ -46,7 +50,7 @@
       <header class="admin-topbar">
         <div class="admin-topbar__actions">
           <span class="admin-user-chip" data-admin-current-user>未登录</span>
-          <button class="admin-user-chip admin-user-chip--button" type="button" data-admin-logout>退出登录</button>
+          <button class="admin-user-chip admin-user-chip--button" type="button" data-admin-logout hidden disabled>退出登录</button>
         </div>
         <div class="admin-brand">
           <span class="admin-brand__orb" aria-hidden="true"></span>
@@ -198,6 +202,6 @@
       </div>
     </main>
 
-    <script type="module" src="./src/main.js?v=20260709-admin-panels"></script>
+    <script type="module" src="./src/main.js?v=20260709-admin-auth-state"></script>
   </body>
 </html>

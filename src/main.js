@@ -116,6 +116,8 @@ const adminLoginPanel = document.querySelector('[data-admin-login-panel]');
 const adminLoginForm = document.querySelector('[data-admin-login-form]');
 const adminLoginFeedback = document.querySelector('[data-admin-login-feedback]');
 const adminCurrentUser = document.querySelector('[data-admin-current-user]');
+const adminCurrentUserNodes = document.querySelectorAll('[data-admin-current-user]');
+const adminUserChipNodes = document.querySelectorAll('[data-admin-user-chip], [data-admin-current-user]');
 const adminLogoutButton = document.querySelector('[data-admin-logout]');
 
 const storage = window.localStorage;
@@ -176,6 +178,64 @@ function clearStoredAdminSession() {
   sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
 }
 
+function getAdminIdentityLabel(session) {
+  if (!session?.adminToken) {
+    return '未登录';
+  }
+
+  const email = session.email || '管理员';
+  const id = session.adminUserId ? ` · ID ${session.adminUserId}` : '';
+
+  return `${email}${id}`;
+}
+
+function setAdminIdentityVisible(isLoggedIn, session) {
+  const label = isLoggedIn ? getAdminIdentityLabel(session) : '';
+
+  adminCurrentUserNodes.forEach((node) => {
+    node.textContent = label;
+    node.hidden = !isLoggedIn;
+    node.setAttribute('aria-hidden', String(!isLoggedIn));
+  });
+
+  adminUserChipNodes.forEach((node) => {
+    node.hidden = !isLoggedIn;
+    node.setAttribute('aria-hidden', String(!isLoggedIn));
+  });
+}
+
+function clearAdminDashboardData(targets = {}) {
+  const {
+    ordersBody,
+    statsSummary,
+    statsRows,
+    productList,
+    productSummary,
+  } = targets;
+  const emptyMessage = '请先登录管理员账号';
+
+  if (ordersBody) {
+    ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyMessage)}</div></td></tr>`;
+  }
+
+  if (statsSummary) {
+    statsSummary.innerHTML = '';
+  }
+
+  if (statsRows) {
+    statsRows.innerHTML = '';
+  }
+
+  if (productList) {
+    productList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyMessage)}</div>`;
+  }
+
+  if (productSummary) {
+    productSummary.hidden = true;
+    productSummary.innerHTML = '';
+  }
+}
+
 function getAdminAuthHeaders() {
   const session = getStoredAdminSession();
   const headers = {};
@@ -229,6 +289,8 @@ function renderAdminAuthState(message = '') {
   const session = getStoredAdminSession();
   const isLoggedIn = Boolean(session?.adminToken);
 
+  document.body.classList.toggle('is-admin-authenticated', isLoggedIn);
+
   if (adminShell) {
     adminShell.hidden = !isLoggedIn;
     adminShell.setAttribute('aria-hidden', String(!isLoggedIn));
@@ -239,14 +301,12 @@ function renderAdminAuthState(message = '') {
     adminLoginPanel.setAttribute('aria-hidden', String(isLoggedIn));
   }
 
-  if (adminCurrentUser) {
-    adminCurrentUser.textContent = isLoggedIn
-      ? `${session.email || '管理员'} · ID ${session.adminUserId || ''}`.trim()
-      : '未登录';
-  }
+  setAdminIdentityVisible(isLoggedIn, session);
 
   if (adminLogoutButton) {
     adminLogoutButton.hidden = !isLoggedIn;
+    adminLogoutButton.disabled = !isLoggedIn;
+    adminLogoutButton.setAttribute('aria-hidden', String(!isLoggedIn));
   }
 
   if (adminLoginFeedback) {
@@ -289,7 +349,6 @@ async function loginAdmin(email, password) {
   }
 
   saveStoredAdminSession(result);
-  renderAdminAuthState('');
 
   return result;
 }
@@ -3483,6 +3542,13 @@ function initAdminPage() {
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
   const imageSelect = shell.querySelector('[data-admin-image-select]');
+  const dashboardTargets = {
+    ordersBody,
+    statsSummary,
+    statsRows,
+    productList,
+    productSummary,
+  };
   let activePanel = 'orders';
   let products = [];
   let orders = [];
@@ -3498,6 +3564,16 @@ function initAdminPage() {
   ];
   let activeAdminProductFilter = 'ALL';
   let activeAdminProductSearchKeyword = "";
+
+  function resetAdminDashboardState() {
+    products = [];
+    orders = [];
+    summary = null;
+    productRows = [];
+    renderedStats = null;
+    renderedProducts = null;
+    clearAdminDashboardData(dashboardTargets);
+  }
 
   function getAdminProductFilterLabel(filterValue) {
     return adminProductFilters.find((item) => item.value === filterValue)?.label || '全部';
@@ -3672,6 +3748,7 @@ function initAdminPage() {
 
       if (error.status === 401 || error.status === 403) {
         clearStoredAdminSession();
+        resetAdminDashboardState();
         renderAdminAuthState(error.detail || error.message);
         return;
       }
@@ -3744,6 +3821,7 @@ async function refreshAdminStatsFromApi() {
 
     if (error.status === 401 || error.status === 403) {
       clearStoredAdminSession();
+      resetAdminDashboardState();
       renderAdminAuthState(error.detail || error.message);
     }
   }
@@ -3878,6 +3956,7 @@ async function refreshAdminProductsFromApi() {
 
     if (error.status === 401 || error.status === 403) {
       clearStoredAdminSession();
+      resetAdminDashboardState();
       renderAdminAuthState(error.detail || error.message);
       return;
     }
@@ -4276,8 +4355,6 @@ async function createAdminProductToApi(values, imageFile) {
     await refreshAdminProductsFromApi();
   }
 
-  const hasAdminSession = requireAdminSessionBeforeLoading();
-
   if (adminLoginForm) {
     adminLoginForm.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -4296,11 +4373,12 @@ async function createAdminProductToApi(values, imageFile) {
         await loginAdmin(email, password);
         activePanel = 'orders';
         syncPanels();
-        await loadAdminDashboardFromApi();
         renderAdminAuthState('');
+        await loadAdminDashboardFromApi();
       } catch (error) {
         console.error('管理员登录失败：', error);
         clearStoredAdminSession();
+        resetAdminDashboardState();
         renderAdminAuthState(error.detail || error.message || '管理员登录失败');
       }
     });
@@ -4309,38 +4387,29 @@ async function createAdminProductToApi(values, imageFile) {
   if (adminLogoutButton) {
     adminLogoutButton.addEventListener('click', () => {
       clearStoredAdminSession();
-      orders = [];
-      products = [];
-      summary = null;
-      productRows = [];
-      renderedStats = null;
-      renderedProducts = null;
+      resetAdminDashboardState();
       renderAdminAuthState('已退出管理员账号，请重新登录。');
     });
   }
 
-  if (hasAdminSession) {
-    loadAdminDashboardFromApi();
-  }
-
   navButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    activePanel = button.dataset.adminNavTarget || 'orders';
-    syncPanels();
+    button.addEventListener('click', () => {
+      activePanel = button.dataset.adminNavTarget || 'orders';
+      syncPanels();
 
-    if (activePanel === "orders") {
-      refreshAdminOrdersFromApi();
-    }
+      if (activePanel === "orders") {
+        refreshAdminOrdersFromApi();
+      }
 
-    if (activePanel === "stats") {
-      refreshAdminStatsFromApi();
-    }
+      if (activePanel === "stats") {
+        refreshAdminStatsFromApi();
+      }
 
-    if (activePanel === "products") {
-      refreshAdminProductsFromApi();
-    }
+      if (activePanel === "products") {
+        refreshAdminProductsFromApi();
+      }
+    });
   });
-});
 
   if (productForm) {
     productForm.addEventListener('submit', async (event) => {
@@ -4541,11 +4610,16 @@ async function createAdminProductToApi(values, imageFile) {
 }
 
   syncPanels();
-  renderOrders();
-  renderStats();
-  renderProducts();
-  refreshAdminOrdersFromApi();
-  refreshAdminStatsFromApi();
+  renderAdminAuthState();
+
+  const hasAdminSession = requireAdminSessionBeforeLoading();
+
+  if (hasAdminSession) {
+    loadAdminDashboardFromApi();
+  } else {
+    resetAdminDashboardState();
+    renderAdminAuthState('请先登录管理员账号');
+  }
 }
 
 initScrollTools();

@@ -23,6 +23,17 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
+.admin-login[hidden],
+.admin-shell[hidden],
+.admin-user-chip[hidden],
+[data-admin-logout][hidden] {
+  display: none !important;
+}
+
 html {
   scroll-behavior: smooth;
 }
@@ -2409,6 +2420,21 @@ button:disabled,
 
 .admin-login__feedback.is-error {
   color: #c94f63;
+}
+
+.admin-login__home-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 16px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 170, 220, 0.32);
+  background: rgba(255, 255, 255, 0.72);
+  color: #15324d;
+  font-weight: 700;
+  text-decoration: none;
 }
 
 .admin-layout {

@@ -842,6 +842,8 @@ test('admin authentication source wiring is present', () => {
   assert.ok(html.includes('data-admin-current-user'));
   assert.ok(html.includes('data-admin-logout'));
   assert.ok(html.includes('data-admin-shell'));
+  assert.ok(html.includes('./src/styles.css?v=20260709-admin-auth-state'));
+  assert.ok(html.includes('./src/main.js?v=20260709-admin-auth-state'));
 
   assert.ok(mainJs.includes('ADMIN_SESSION_STORAGE_KEY'));
   assert.ok(mainJs.includes('getStoredAdminSession'));
@@ -865,6 +867,96 @@ test('admin authentication source wiring is present', () => {
   assert.ok(sql.includes('admin@example.com'));
   assert.ok(sql.includes('admin123456'));
   assert.ok(sql.includes('is_admin'));
+});
+
+test('admin auth hidden UI state is enforced by CSS and source state', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const authStateBody = sliceBetween(mainJs, 'function renderAdminAuthState', 'async function loginAdmin');
+
+  assert.ok(html.includes('data-admin-login-home'));
+  assert.match(html, /<a[^>]+class="admin-login__home-link"[^>]+href="\.\/index\.html"[^>]+data-admin-login-home[\s\S]*?返回前台[\s\S]*?<\/a>/);
+  assert.match(html, /<button[^>]+data-admin-logout[^>]+hidden[^>]+disabled[^>]*>/);
+  assert.match(
+    styles,
+    /\.admin-login\[hidden\],[\s\S]*?\.admin-shell\[hidden\],[\s\S]*?\.admin-user-chip\[hidden\],[\s\S]*?\[data-admin-logout\]\[hidden\]\s*\{[\s\S]*?display:\s*none\s*!important;[\s\S]*?\}/,
+  );
+  assert.ok(styles.includes('.admin-login__home-link'));
+  assert.ok(mainJs.includes('function getAdminIdentityLabel('));
+  assert.ok(mainJs.includes('function setAdminIdentityVisible('));
+  assert.ok(authStateBody.includes('adminLoginPanel.hidden = isLoggedIn'));
+  assert.ok(authStateBody.includes('adminShell.hidden = !isLoggedIn'));
+  assert.ok(authStateBody.includes('adminLogoutButton.hidden = !isLoggedIn'));
+  assert.ok(authStateBody.includes('adminLogoutButton.disabled = !isLoggedIn'));
+  assert.ok(authStateBody.includes("adminLogoutButton.setAttribute('aria-hidden', String(!isLoggedIn))"));
+  assert.ok(authStateBody.includes('setAdminIdentityVisible(isLoggedIn, session)'));
+  assert.ok(authStateBody.includes("document.body.classList.toggle('is-admin-authenticated', isLoggedIn)"));
+});
+
+test('admin initialization binds controls before session-gated loading', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const initStart = mainJs.indexOf('function initAdminPage() {');
+  const initEnd = mainJs.indexOf('initScrollTools();', initStart);
+  const initBody = mainJs.slice(initStart, initEnd);
+  const sessionCheckIndex = initBody.indexOf('const hasAdminSession = requireAdminSessionBeforeLoading();');
+  const loginBindingIndex = initBody.indexOf("adminLoginForm.addEventListener('submit'");
+  const logoutBindingIndex = initBody.indexOf("adminLogoutButton.addEventListener('click'");
+  const navBindingIndex = initBody.indexOf("navButtons.forEach((button) =>");
+
+  assert.ok(initStart >= 0);
+  assert.ok(initEnd > initStart);
+  assert.ok(sessionCheckIndex >= 0);
+  assert.ok(loginBindingIndex >= 0 && loginBindingIndex < sessionCheckIndex);
+  assert.ok(logoutBindingIndex >= 0 && logoutBindingIndex < sessionCheckIndex);
+  assert.ok(navBindingIndex >= 0 && navBindingIndex < sessionCheckIndex);
+  assert.doesNotMatch(
+    initBody,
+    /renderProducts\(\);\s*refreshAdminOrdersFromApi\(\);\s*refreshAdminStatsFromApi\(\);/,
+  );
+});
+
+test('admin auth state clears dashboard data on logout and auth failure', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const initStart = mainJs.indexOf('function initAdminPage() {');
+  const initEnd = mainJs.indexOf('initScrollTools();', initStart);
+  const initBody = mainJs.slice(initStart, initEnd);
+  const clearStart = mainJs.indexOf('function clearAdminDashboardData(');
+  const clearEnd = mainJs.indexOf('function getAdminAuthHeaders()', clearStart);
+  const clearBody = mainJs.slice(clearStart, clearEnd);
+  const logoutStart = initBody.indexOf("adminLogoutButton.addEventListener('click'");
+  const logoutEnd = initBody.indexOf('});', logoutStart);
+  const logoutBody = initBody.slice(logoutStart, logoutEnd);
+
+  assert.ok(mainJs.includes('function clearAdminDashboardData('));
+  assert.ok(mainJs.includes('ordersBody.innerHTML = `<tr><td colspan="6">'));
+  assert.ok(mainJs.includes('statsSummary.innerHTML = \'\';'));
+  assert.ok(mainJs.includes('statsRows.innerHTML = \'\';'));
+  assert.ok(mainJs.includes('productList.innerHTML = `<div class="admin-empty">'));
+  assert.ok(mainJs.includes('function resetAdminDashboardState()'));
+  assert.ok(clearStart >= 0);
+  assert.ok(clearEnd > clearStart);
+  assert.doesNotMatch(clearBody, /\borders\s*=\s*\[\]/);
+  assert.doesNotMatch(clearBody, /\bsummary\s*=\s*null/);
+  assert.ok(initBody.includes('resetAdminDashboardState();'));
+  assert.ok(initBody.includes("renderAdminAuthState('请先登录管理员账号')"));
+  assert.ok(mainJs.includes('renderAdminAuthState(\'已退出管理员账号，请重新登录。\')'));
+  assert.ok(mainJs.includes('function setAdminIdentityVisible('));
+  assert.ok(mainJs.includes('node.hidden = !isLoggedIn'));
+  assert.ok(mainJs.includes('node.textContent = label'));
+  assert.ok(initStart >= 0);
+  assert.ok(initEnd > initStart);
+  assert.ok(initBody.includes('const dashboardTargets = {'));
+  assert.ok(initBody.includes('clearAdminDashboardData(dashboardTargets);'));
+  assert.ok(logoutStart >= 0);
+  assert.ok(logoutBody.includes('clearStoredAdminSession();'));
+  assert.ok(logoutBody.includes('resetAdminDashboardState();'));
+  assert.ok(logoutBody.includes("renderAdminAuthState('已退出管理员账号，请重新登录。')"));
+  assert.doesNotMatch(logoutBody, /loadAdminDashboardFromApi|refreshAdminData/);
+  assert.ok(initBody.includes('if (hasAdminSession) {'));
+  assert.ok(initBody.includes('} else {'));
+  assert.ok(initBody.includes("activePanel = button.dataset.adminNavTarget || 'orders';"));
+  assert.ok(initBody.includes('syncPanels();'));
 });
 
 test('refund order backend wiring is present in source and sql', () => {

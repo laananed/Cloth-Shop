@@ -40,6 +40,13 @@ import {
   validateRegistration,
 } from '../src/account-store.js';
 
+function sliceBetween(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = endMarker ? source.indexOf(endMarker, start >= 0 ? start : 0) : source.length;
+
+  return source.slice(start, end);
+}
+
 test('site copy keeps the one-page brand-led direction', () => {
   const copy = getSiteCopy();
 
@@ -150,12 +157,15 @@ test('purchase flow exposes modal hooks in the source and markup', () => {
   assert.ok(mainJs.includes('renderPurchaseModal'));
   assert.ok(mainJs.includes('createDirectOrderFromApi'));
   assert.ok(mainJs.includes('data-purchase-launch="buy"'));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
 });
 
 test('purchase modal source keeps product selection before derived state', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderStart = mainJs.indexOf('function renderPurchaseModal() {');
-  const renderEnd = mainJs.indexOf('async function openPurchaseModal(product) {', renderStart);
+  const renderEnd = mainJs.indexOf("async function openPurchaseModal(product, action = 'buy') {", renderStart);
 
   assert.ok(renderStart >= 0);
   assert.ok(renderEnd > renderStart);
@@ -165,13 +175,80 @@ test('purchase modal source keeps product selection before derived state', () =>
   const selectedSkuIndex = renderBody.indexOf('const selectedSku = getPurchaseSelectedSku(product);');
   const productStateIndex = renderBody.indexOf('getProductDisplayState(product)');
   const selectedSkuOnSaleIndex = renderBody.indexOf('selectedSkuOnSale');
+  const addressToggleIndex = renderBody.indexOf('purchaseAddressSection.hidden = !actionConfig.showAddress;');
+  const paymentToggleIndex = renderBody.indexOf('purchasePaymentSection.hidden = !actionConfig.showPayment;');
 
   assert.ok(productIndex >= 0);
   assert.ok(selectedSkuIndex >= 0);
   assert.ok(productStateIndex >= 0);
   assert.ok(selectedSkuOnSaleIndex >= 0);
+  assert.ok(addressToggleIndex >= 0);
+  assert.ok(paymentToggleIndex >= 0);
   assert.ok(productIndex < productStateIndex);
   assert.ok(selectedSkuIndex < selectedSkuOnSaleIndex);
+});
+
+test('purchase modal routes actions through the shared selection flow', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+  const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {', 'function normalizePayMethod(method) {');
+  const favoriteBody = sliceBetween(mainJs, 'function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {', 'function upsertCartItem(product) {');
+  const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {', 'function openSidebar(section = \'account\') {');
+  const buyBranchStart = mainJs.indexOf("if (actionButton.dataset.purchaseLaunch === 'buy') {");
+  const buyBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {", buyBranchStart);
+  const buyBranchBody = mainJs.slice(buyBranchStart, buyBranchEnd);
+  const favoritesBranchStart = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {");
+  const favoritesBranchEnd = mainJs.indexOf("// if (actionButton.dataset.sidebarLaunch === 'cart') {", favoritesBranchStart);
+  const favoritesBranchBody = mainJs.slice(favoritesBranchStart, favoritesBranchEnd);
+  const cartBranchStart = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'cart') {", favoritesBranchStart);
+  const cartBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'checkout') {", cartBranchStart);
+  const cartBranchBody = mainJs.slice(cartBranchStart, cartBranchEnd);
+
+  assert.ok(mainJs.includes('activePurchaseAction'));
+  assert.ok(mainJs.includes('getPurchaseActionConfig'));
+  assert.ok(mainJs.includes('canOpenProductActionModal'));
+  assert.ok(mainJs.includes('purchaseAddressSection.hidden = !actionConfig.showAddress;'));
+  assert.ok(mainJs.includes('purchasePaymentSection.hidden = !actionConfig.showPayment;'));
+  assert.ok(mainJs.includes('purchaseTotalSection.hidden = !actionConfig.showTotal;'));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(mainJs.includes('addCartToApi(activePurchaseProduct, selectedSku, quantity, { openSidebarAfterSuccess: false })'));
+  assert.ok(mainJs.includes('upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false })'));
+  assert.match(
+    mainJs,
+    /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId)\s*\)/,
+  );
+  assert.ok(mainJs.includes('请先选择商品规格。'));
+
+  assert.ok(!renderModalBody.includes('skuList.length <= 1'));
+  assert.ok(renderModalBody.includes('purchaseSkuOptions.innerHTML = skuList'));
+  assert.ok(renderModalBody.includes('暂无可选规格'));
+  assert.ok(renderModalBody.includes('purchaseSubmit.textContent = product'));
+
+  assert.ok(addCartBody.includes('const actualSelectedSku = selectedSku || null;'));
+  assert.ok(addCartBody.includes('const skuId = actualSelectedSku?.skuId;'));
+  assert.ok(addCartBody.includes('quantity: nextQuantity'));
+  assert.ok(addCartBody.includes('openSidebarAfterSuccess'));
+  assert.ok(!addCartBody.includes('getPurchaseSelectedSku(product)'));
+
+  assert.ok(favoriteBody.includes('const actualSelectedSku = selectedSku || null;'));
+  assert.ok(favoriteBody.includes('const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;'));
+  assert.ok(favoriteBody.includes('skuId: actualSelectedSku.skuId'));
+  assert.ok(favoriteBody.includes('skuName: actualSelectedSku.skuName || \'默认规格\''));
+  assert.ok(!favoriteBody.includes('favorites.some((item) => item.id === product.id)'));
+
+  assert.ok(directOrderBody.includes('const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;'));
+  assert.ok(directOrderBody.includes('const skuId = selectedSku?.skuId;'));
+  assert.ok(directOrderBody.includes('throw new Error("请先选择商品规格。")'));
+  assert.ok(!directOrderBody.includes('getActionSelectedSku(product)'));
+
+  assert.ok(buyBranchBody.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(favoritesBranchBody.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(cartBranchBody.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(!buyBranchBody.includes('validateSkuBeforeProductAction'));
+  assert.ok(!favoritesBranchBody.includes('validateSkuBeforeProductAction'));
+  assert.ok(!cartBranchBody.includes('validateSkuBeforeProductAction'));
 });
 
 test('purchase button click handling does not require a sidebar action hook', () => {

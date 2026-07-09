@@ -53,6 +53,14 @@ function sliceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+const mojibakeFragments = ['鐺', '锟', '鏂', '绾', '閿', '美亘', '闆', 'Ã', '�'];
+
+function assertNoMojibake(source, fileName) {
+  for (const fragment of mojibakeFragments) {
+    assert.ok(!source.includes(fragment), `${fileName} should not contain mojibake fragment: ${fragment}`);
+  }
+}
+
 test('site copy keeps the one-page brand-led direction', () => {
   const copy = getSiteCopy();
 
@@ -413,6 +421,24 @@ test('backend product queries expose inventory_updated_at from the view', () => 
   assert.ok(mainJs.includes('getSalesRankMap(products)'));
   assert.ok(mainJs.includes("salesRankLabel = isTopSeller"));
   assert.ok(!mainJs.includes('暂不可售'));
+});
+
+test('backend and frontend source files do not contain obvious mojibake fragments', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assertNoMojibake(backend, 'backend/app/main.py');
+  assertNoMojibake(mainJs, 'src/main.js');
+  assert.ok(backend.includes('订单发货成功'));
+  assert.ok(backend.includes('取消发货成功'));
+  assert.ok(backend.includes('退款申请已提交'));
+  assert.ok(backend.includes('退款已同意'));
+  assert.ok(backend.includes('已拒绝退款申请'));
+  assert.ok(backend.includes('管理员登录成功'));
+  assert.ok(mainJs.includes('退款待处理'));
+  assert.ok(mainJs.includes('同意退款'));
+  assert.ok(mainJs.includes('拒绝退款'));
+  assert.ok(mainJs.includes('无法发货'));
 });
 
 test('sales rank labels use the full catalog while sorting still keeps sellable products first', () => {

@@ -14,7 +14,7 @@ from app.db import test_connection, get_db
 
 app = FastAPI(
     title="Frieren Cloth Shop API",
-    description="鏈嶈鍟嗗煄 / 杩涢攢瀛樼鐞嗙郴缁熷悗绔?API",
+    description="服装商城 / 进销存管理系统后端 API",
     version="0.1.0",
 )
 
@@ -50,7 +50,7 @@ def build_product_image_filename(original_filename: str) -> str:
     if suffix not in ALLOWED_IMAGE_SUFFIXES:
         raise HTTPException(
             status_code=400,
-            detail="鍥剧墖鏍煎紡涓嶆敮鎸侊紝璇蜂笂浼?jpg銆乯peg銆乸ng銆亀ebp 鎴?gif 鏂囦欢"
+            detail="图片格式不支持，请上传 jpg、jpeg、png、webp 或 gif 文件"
         )
 
     import uuid
@@ -70,19 +70,19 @@ def verify_admin_token(token: str) -> int:
     token_text = str(token or "").strip()
 
     if not token_text:
-        raise HTTPException(status_code=401, detail="绠＄悊鍛樼櫥褰曞凡澶辨晥锛岃閲嶆柊鐧诲綍")
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
 
     padding = "=" * (-len(token_text) % 4)
 
     try:
       decoded = base64.urlsafe_b64decode(f"{token_text}{padding}".encode("utf-8")).decode("utf-8")
     except Exception:
-        raise HTTPException(status_code=401, detail="绠＄悊鍛樼櫥褰曞凡澶辨晥锛岃閲嶆柊鐧诲綍")
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
 
     parts = decoded.split(":")
 
     if len(parts) != 3:
-        raise HTTPException(status_code=401, detail="绠＄悊鍛樼櫥褰曞凡澶辨晥锛岃閲嶆柊鐧诲綍")
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
 
     admin_user_id_text, expires_at_text, signature = parts
 
@@ -90,16 +90,16 @@ def verify_admin_token(token: str) -> int:
         admin_user_id = int(admin_user_id_text)
         expires_at = int(expires_at_text)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="绠＄悊鍛樼櫥褰曞凡澶辨晥锛岃閲嶆柊鐧诲綍")
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
 
     if expires_at < int(time.time()):
-        raise HTTPException(status_code=401, detail="绠＄悊鍛樼櫥褰曞凡澶辨晥锛岃閲嶆柊鐧诲綍")
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
 
     payload = f"{admin_user_id}:{expires_at}"
     expected_signature = hmac.new(ADMIN_TOKEN_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(expected_signature, signature):
-        raise HTTPException(status_code=401, detail="绠＄悊鍛樼櫥褰曞凡澶辨晥锛岃閲嶆柊鐧诲綍")
+        raise HTTPException(status_code=401, detail="管理员登录已失效，请重新登录")
 
     return admin_user_id
 
@@ -130,7 +130,7 @@ def require_admin_user(authorization: str | None):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏍￠獙绠＄悊鍛樿韩浠藉け璐ワ細{str(e)}"
+            detail=f"校验管理员身份失败：{str(e)}"
         )
 
     if not admin_user:
@@ -148,85 +148,85 @@ app.mount(
 )
 
 class CartAddRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
     sku_id: int = Field(..., gt=0, description="SKU ID")
     quantity: int = Field(..., gt=0, description="加入购物车数量")
 
 class CartUpdateQuantityRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    cart_item_id: int = Field(..., gt=0, description="璐墿杞︽槑缁咺D")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    cart_item_id: int = Field(..., gt=0, description="购物车明细ID")
     quantity: int = Field(..., gt=0, description="修改后的购物车商品数量")
 
 class CartDeleteItemRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    cart_item_id: int = Field(..., gt=0, description="璐墿杞︽槑缁咺D")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    cart_item_id: int = Field(..., gt=0, description="购物车明细ID")
 
 class OrderFromCartRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    address_id: int = Field(..., gt=0, description="鏀惰揣鍦板潃ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="收货地址ID")
 
 class OrderFromSelectedCartRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    address_id: int = Field(..., gt=0, description="鏀惰揣鍦板潃ID")
-    cart_item_ids: list[int] = Field(..., min_length=1, description="瑕佺粨绠楃殑璐墿杞︽槑缁咺D鍒楄〃")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="收货地址ID")
+    cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
 
 class PayOrderRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    order_id: int = Field(..., gt=0, description="璁㈠崟ID")
-    pay_method: str = Field(..., description="鏀粯鏂瑰紡锛欰LIPAY / WECHAT / COD")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    order_id: int = Field(..., gt=0, description="订单ID")
+    pay_method: str = Field(..., description="支付方式：ALIPAY / WECHAT / COD")
     pay_password: str = Field(..., min_length=6, max_length=6, description="6位支付密码")
 
 class AddressAddRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
     recipient_name: str = Field(..., min_length=1, max_length=50, description="收货人")
     phone: str = Field(..., min_length=1, max_length=20, description="手机号")
-    detail: str = Field(..., min_length=1, max_length=255, description="璇︾粏鍦板潃")
-    is_default: bool = Field(False, description="鏄惁璁句负榛樿鍦板潃")
+    detail: str = Field(..., min_length=1, max_length=255, description="详细地址")
+    is_default: bool = Field(False, description="是否设为默认地址")
 
 class AddressSetDefaultRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    address_id: int = Field(..., gt=0, description="鍦板潃ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="地址ID")
 
 
 class AddressDeleteRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    address_id: int = Field(..., gt=0, description="鍦板潃ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="地址ID")
 
 class DirectOrderRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    address_id: int = Field(..., gt=0, description="鏀惰揣鍦板潃ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    address_id: int = Field(..., gt=0, description="收货地址ID")
     sku_id: int = Field(..., gt=0, description="SKU ID")
-    quantity: int = Field(..., gt=0, description="璐拱鏁伴噺")
+    quantity: int = Field(..., gt=0, description="购买数量")
 
 class CancelOrderRequest(BaseModel):
-    order_id: int = Field(..., gt=0, description="璁㈠崟ID")
-    remark: str = Field("鐢ㄦ埛鍙栨秷璁㈠崟", description="鍙栨秷鍘熷洜")
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("用户取消订单", description="取消原因")
 
 
 class RefundOrderRequest(BaseModel):
-    user_id: int = Field(..., gt=0, description="鐢ㄦ埛ID")
-    order_id: int = Field(..., gt=0, description="璁㈠崟ID")
+    user_id: int = Field(..., gt=0, description="用户ID")
+    order_id: int = Field(..., gt=0, description="订单ID")
     remark: str = Field("用户申请退款", description="退款原因")
 
 class ProductCreateRequest(BaseModel):
-    category_name: str = Field(..., min_length=1, max_length=80, description="鍟嗗搧鍒嗙被鍚嶇О")
-    product_name: str = Field(..., min_length=1, max_length=120, description="鍟嗗搧鍚嶇О")
-    sku_name: str = Field("榛樿瑙勬牸", max_length=100, description="SKU 鍚嶇О锛岀涓€鐗堜竴涓晢鍝佸彧瀵瑰簲涓€涓?SKU")
+    category_name: str = Field(..., min_length=1, max_length=80, description="商品分类名称")
+    product_name: str = Field(..., min_length=1, max_length=120, description="商品名称")
+    sku_name: str = Field("默认规格", max_length=100, description="SKU 名称，第一版一个商品只对应一个 SKU")
     price: float = Field(..., gt=0, description="SKU 鍞环")
-    available_stock: int = Field(..., ge=0, description="鍒濆鍙敤搴撳瓨")
+    available_stock: int = Field(..., ge=0, description="初始可用库存")
 
 class AdminStockUpdateRequest(BaseModel):
-    sku_id: int = Field(..., gt=0, description="瑕佷慨鏀瑰簱瀛樼殑 SKU ID")
-    available_stock: int = Field(..., ge=0, description="鏂扮殑鍙敤搴撳瓨鏁伴噺")
+    sku_id: int = Field(..., gt=0, description="要修改库存的 SKU ID")
+    available_stock: int = Field(..., ge=0, description="新的可用库存数量")
 
 
 class AdminProductStatusUpdateRequest(BaseModel):
-    product_id: int = Field(..., gt=0, description="瑕佷慨鏀圭姸鎬佺殑鍟嗗搧 ID")
-    status: str = Field(..., description="鍟嗗搧鐘舵€侊細ON_SALE 鎴?OFF_SALE")
+    product_id: int = Field(..., gt=0, description="要修改状态的商品 ID")
+    status: str = Field(..., description="商品状态：ON_SALE 或 OFF_SALE")
 
 
 class AdminProductDeleteRequest(BaseModel):
-    product_id: int = Field(..., gt=0, description="瑕侀€昏緫鍒犻櫎鐨勫晢鍝?ID")
+    product_id: int = Field(..., gt=0, description="要逻辑删除的商品 ID")
 
 class AdminLoginRequest(BaseModel):
     email: str = Field(..., min_length=1, max_length=255)
@@ -555,7 +555,7 @@ def parse_product_skus(
     except json.JSONDecodeError:
         raise HTTPException(
             status_code=400,
-            detail="澶?SKU 鏁版嵁鏍煎紡閿欒锛屽繀椤绘槸 JSON 鏁扮粍"
+            detail="多 SKU 数据格式错误，必须是 JSON 数组"
         )
 
     if not isinstance(sku_rows, list) or not sku_rows:
@@ -571,7 +571,7 @@ def parse_product_skus(
         if not isinstance(row, dict):
             raise HTTPException(
                 status_code=400,
-                detail=f"绗?{index} 鏉?SKU 鏍煎紡閿欒"
+                detail=f"第 {index} 行 SKU 格式错误"
             )
 
         current_name = str(row.get("sku_name") or "").strip()
@@ -642,9 +642,9 @@ async def create_product(
     authorization: str | None = Header(None),
 ):
     """
-    鍚庡彴鏂板鍟嗗搧銆?
-    绗竴鐗堬細涓€涓晢鍝佸彧鍒涘缓涓€涓?SKU銆?
-    鏀寔涓婁紶涓€寮犲晢鍝佷富鍥撅紝鍥剧墖淇濆瓨鍒?uploads/products锛岃矾寰勫啓鍏?product.image_url銆?
+    后台新增商品。
+    第一版：一个商品只创建一个 SKU。
+    支持上传商品主图，图片保存到 uploads/products，路径写入 product.image_url。
     """
     require_admin_user(authorization)
 
@@ -774,7 +774,7 @@ async def create_product(
 
                 conn.commit()
 
-                # 6. 鏂板鎴愬姛鍚庯紝浠?v_product_detail 鏌ュ洖瀹屾暣鍟嗗搧淇℃伅
+                # 6. 新增成功后，从 v_product_detail 查询完整商品信息
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -810,7 +810,7 @@ async def create_product(
 
         return {
             "success": True,
-            "message": "鏂板鍟嗗搧鎴愬姛",
+            "message": "新增商品成功",
             "product_id": product_id,
             "sku_ids": sku_ids,
             "sku_count": len(sku_ids),
@@ -831,7 +831,7 @@ async def create_product(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 
@@ -932,7 +932,7 @@ def get_user_addresses(user_id: int):
 
         return {
             "success": True,
-            "message": "鏌ヨ鐢ㄦ埛鍦板潃鎴愬姛",
+            "message": "查询用户地址成功",
             "user_id": user_id,
             "count": len(rows),
             "data": jsonable_encoder(rows)
@@ -954,8 +954,8 @@ def get_user_addresses(user_id: int):
 @app.post("/addresses/add")
 def add_user_address(req: AddressAddRequest):
     """
-    鏂板鐢ㄦ埛鏀惰揣鍦板潃銆?
-    褰撳墠鏁版嵁搴?user_address 琛ㄥ彧鏈?detail 瀛楁锛屾墍浠ュ墠绔細鎶婄渷甯傚尯鍜岃缁嗗湴鍧€鍚堝苟鍚庝紶鍏?detail銆?
+    新增用户收货地址。
+    当前数据库 user_address 表只有 detail 字段，所以前端会把省市区和详细地址合并后传入 detail。
     """
     try:
         with get_db() as conn:
@@ -1044,7 +1044,7 @@ def add_user_address(req: AddressAddRequest):
 
         return {
             "success": True,
-            "message": "鏂板鏀惰揣鍦板潃鎴愬姛",
+            "message": "新增收货地址成功",
             "address_id": address_id,
             "user_id": req.user_id,
             "count": len(rows),
@@ -1064,7 +1064,7 @@ def add_user_address(req: AddressAddRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/addresses/set-default")
@@ -1094,7 +1094,7 @@ def set_default_address(req: AddressSetDefaultRequest):
 
         return {
             "success": True,
-            "message": "璁剧疆榛樿鍦板潃鎴愬姛",
+            "message": "设置默认地址成功",
             "user_id": req.user_id,
             "address_id": req.address_id,
             "count": len(rows),
@@ -1111,7 +1111,7 @@ def set_default_address(req: AddressSetDefaultRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/addresses/delete")
@@ -1142,7 +1142,7 @@ def delete_user_address(req: AddressDeleteRequest):
 
         return {
             "success": True,
-            "message": "鍒犻櫎鏀惰揣鍦板潃鎴愬姛",
+            "message": "删除收货地址成功",
             "user_id": req.user_id,
             "address_id": req.address_id,
             "count": len(rows),
@@ -1159,7 +1159,7 @@ def delete_user_address(req: AddressDeleteRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 
@@ -1186,7 +1186,7 @@ def get_cart(user_id: int):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏌ヨ璐墿杞﹀け璐ワ細{str(e)}"
+            detail=f"查询购物车失败：{str(e)}"
         )
 
 
@@ -1207,7 +1207,7 @@ def add_to_cart(req: CartAddRequest):
 
                 conn.commit()
 
-                # 鍔犲叆鎴愬姛鍚庯紝鍐嶆煡璇竴娆＄敤鎴疯喘鐗╄溅锛屾柟渚垮墠绔洿鎺ュ埛鏂伴〉闈?
+                # 加入成功后，再查询一次用户购物车，方便前端直接刷新页面
                 rows = query_cart_rows(conn, req.user_id)
 
             except Exception:
@@ -1230,13 +1230,13 @@ def add_to_cart(req: CartAddRequest):
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
-            detail=f"鍔犲叆璐墿杞﹀け璐ワ細{error_message}"
+            detail=f"加入购物车失败：{error_message}"
         )
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 
@@ -1281,13 +1281,13 @@ def update_cart_quantity(req: CartUpdateQuantityRequest):
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
-            detail=f"淇敼璐墿杞︽暟閲忓け璐ワ細{error_message}"
+            detail=f"修改购物车数量失败：{error_message}"
         )
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/cart/delete-item")
@@ -1331,13 +1331,13 @@ def delete_cart_item(req: CartDeleteItemRequest):
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
-            detail=f"鍒犻櫎璐墿杞﹀晢鍝佸け璐ワ細{error_message}"
+            detail=f"删除购物车商品失败：{error_message}"
         )
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/orders/from-cart")
@@ -1446,7 +1446,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
 
         return {
             "success": True,
-            "message": "浠庤喘鐗╄溅鍒涘缓璁㈠崟鎴愬姛",
+            "message": "从购物车创建订单成功",
             "order_id": order_id,
             "order_no": order_no,
             "order_summary": jsonable_encoder(order_summary),
@@ -1463,14 +1463,14 @@ def create_order_from_cart(req: OrderFromCartRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/orders/from-cart-selected")
 def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
     """
-    浠庤喘鐗╄溅涓€変腑鐨勫晢鍝佸垱寤鸿鍗曘€?
-    璋冪敤鏂板瀛樺偍杩囩▼ sp_create_order_from_selected_cart_items銆?
+    从购物车中选中的商品创建订单。
+    调用存储过程 sp_create_order_from_selected_cart_items。
     """
     try:
         with get_db() as conn:
@@ -1590,7 +1590,7 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
 
         return {
             "success": True,
-            "message": "浠庤喘鐗╄溅閫変腑鍟嗗搧鍒涘缓璁㈠崟鎴愬姛",
+            "message": "从购物车选中商品创建订单成功",
             "order_id": order_id,
             "order_no": order_no,
             "order_summary": jsonable_encoder(order_summary),
@@ -1608,7 +1608,7 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 
@@ -1638,7 +1638,7 @@ def pay_order(req: PayOrderRequest):
                     if not password_check or password_check["cnt"] == 0:
                         raise HTTPException(
                             status_code=400,
-                            detail="鏀粯瀵嗙爜閿欒"
+                            detail="支付密码错误"
                         )
 
                     # 2. 鏍￠獙璁㈠崟鏄惁灞炰簬褰撳墠鐢ㄦ埛
@@ -1721,7 +1721,7 @@ def pay_order(req: PayOrderRequest):
 
         return {
             "success": True,
-            "message": "璁㈠崟鏀粯鎴愬姛",
+            "message": "订单支付成功",
             "order_id": req.order_id,
             "order_summary": jsonable_encoder(order_summary),
             "payment_records": jsonable_encoder(payment_records)
@@ -1740,7 +1740,7 @@ def pay_order(req: PayOrderRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/orders/direct")
@@ -1850,7 +1850,7 @@ def create_direct_order(req: DirectOrderRequest):
                     )
                     order_items = cursor.fetchall()
 
-                # 6. 鏌ヨ搴撳瓨娴佹按锛岃瘉鏄庡簱瀛樺凡缁忚閿佸畾
+                # 6. 查询库存流水，确认库存已经被锁定
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1875,7 +1875,7 @@ def create_direct_order(req: DirectOrderRequest):
 
         return {
             "success": True,
-            "message": "鐩存帴涓嬪崟鎴愬姛",
+            "message": "直接下单成功",
             "order_id": order_id,
             "order_no": order_no,
             "order_summary": jsonable_encoder(order_summary),
@@ -1893,7 +1893,7 @@ def create_direct_order(req: DirectOrderRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/orders/cancel")
@@ -1989,7 +1989,7 @@ def cancel_order(req: CancelOrderRequest):
 
         return {
             "success": True,
-            "message": "璁㈠崟鍙栨秷鎴愬姛",
+            "message": "订单取消成功",
             "order_id": req.order_id,
             "order_summary": jsonable_encoder(order_summary),
             "status_logs": jsonable_encoder(status_logs),
@@ -2006,7 +2006,7 @@ def cancel_order(req: CancelOrderRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"服务器错误：{str(e)}"
         )
 
 @app.post("/orders/refund")
@@ -2403,7 +2403,7 @@ def get_admin_orders(authorization: str | None = Header(None)):
 
         return {
             "success": True,
-            "message": "鏌ヨ鍚庡彴璁㈠崟鍒楄〃鎴愬姛",
+            "message": "查询后台订单列表成功",
             "count": len(rows),
             "data": jsonable_encoder(rows)
         }
@@ -2418,7 +2418,8 @@ def get_admin_orders(authorization: str | None = Header(None)):
 @app.get("/admin/orders/{order_id}")
 def get_admin_order_detail(order_id: int, authorization: str | None = Header(None)):
     """
-    鍚庡彴璁㈠崟璇︽儏銆?    """
+    后台订单详情。
+    """
     try:
         require_admin_user(authorization)
 
@@ -2606,7 +2607,9 @@ def unship_admin_order(req: AdminUnshipOrderRequest, authorization: str | None =
 @app.get("/admin/stats")
 def get_admin_stats(authorization: str | None = Header(None)):
     """
-    鍚庡彴閿€閲忕粺璁°€?    绗竴鐗堟殏涓嶅仛鏉冮檺鏍￠獙锛岀粺璁＄湡瀹炴暟鎹簱璁㈠崟銆佸晢鍝併€侀攢閲忔帓琛屻€?    """
+    后台销量统计。
+    第一版暂不做权限校验，统计真实数据库订单、商品、销量排行。
+    """
     try:
         require_admin_user(authorization)
 
@@ -2637,7 +2640,7 @@ def get_admin_stats(authorization: str | None = Header(None)):
                 )
                 product_count_row = cursor.fetchone()
 
-                # 3. 鍟嗗搧閿€閲忔帓琛?
+                # 3. 商品销量排行
                 cursor.execute(
                     """
                     SELECT
@@ -2675,13 +2678,15 @@ def get_admin_stats(authorization: str | None = Header(None)):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏌ヨ鍚庡彴閿€閲忕粺璁″け璐ワ細{str(e)}"
+            detail=f"查询后台销量统计失败：{str(e)}"
         )
 
 @app.get("/admin/inventory")
 def get_admin_inventory(authorization: str | None = Header(None)):
     """
-    鍚庡彴搴撳瓨鍒楄〃銆?    鏄剧ず鎵€鏈夋湭閫昏緫鍒犻櫎鐨勫晢鍝?SKU锛屽寘鎷笂鏋跺拰涓嬫灦鍟嗗搧銆?    """
+    后台库存列表。
+    显示所有未逻辑删除的商品 SKU，包括上架和下架商品。
+    """
     try:
         require_admin_user(authorization)
 
@@ -2715,7 +2720,7 @@ def get_admin_inventory(authorization: str | None = Header(None)):
 
         return {
             "success": True,
-            "message": "鏌ヨ鍚庡彴搴撳瓨鍒楄〃鎴愬姛",
+            "message": "查询后台库存列表成功",
             "count": len(rows),
             "data": jsonable_encoder(rows)
         }
@@ -2730,8 +2735,8 @@ def get_admin_inventory(authorization: str | None = Header(None)):
 @app.post("/admin/inventory/update-stock")
 def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None = Header(None)):
     """
-    鍚庡彴淇敼 SKU 鍙敤搴撳瓨銆?
-    娉ㄦ剰锛氳繖閲屼慨鏀圭殑鏄?available_stock锛屼笉鐩存帴淇敼 locked_stock銆?
+    后台修改 SKU 可用库存。
+    注意：这里修改的是 available_stock，不直接修改 locked_stock。
     """
     try:
         with get_db() as conn:
@@ -2755,7 +2760,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                             detail="SKU 不存在或已删除"
                         )
 
-                    # 2. 閿佸畾搴撳瓨琛岋紝閬垮厤骞跺彂淇敼
+                    # 2. 锁定库存行，避免并发修改
                     cursor.execute(
                         """
                         SELECT id, locked_stock
@@ -2767,7 +2772,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                     )
                     inventory = cursor.fetchone()
 
-                    # 3. 濡傛灉搴撳瓨璁板綍涓嶅瓨鍦紝鍒欐柊寤猴紱瀛樺湪鍒欐洿鏂?
+                    # 3. 如果库存记录不存在，则新建；存在则更新
                     if inventory:
                         cursor.execute(
                             """

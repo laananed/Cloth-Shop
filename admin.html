@@ -76,6 +76,27 @@
             <div class="admin-panel__stack">
               <div class="admin-summary" data-admin-product-summary hidden></div>
 
+              <div class="admin-product-search" data-admin-product-search-wrap>
+                <label class="admin-product-search__label" for="admin-product-search-input">搜索商品</label>
+                <div class="admin-product-search__control">
+                  <input
+                    id="admin-product-search-input"
+                    class="admin-product-search__input"
+                    type="search"
+                    placeholder="输入商品名称，例如：连衣裙、外套"
+                    data-admin-product-search
+                  />
+                  <button
+                    class="admin-product-search__clear"
+                    type="button"
+                    data-admin-product-search-clear
+                    hidden
+                  >
+                    清空
+                  </button>
+                </div>
+              </div>
+
               <div class="admin-product-filter" data-admin-product-filter-bar></div>
 
               <p class="admin-feedback" data-admin-product-manage-feedback aria-live="polite"></p>

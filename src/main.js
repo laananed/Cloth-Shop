@@ -3277,6 +3277,8 @@ function initAdminPage() {
   const statsRows = shell.querySelector('[data-admin-stats-rows]');
   const productList = shell.querySelector('[data-admin-products-list]');
   const productSummary = shell.querySelector('[data-admin-product-summary]');
+  const adminProductSearchInput = shell.querySelector('[data-admin-product-search]');
+  const adminProductSearchClear = shell.querySelector('[data-admin-product-search-clear]');
   const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
   const productForm = shell.querySelector('[data-admin-product-form]');
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
@@ -3296,9 +3298,31 @@ function initAdminPage() {
     { value: 'OFF_SALE', label: '已下架' },
   ];
   let activeAdminProductFilter = 'ALL';
+  let activeAdminProductSearchKeyword = "";
 
   function getAdminProductFilterLabel(filterValue) {
     return adminProductFilters.find((item) => item.value === filterValue)?.label || '全部';
+  }
+
+  function getAdminProductSearchText(row) {
+    return [
+      row?.product_name,
+      row?.productName,
+      row?.name,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function matchesAdminProductSearch(row) {
+    const keyword = String(activeAdminProductSearchKeyword || "").trim().toLowerCase();
+
+    if (!keyword) {
+      return true;
+    }
+
+    return getAdminProductSearchText(row).includes(keyword);
   }
 
   function getAdminProductSaleState(row) {
@@ -3336,11 +3360,14 @@ function initAdminPage() {
   function getFilteredAdminProductRows(rows) {
     const allRows = Array.isArray(rows) ? rows : [];
 
-    if (activeAdminProductFilter === 'ALL') {
-      return allRows;
-    }
+    return allRows.filter((row) => {
+      const matchStatus =
+        activeAdminProductFilter === 'ALL' ||
+        getAdminProductSaleState(row).key === activeAdminProductFilter;
+      const matchSearch = matchesAdminProductSearch(row);
 
-    return allRows.filter((row) => getAdminProductSaleState(row).key === activeAdminProductFilter);
+      return matchStatus && matchSearch;
+    });
   }
 
   function renderAdminProductFilterBar(counts) {
@@ -3365,6 +3392,12 @@ function initAdminPage() {
         `;
       })
       .join('');
+  }
+
+  function updateAdminProductSearchClearState() {
+    if (adminProductSearchClear) {
+      adminProductSearchClear.hidden = !String(activeAdminProductSearchKeyword || "").trim();
+    }
   }
 
   function normalizeAdminOrderRow(row) {
@@ -3697,6 +3730,7 @@ async function refreshAdminProductsFromApi() {
 
   function renderProducts() {
     const allRows = Array.isArray(renderedProducts?.rows) ? renderedProducts.rows : [];
+    const searchKeyword = String(activeAdminProductSearchKeyword || "").trim();
     const counts = {
       all: allRows.length,
       ON_SALE: 0,
@@ -3717,6 +3751,8 @@ async function refreshAdminProductsFromApi() {
       productSummary.innerHTML = "";
     }
 
+    updateAdminProductSearchClearState();
+
     if (!productList) {
       return;
     }
@@ -3729,7 +3765,12 @@ async function refreshAdminProductsFromApi() {
     const filteredRows = getFilteredAdminProductRows(allRows);
 
     if (!filteredRows.length) {
-      productList.innerHTML = `<div class="admin-empty">当前筛选“${escapeHtml(getAdminProductFilterLabel(activeAdminProductFilter))}”暂无商品</div>`;
+      const filterLabel = getAdminProductFilterLabel(activeAdminProductFilter);
+      const emptyText = searchKeyword
+        ? `没有找到名称包含“${searchKeyword}”且符合“${filterLabel}”条件的商品`
+        : `当前筛选“${filterLabel}”暂无商品`;
+
+      productList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyText)}</div>`;
       return;
     }
 
@@ -4120,6 +4161,28 @@ async function createAdminProductToApi(values, imageFile) {
 
       activeAdminProductFilter = nextFilter;
       renderProducts();
+    });
+  }
+
+  if (adminProductSearchInput) {
+    adminProductSearchInput.addEventListener("input", (event) => {
+      activeAdminProductSearchKeyword = String(event.target.value || "");
+      updateAdminProductSearchClearState();
+      renderProducts();
+    });
+  }
+
+  if (adminProductSearchClear) {
+    adminProductSearchClear.addEventListener("click", () => {
+      activeAdminProductSearchKeyword = "";
+
+      if (adminProductSearchInput) {
+        adminProductSearchInput.value = "";
+      }
+
+      updateAdminProductSearchClearState();
+      renderProducts();
+      adminProductSearchInput?.focus();
     });
   }
 

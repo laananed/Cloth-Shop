@@ -779,6 +779,24 @@ test('admin product filtering source wiring is present', () => {
   assert.ok(mainJs.includes('productSummary.hidden = true'));
 });
 
+test('admin product search source wiring is present', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(html.includes('data-admin-product-search'));
+  assert.ok(html.includes('data-admin-product-search-clear'));
+  assert.ok(mainJs.includes('activeAdminProductSearchKeyword'));
+  assert.ok(mainJs.includes('getAdminProductSearchText'));
+  assert.ok(mainJs.includes('matchesAdminProductSearch'));
+  assert.ok(mainJs.includes('data-admin-product-search'));
+  assert.ok(mainJs.includes('data-admin-product-search-clear'));
+  assert.ok(mainJs.includes('getFilteredAdminProductRows(rows)'));
+  assert.ok(mainJs.includes('matchesAdminProductSearch(row)'));
+  assert.ok(styles.includes('.admin-product-search'));
+  assert.ok(styles.includes('.admin-product-search__input'));
+});
+
 test('refund order backend wiring is present in source and sql', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const sql = readFileSync('06_add_refund_order.sql', 'utf8');

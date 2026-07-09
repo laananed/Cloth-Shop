@@ -97,31 +97,15 @@
                   <span>分类</span>
                   <input type="text" name="category" placeholder="例如：连衣裙" />
                 </label>
-
-                <label class="admin-field">
-                  <span>价格</span>
-                  <input type="number" name="price" min="0" step="1" placeholder="399" />
-                </label>
-
-                <label class="admin-field">
-                  <span>SKU 名称</span>
-                  <input type="text" name="skuName" placeholder="例如：默认规格 / S码 / 白色均码" />
-                </label>
-
-                <label class="admin-field">
-                  <span>初始库存</span>
-                  <input type="number" name="stock" min="0" step="1" value="20" placeholder="20" />
-                </label>
-
-
+                
                 <label class="admin-field admin-field--wide">
-                  <span>多 SKU 设置（可选）</span>
+                  <span>多 SKU 设置（SKU 名称 | 价格 | 库存）</span>
                   <textarea
                     name="skuRows"
                     rows="5"
                     placeholder="一行一个 SKU：SKU名称|价格|库存&#10;例如：白色S码|399|10&#10;白色M码|399|8&#10;灰色L码|429|5"
                   ></textarea>
-                  <small>填写后优先使用多 SKU；不填写则使用上面的 SKU 名称和初始库存。</small>
+                  <small>支持只填写一行。每一行代表一个 SKU，格式固定为：SKU名称|价格|库存。</small>
                 </label>
 
                 <label class="admin-field">

@@ -3407,41 +3407,38 @@ async function updateAdminProductStatusToApi(productId, status) {
   return result;
 }
   
-function parseAdminSkuRows(values, defaultPrice) {
+function parseAdminSkuRows(values) {
   const rawText = String(values.skuRows || "").trim();
 
   if (!rawText) {
-    return [];
+    throw new Error("请填写多 SKU 设置，至少填写一行：SKU名称|价格|库存");
   }
 
-  return rawText
+  const rows = rawText
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line, index) => {
       const parts = line.split("|").map((part) => part.trim());
 
-      if (parts.length < 2 || parts.length > 3) {
-        throw new Error(`第 ${index + 1} 行 SKU 格式错误，请使用：SKU名称|价格|库存 或 SKU名称|库存`);
+      if (parts.length !== 3) {
+        throw new Error(`第 ${index + 1} 行格式错误，请使用：SKU名称|价格|库存`);
       }
 
       const skuName = parts[0];
-      const priceText = parts.length === 3 ? parts[1] : String(defaultPrice);
-      const stockText = parts.length === 3 ? parts[2] : parts[1];
-
-      const price = Number(priceText);
-      const availableStock = Number(stockText);
+      const price = Number(parts[1]);
+      const availableStock = Number(parts[2]);
 
       if (!skuName) {
         throw new Error(`第 ${index + 1} 行 SKU 名称不能为空`);
       }
 
       if (!Number.isFinite(price) || price <= 0) {
-        throw new Error(`第 ${index + 1} 行 SKU 价格必须大于 0`);
+        throw new Error(`第 ${index + 1} 行价格必须大于 0`);
       }
 
       if (!Number.isInteger(availableStock) || availableStock < 0) {
-        throw new Error(`第 ${index + 1} 行 SKU 库存必须是大于等于 0 的整数`);
+        throw new Error(`第 ${index + 1} 行库存必须是大于等于 0 的整数`);
       }
 
       return {
@@ -3450,28 +3447,37 @@ function parseAdminSkuRows(values, defaultPrice) {
         available_stock: availableStock,
       };
     });
+
+  const nameSet = new Set();
+
+  rows.forEach((row) => {
+    if (nameSet.has(row.sku_name)) {
+      throw new Error(`SKU 名称重复：${row.sku_name}`);
+    }
+
+    nameSet.add(row.sku_name);
+  });
+
+  return rows;
 }
 
 
 async function createAdminProductToApi(values, imageFile) {
   const formData = new FormData();
-  const price = Number(values.price || 0);
-  const stock = Number(values.stock || 0);
-  const skuName = String(values.skuName || "默认规格").trim() || "默认规格";
-  const skuRows = parseAdminSkuRows(values, price);
+  const skuRows = Array.isArray(values.skuRows)
+    ? values.skuRows
+    : parseAdminSkuRows(values);
+
+  const firstSku = skuRows[0];
 
   formData.append("category_name", String(values.category || "").trim());
   formData.append("product_name", String(values.name || "").trim());
 
-  // 兼容旧的单 SKU 字段
-  formData.append("sku_name", skuName);
-  formData.append("price", String(price));
-  formData.append("available_stock", String(stock));
+  formData.append("sku_name", firstSku.sku_name);
+  formData.append("price", String(firstSku.price));
+  formData.append("available_stock", String(firstSku.available_stock));
 
-  // 新的多 SKU 字段：填写了多 SKU 文本框才发送
-  if (skuRows.length) {
-    formData.append("skus_json", JSON.stringify(skuRows));
-  }
+  formData.append("skus_json", JSON.stringify(skuRows));
 
   if (imageFile) {
     formData.append("image", imageFile);
@@ -3531,17 +3537,19 @@ async function createAdminProductToApi(values, imageFile) {
       const imageFile = imageInput?.files?.[0] || null;
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
-      const price = Number(values.price || 0);
-      const stock = Number(values.stock || 0);
       const skuName = String(values.skuName || "默认规格").trim() || "默认规格";
 
-      if (!name || !category || !Number.isFinite(price) || price <= 0) {
-        setFeedback(productFeedback, '请完整填写商品名称、分类和价格。', true);
+      let skuRows = [];
+
+      try {
+        skuRows = parseAdminSkuRows(values);
+      } catch (error) {
+        setFeedback(productFeedback, error.message, true);
         return;
       }
 
-      if (!Number.isInteger(stock) || stock < 0) {
-        setFeedback(productFeedback, '库存必须是大于等于 0 的整数。', true);
+      if (!name || !category) {
+        setFeedback(productFeedback, '请完整填写商品名称和分类。', true);
         return;
       }
 
@@ -3553,9 +3561,7 @@ async function createAdminProductToApi(values, imageFile) {
           ...values,
           name,
           category,
-          price,
-          stock,
-          skuName,
+          skuRows,
         },
         imageFile
       );

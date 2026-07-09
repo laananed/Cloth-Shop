@@ -744,6 +744,27 @@ test('admin product management source includes logical delete wiring', () => {
   assert.ok(backend.includes('WHERE product_id = %s'));
 });
 
+test('admin orders source is wired to database orders and not mock render helpers', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('@app.get("/admin/orders")') || mainJs.includes('/admin/orders'));
+  assert.ok(mainJs.includes('async function loadAdminOrdersFromApi()'));
+  assert.ok(mainJs.includes('function renderAdminOrders('));
+  assert.ok(mainJs.includes('async function refreshAdminOrdersFromApi()'));
+  assert.ok(mainJs.includes('data-admin-orders-body'));
+  assert.ok(mainJs.includes('REFUNDED'));
+  assert.ok(mainJs.includes('已退款'));
+
+  const adminOrdersSectionStart = mainJs.indexOf('async function loadAdminOrdersFromApi()');
+  const adminOrdersSectionEnd = mainJs.indexOf('function convertApiStatsToRenderedStats(result)', adminOrdersSectionStart);
+  const adminOrdersSection = mainJs.slice(adminOrdersSectionStart, adminOrdersSectionEnd);
+
+  assert.ok(adminOrdersSectionStart >= 0);
+  assert.ok(adminOrdersSectionEnd > adminOrdersSectionStart);
+  assert.ok(!adminOrdersSection.includes('getStoredMockOrders(storage)'));
+  assert.ok(!adminOrdersSection.includes('renderAdminOrdersView(products, orders)'));
+});
+
 test('admin product filtering source wiring is present', () => {
   const html = readFileSync('admin.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');

@@ -12,19 +12,13 @@ import {
   getStoredCart,
   getStoredCartSelections,
   getStoredFavorites,
-  getStoredMockOrders,
-  getStoredOrders,
   getStoredProfile,
-  renderAdminOrdersView,
   renderAdminProductsView,
   renderAdminStatsView,
-  renderOrderItems,
   renderSavedProductItems,
   saveStoredCart,
   saveStoredAdminProducts,
   saveStoredFavorites,
-  saveStoredMockOrders,
-  saveStoredOrders,
   saveStoredProfile,
   saveStoredAddressBook,
   saveStoredCartSelections,
@@ -3046,29 +3040,6 @@ function renderSidebar() {
 
   renderSidebarDbAddressList();
 
-  // const orderView = renderOrderItems(getStoredOrders(storage));
-  // if (ordersList) {
-  //   if (orderView.emptyState) {
-  //     ordersList.innerHTML = `<p class="orders-empty">${orderView.emptyState}</p>`;
-  //   } else {
-  //     ordersList.innerHTML = orderView.items
-  //       .map(
-  //         (order) => `
-  //           <article class="order-card">
-  //             <div class="order-card__header">
-  //               <strong>${order.orderNo}</strong>
-  //               <span>${order.status}</span>
-  //             </div>
-  //             <p>${order.items.join(' 路 ')}</p>
-  //             <p>合计：${formatPrice(order.totalPrice)}</p>
-  //             <p>${order.createdAt}</p>
-  //           </article>
-  //         `,
-  //       )
-  //       .join('');
-  //   }
-  // }
-
   if (ordersList) {
     ordersList.innerHTML = `<p class="orders-empty">正在加载数据库订单...</p>`;
   }
@@ -3223,7 +3194,6 @@ function initAdminPage() {
   let orders = [];
   let summary = null;
   let productRows = [];
-  let renderedOrders = null;
   let renderedStats = null;
   let renderedProducts = null;
   const adminProductFilters = [
@@ -3304,39 +3274,82 @@ function initAdminPage() {
       .join('');
   }
 
-  function convertApiOrdersToAdminRows(apiRows) {
-  return apiRows.map((row) => ({
-    orderNo: row.order_no || `订单 ${row.order_id}`,
-    customerName: row.email || `用户 ${row.user_id}`,
-    itemsLabel: `${Number(row.item_kind_count || 0)} 类 / ${Number(row.total_quantity || 0)} 件`,
-    amountLabel: formatPrice(row.total_amount),
-    status: formatOrderStatus(row.status),
-    createdAt: renderOrderDetailValue(row.created_at),
-  }));
-}
-  async function refreshAdminOrdersFromApi() {
-  try {
+  function normalizeAdminOrderRow(row) {
+    const orderId = Number(row?.order_id || 0);
+    const itemKindCount = Number(row?.item_kind_count || 0);
+    const totalQuantity = Number(row?.total_quantity || 0);
+    const totalAmount = Number(row?.total_amount || 0);
+    const status = normalizeStatus(row?.status || "UNKNOWN");
+    const productSummary = String(row?.product_summary || "").trim();
+
+    return {
+      orderId,
+      orderNo: row?.order_no || (orderId ? `订单 ${orderId}` : "订单"),
+      userId: Number(row?.user_id || 0),
+      email: row?.email || "",
+      status,
+      statusLabel: formatOrderStatus(status),
+      totalAmount,
+      itemKindCount,
+      totalQuantity,
+      productSummary: productSummary || `${itemKindCount} 类商品 / ${totalQuantity} 件`,
+      createdAt: renderOrderDetailValue(row?.created_at),
+      updatedAt: renderOrderDetailValue(row?.updated_at),
+    };
+  }
+
+  async function loadAdminOrdersFromApi() {
     const response = await fetch(`${API_BASE_URL}/admin/orders`);
     const result = await response.json();
 
     if (!response.ok || !result.success || !Array.isArray(result.data)) {
-      throw new Error(result.detail || "加载后台订单失败");
+      throw new Error(result.detail || "加载数据库订单失败");
     }
 
-    const rows = convertApiOrdersToAdminRows(result.data);
-
-    renderedOrders = {
-      emptyState: rows.length ? "" : "暂无数据库订单",
-      rows,
-    };
-
-    renderOrders();
-
-    console.log("后台订单已切换为数据库订单：", result);
-  } catch (error) {
-    console.error("后台订单加载失败：", error);
+    return result.data.map(normalizeAdminOrderRow);
   }
-}
+
+  function renderAdminOrders(orderList, emptyText = "暂无数据库订单") {
+    if (!ordersBody) {
+      return;
+    }
+
+    const rows = Array.isArray(orderList) ? orderList : [];
+
+    if (!rows.length) {
+      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyText)}</div></td></tr>`;
+      return;
+    }
+
+    ordersBody.innerHTML = rows
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.orderNo)}</td>
+            <td>${escapeHtml(row.email || `用户 ${row.userId || ""}`)}</td>
+            <td>${escapeHtml(row.productSummary || `${row.itemKindCount} 类商品 / ${row.totalQuantity} 件`)}</td>
+            <td>${escapeHtml(formatPrice(row.totalAmount))}</td>
+            <td>${escapeHtml(row.statusLabel || formatOrderStatus(row.status))}</td>
+            <td>${escapeHtml(row.createdAt)}</td>
+          </tr>
+        `,
+      )
+      .join("");
+  }
+
+  async function refreshAdminOrdersFromApi() {
+    try {
+      orders = await loadAdminOrdersFromApi();
+      renderAdminOrders(orders);
+
+      console.log("后台订单已切换为数据库订单：", orders);
+    } catch (error) {
+      console.error("后台订单加载失败：", error);
+
+      orders = [];
+      renderAdminOrders([], `加载数据库订单失败：${error.message}`);
+    }
+  }
 
 function convertApiStatsToRenderedStats(result) {
   const summary = result.summary || {};
@@ -3512,10 +3525,9 @@ async function loadAdminProductsFromApi() {
     products = getStoredAdminProducts(storage);
   }
 
-  orders = getStoredMockOrders(storage);
+  orders = [];
   summary = getSalesSummary(products, orders);
   productRows = getProductSalesRows(products, orders);
-  renderedOrders = renderAdminOrdersView(products, orders);
   renderedStats = renderAdminStatsView(summary, productRows);
   renderedProducts = renderAdminProductsView(products);
 }
@@ -3544,29 +3556,7 @@ async function refreshAdminProductsFromApi() {
 }
 
   function renderOrders() {
-    if (!ordersBody) {
-      return;
-    }
-
-    if (!renderedOrders || renderedOrders.emptyState) {
-      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(renderedOrders.emptyState)}</div></td></tr>`;
-      return;
-    }
-
-    ordersBody.innerHTML = renderedOrders.rows
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.orderNo)}</td>
-            <td>${escapeHtml(row.customerName)}</td>
-            <td>${escapeHtml(row.itemsLabel)}</td>
-            <td>${escapeHtml(row.amountLabel)}</td>
-            <td>${escapeHtml(row.status)}</td>
-            <td>${escapeHtml(row.createdAt)}</td>
-          </tr>
-        `,
-      )
-      .join('');
+    renderAdminOrders(orders);
   }
 
   function renderStats() {

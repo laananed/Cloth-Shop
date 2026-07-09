@@ -3375,9 +3375,9 @@ async function createAdminProductToApi(values, imageFile) {
 
   formData.append("category_name", String(values.category || "").trim());
   formData.append("product_name", String(values.name || "").trim());
-  formData.append("sku_name", "默认规格");
+  formData.append("sku_name", String(values.skuName || "默认规格").trim() || "默认规格");
   formData.append("price", String(Number(values.price || 0)));
-  formData.append("available_stock", String(Number(values.stock || 20)));
+  formData.append("available_stock", String(Number(values.stock || 0)));
 
   if (imageFile) {
     formData.append("image", imageFile);
@@ -3438,7 +3438,8 @@ async function createAdminProductToApi(values, imageFile) {
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
       const price = Number(values.price || 0);
-      const stock = Number(values.stock || 20);
+      const stock = Number(values.stock || 0);
+      const skuName = String(values.skuName || "默认规格").trim() || "默认规格";
 
       if (!name || !category || !Number.isFinite(price) || price <= 0) {
         setFeedback(productFeedback, '请完整填写商品名称、分类和价格。', true);
@@ -3460,6 +3461,7 @@ async function createAdminProductToApi(values, imageFile) {
           category,
           price,
           stock,
+          skuName,
         },
         imageFile
       );

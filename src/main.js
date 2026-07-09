@@ -2649,6 +2649,14 @@ function closeSidebar() {
   document.body.classList.remove('has-sidebar');
 }
 
+function getActiveSidebarScrollContainer() {
+  if (!sidebar || !sidebar.classList.contains('is-open')) {
+    return null;
+  }
+
+  return sidebar.querySelector('.sidebar__panel');
+}
+
 function getStoredProductById(productId) {
   return products.find((product) => product.id === productId) || null;
 }
@@ -3241,8 +3249,17 @@ function initScrollTools() {
     }
 
     const target = button.dataset.scrollTo;
+    const sidebarPanel = getActiveSidebarScrollContainer();
 
     if (target === "top") {
+      if (sidebarPanel) {
+        sidebarPanel.scrollTo({
+          top: 0,
+          behavior: "smooth",
+        });
+        return;
+      }
+
       const homeTop = !isAdminPage && heroSection
         ? heroSection.offsetTop
         : 0;
@@ -3255,6 +3272,14 @@ function initScrollTools() {
     }
 
     if (target === "bottom") {
+      if (sidebarPanel) {
+        sidebarPanel.scrollTo({
+          top: sidebarPanel.scrollHeight,
+          behavior: "smooth",
+        });
+        return;
+      }
+
       window.scrollTo({
         top: document.documentElement.scrollHeight,
         behavior: "smooth",

@@ -258,6 +258,23 @@ test('purchase button click handling does not require a sidebar action hook', ()
   assert.ok(mainJs.indexOf("dataset.purchaseLaunch === 'buy'") < mainJs.indexOf("dataset.sidebarLaunch === 'favorites'"));
 });
 
+test('scroll tools route sidebar and page scrolling through the right targets', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const indexHtml = readFileSync('index.html', 'utf8');
+  const adminHtml = readFileSync('admin.html', 'utf8');
+  const initScrollToolsBody = sliceBetween(mainJs, 'function initScrollTools() {', 'function initAdminPage() {');
+
+  assert.ok(mainJs.includes('function getActiveSidebarScrollContainer()'));
+  assert.ok(mainJs.includes('.sidebar__panel'));
+  assert.ok(initScrollToolsBody.includes('sidebarPanel.scrollTo({'));
+  assert.ok(mainJs.includes('window.scrollTo({'));
+  assert.ok(mainJs.includes('[data-scroll-to]'));
+  assert.ok(mainJs.includes('scrollHeight'));
+  assert.ok(mainJs.includes('sidebar.classList.contains(\'is-open\')'));
+  assert.ok(indexHtml.includes('data-scroll-tools'));
+  assert.ok(adminHtml.includes('data-scroll-tools'));
+});
+
 test('sales ranks are derived from the highest sales first', () => {
   const products = getProducts();
   const rankMap = getSalesRankMap(products);

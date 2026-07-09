@@ -2615,6 +2615,12 @@ button:disabled,
   background: rgba(228, 249, 236, 0.96);
 }
 
+.admin-status-badge--refund-requested {
+  color: #a05c12;
+  border-color: rgba(236, 176, 82, 0.28);
+  background: rgba(255, 243, 220, 0.97);
+}
+
 .admin-status-badge--shipped {
   color: #0f4f7a;
   border-color: rgba(95, 146, 196, 0.24);

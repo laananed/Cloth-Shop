@@ -243,6 +243,16 @@ class AdminUnshipOrderRequest(BaseModel):
     remark: str = Field("管理员后台取消发货", description="取消发货备注")
 
 
+class AdminApproveRefundRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员同意退款", description="处理备注")
+
+
+class AdminRejectRefundRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员拒绝退款", description="处理备注")
+
+
 @app.get("/")
 def root():
     return {
@@ -379,6 +389,32 @@ def query_order_detail(conn, order_id: int):
         "status_logs": status_logs,
         "inventory_logs": inventory_logs,
     }
+
+
+def get_previous_status_before_refund_request(conn, order_id: int) -> str:
+    """
+    获取最近一次退款申请前的订单状态，用于管理员拒绝退款时回退。
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT from_status
+            FROM order_status_log
+            WHERE order_id = %s
+              AND to_status = 'REFUND_REQUESTED'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (order_id,)
+        )
+        row = cursor.fetchone()
+
+    previous_status = str(row.get("from_status") if row else "").strip().upper()
+
+    if previous_status in {"PAID", "SHIPPED"}:
+        return previous_status
+
+    return "PAID"
 
 
 @app.get("/db-test")
@@ -1976,126 +2012,319 @@ def cancel_order(req: CancelOrderRequest):
 @app.post("/orders/refund")
 def refund_order(req: RefundOrderRequest):
     """
-    閫€娆捐鍗曘€?    璋冪敤宸插瓨鍦ㄥ瓨鍌ㄨ繃绋?sp_refund_paid_order銆?    """
+    用户申请退款，先将订单流转到退款待处理。
+    """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "CALL sp_refund_paid_order(%s, %s, %s)",
-                        (req.user_id, req.order_id, req.remark)
+                        """
+                        SELECT
+                            id,
+                            order_no,
+                            user_id,
+                            status,
+                            total_amount
+                        FROM order_main
+                        WHERE id = %s
+                          AND user_id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id, req.user_id)
                     )
+                    order_row = cursor.fetchone()
 
-                    while cursor.nextset():
-                        pass
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在或不属于当前用户"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status not in {"PAID", "SHIPPED"}:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有已支付或已发货订单才能申请退款"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = 'REFUND_REQUESTED'
+                        WHERE id = %s
+                        """,
+                        (req.order_id,)
+                    )
 
                 conn.commit()
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            order_id,
-                            order_no,
-                            user_id,
-                            email,
-                            status,
-                            total_amount,
-                            item_kind_count,
-                            total_quantity,
-                            item_total_amount,
-                            created_at,
-                            updated_at
-                        FROM v_order_summary
-                        WHERE order_id = %s
-                        """,
-                        (req.order_id,)
-                    )
-                    order_summary = cursor.fetchone()
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            id,
-                            order_id,
-                            pay_method,
-                            pay_status,
-                            pay_amount,
-                            created_at
-                        FROM payment_record
-                        WHERE order_id = %s
-                        ORDER BY id DESC
-                        """,
-                        (req.order_id,)
-                    )
-                    payment_records = cursor.fetchall()
+                return {
+                    "success": True,
+                    "message": "退款申请已提交，等待商家处理",
+                    "order_id": req.order_id,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            id,
-                            order_id,
-                            from_status,
-                            to_status,
-                            remark,
-                            created_at
-                        FROM order_status_log
-                        WHERE order_id = %s
-                        ORDER BY id
-                        """,
-                        (req.order_id,)
-                    )
-                    status_logs = cursor.fetchall()
-
-                order_no = order_summary["order_no"] if order_summary else None
-
-                inventory_logs = []
-                if order_no:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            SELECT
-                                id,
-                                sku_id,
-                                change_type,
-                                change_qty,
-                                ref_no,
-                                created_at
-                            FROM inventory_log
-                            WHERE ref_no = %s
-                            ORDER BY id
-                            """,
-                            (order_no,)
-                        )
-                        inventory_logs = cursor.fetchall()
+            except HTTPException:
+                conn.rollback()
+                raise
 
             except Exception:
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "订单退款成功",
-            "order_id": req.order_id,
-            "order_summary": jsonable_encoder(order_summary),
-            "payment_records": jsonable_encoder(payment_records),
-            "status_logs": jsonable_encoder(status_logs),
-            "inventory_logs": jsonable_encoder(inventory_logs)
-        }
-
-    except MySQLError as e:
-        error_message = e.args[1] if len(e.args) > 1 else str(e)
-        raise HTTPException(
-            status_code=400,
-            detail=f"璁㈠崟閫€娆惧け璐ワ細{error_message}"
-        )
+    except HTTPException:
+        raise
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
+            detail=f"订单退款失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/refund/approve")
+def approve_admin_refund(req: AdminApproveRefundRequest, authorization: str | None = Header(None)):
+    """
+    管理员同意退款。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+        action_type = "ADMIN_APPROVE_REFUND"
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            order_no,
+                            status,
+                            total_amount
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "REFUND_REQUESTED":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有退款待处理订单才能同意退款"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE inventory i
+                        JOIN order_item oi ON i.sku_id = oi.sku_id
+                        SET i.available_stock = i.available_stock + oi.quantity
+                        WHERE oi.order_id = %s
+                        """,
+                        (req.order_id,)
+                    )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory_log(
+                            sku_id,
+                            change_type,
+                            change_qty,
+                            ref_no
+                        )
+                        SELECT
+                            oi.sku_id,
+                            'REFUND_RESTORE',
+                            oi.quantity,
+                            %s
+                        FROM order_item oi
+                        WHERE oi.order_id = %s
+                        """,
+                        (order_row["order_no"], req.order_id)
+                    )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO payment_record(
+                            order_id,
+                            pay_method,
+                            pay_status,
+                            pay_amount
+                        )
+                        VALUES(%s, 'REFUND', 'SUCCESS', %s)
+                        """,
+                        (req.order_id, order_row.get("total_amount") or 0)
+                    )
+
+                    cursor.execute(
+                        """
+                        UPDATE product_sales_stat stat
+                        JOIN (
+                            SELECT
+                                sku_id,
+                                SUM(quantity) AS refund_qty,
+                                SUM(quantity * price) AS refund_amount
+                            FROM order_item
+                            WHERE order_id = %s
+                            GROUP BY sku_id
+                        ) refund_items ON stat.sku_id = refund_items.sku_id
+                        SET
+                            stat.total_sold_count = GREATEST(0, stat.total_sold_count - refund_items.refund_qty),
+                            stat.total_sales_amount = GREATEST(0, stat.total_sales_amount - refund_items.refund_amount)
+                        """,
+                        (req.order_id,)
+                    )
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = 'REFUNDED'
+                        WHERE id = %s
+                        """,
+                        (req.order_id,)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "退款已同意",
+                    "admin_user_id": admin_user["id"],
+                    "action_type": action_type,
+                    "order_id": req.order_id,
+                    "status": "REFUNDED",
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"同意退款失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/refund/reject")
+def reject_admin_refund(req: AdminRejectRefundRequest, authorization: str | None = Header(None)):
+    """
+    管理员拒绝退款。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+        action_type = "ADMIN_REJECT_REFUND"
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            order_no,
+                            status
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "REFUND_REQUESTED":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有退款待处理订单才能拒绝退款"
+                        )
+
+                    previous_status = get_previous_status_before_refund_request(conn, req.order_id)
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = %s
+                        WHERE id = %s
+                        """,
+                        (previous_status, req.order_id)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "已拒绝退款申请",
+                    "admin_user_id": admin_user["id"],
+                    "action_type": action_type,
+                    "order_id": req.order_id,
+                    "status": previous_status,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"拒绝退款失败：{str(e)}"
         )
 
 
@@ -2388,11 +2617,11 @@ def get_admin_stats(authorization: str | None = Header(None)):
                     """
                     SELECT
                         COUNT(*) AS total_order_count,
-                        SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED') THEN 1 ELSE 0 END) AS paid_order_count,
+                        SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED') THEN 1 ELSE 0 END) AS paid_order_count,
                         SUM(CASE WHEN status = 'PENDING_PAYMENT' THEN 1 ELSE 0 END) AS pending_order_count,
                         SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_order_count,
-                        COALESCE(SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED') THEN total_amount ELSE 0 END), 0.00) AS total_revenue,
-                        COALESCE(SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED') THEN total_quantity ELSE 0 END), 0) AS total_units_sold
+                        COALESCE(SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED') THEN total_amount ELSE 0 END), 0.00) AS total_revenue,
+                        COALESCE(SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED') THEN total_quantity ELSE 0 END), 0) AS total_units_sold
                     FROM v_order_summary
                     """
                 )

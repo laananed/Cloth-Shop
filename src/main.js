@@ -462,6 +462,7 @@ const orderStatusFilters = [
   { value: 'ALL', label: '全部' },
   { value: 'PENDING_PAYMENT', label: '待支付' },
   { value: 'PAID', label: '已支付' },
+  { value: 'REFUND_REQUESTED', label: '退款待处理' },
   { value: 'CANCELLED', label: '已取消' },
   { value: 'REFUNDED', label: '已退款' },
 ];
@@ -1480,6 +1481,7 @@ function formatOrderStatus(status) {
   const statusMap = {
     PENDING_PAYMENT: "待支付",
     PAID: "已支付",
+    REFUND_REQUESTED: "退款待处理",
     CANCELLED: "已取消",
     REFUNDED: "已退款",
     SHIPPED: "已发货",
@@ -1494,6 +1496,7 @@ function renderAdminOrderStatusBadge(status) {
   const badgeMap = {
     PENDING_PAYMENT: { className: 'admin-status-badge--pending', label: '待支付' },
     PAID: { className: 'admin-status-badge--paid', label: '已支付' },
+    REFUND_REQUESTED: { className: 'admin-status-badge--refund-requested', label: '退款待处理' },
     SHIPPED: { className: 'admin-status-badge--shipped', label: '已发货' },
     REFUNDED: { className: 'admin-status-badge--refunded', label: '已退款' },
     CANCELLED: { className: 'admin-status-badge--cancelled', label: '已取消' },
@@ -1610,10 +1613,14 @@ function getOrderCancelHint(status) {
 }
 
 function canRefundOrder(status) {
-  return status === "PAID";
+  return status === "PAID" || status === "SHIPPED";
 }
 
 function getOrderRefundHint(status) {
+  if (status === "REFUND_REQUESTED") {
+    return "退款申请处理中";
+  }
+
   if (status === "REFUNDED") {
     return "订单已退款";
   }
@@ -1648,7 +1655,7 @@ async function refundOrderFromApi(orderId, remark = "用户在前台购买记录
     throw new Error(result.detail || "申请退款失败");
   }
 
-  console.log("订单退款成功：", result);
+  console.log("退款申请提交成功：", result);
   return result;
 }
 
@@ -1890,13 +1897,14 @@ async function handleRefundOrder(orderId) {
 
     const result = await refundOrderFromApi(orderId, "用户在前台购买记录申请退款");
 
-    console.log("前台订单退款完整流程成功：", result);
+    console.log("前台订单退款申请成功：", result);
 
-    activeOrderStatusFilter = "REFUNDED";
+    activeOrderStatusFilter = "REFUND_REQUESTED";
 
     await refreshOrdersFromApi();
     await showOrderDetail(orderId);
     await loadProductsFromApi();
+    setOrderActionFeedback(orderId, "退款申请已提交，等待商家处理");
   } catch (error) {
     console.error("申请退款失败：", error);
     setOrderActionFeedback(orderId, `申请退款失败：${error.message}`, true);
@@ -3774,6 +3782,44 @@ function initAdminPage() {
     return result;
   }
 
+  async function approveAdminRefundToApi(orderId, remark = '管理员同意退款') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/refund/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '同意退款失败');
+    }
+
+    return result;
+  }
+
+  async function rejectAdminRefundToApi(orderId, remark = '管理员拒绝退款') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/refund/reject`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '拒绝退款失败');
+    }
+
+    return result;
+  }
+
   async function renderAdminOrderDetail(orderId, detail = null) {
     const row = getAdminOrderDetailRow(orderId);
     const container = getAdminOrderDetailContainer(orderId);
@@ -3848,6 +3894,7 @@ function initAdminPage() {
           const statusBadge = renderAdminOrderStatusBadge(status);
           const canShip = status === 'PAID';
           const canUnship = status === 'SHIPPED';
+          const canReviewRefund = status === 'REFUND_REQUESTED';
           const detailButtonLabel = isExpanded ? '收起详情' : '查看详情';
           const detailRowHidden = isExpanded ? '' : ' hidden';
           let actionButtonHtml = `
@@ -3859,6 +3906,25 @@ function initAdminPage() {
               无法发货
             </button>
           `;
+
+          if (canReviewRefund) {
+            actionButtonHtml = `
+              <button
+                class="admin-order-action-button admin-order-action-button--primary"
+                type="button"
+                data-admin-order-refund-approve-id="${row.orderId}"
+              >
+                同意退款
+              </button>
+              <button
+                class="admin-order-action-button admin-order-action-button--warning"
+                type="button"
+                data-admin-order-refund-reject-id="${row.orderId}"
+              >
+                拒绝退款
+              </button>
+            `;
+          }
 
           if (canShip) {
             actionButtonHtml = `
@@ -3954,7 +4020,7 @@ function convertApiStatsToRenderedStats(result) {
       {
         label: "已支付销售额",
         value: formatPrice(summary.total_revenue || 0),
-        detail: `已支付订单 ${Number(summary.paid_order_count || 0)} 单`,
+        detail: `已支付/退款待处理订单 ${Number(summary.paid_order_count || 0)} 单`,
       },
       {
         label: "订单总数",
@@ -3964,7 +4030,7 @@ function convertApiStatsToRenderedStats(result) {
       {
         label: "售出件数",
         value: String(Number(summary.total_units_sold || 0)),
-        detail: "按已支付订单统计",
+        detail: "按已支付/退款待处理订单统计",
       },
       {
         label: "商品数量",
@@ -4695,6 +4761,8 @@ async function createAdminProductToApi(values, imageFile) {
   if (ordersBody) {
     ordersBody.addEventListener("click", async (event) => {
       const detailButton = event.target.closest("[data-admin-order-detail-id]");
+      const approveRefundButton = event.target.closest("[data-admin-order-refund-approve-id]");
+      const rejectRefundButton = event.target.closest("[data-admin-order-refund-reject-id]");
       const shipButton = event.target.closest("[data-admin-order-ship-id]");
       const unshipButton = event.target.closest("[data-admin-order-unship-id]");
 
@@ -4714,6 +4782,76 @@ async function createAdminProductToApi(values, imageFile) {
         activeAdminOrderDetailId = orderId;
         renderAdminOrders(orders);
         await renderAdminOrderDetail(orderId);
+        return;
+      }
+
+      if (approveRefundButton) {
+        const orderId = Number(approveRefundButton.dataset.adminOrderRefundApproveId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要同意这个退款申请吗？同意后会恢复库存并回滚销量。");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          approveRefundButton.disabled = true;
+          approveRefundButton.textContent = "处理中...";
+
+          await approveAdminRefundToApi(orderId, "管理员同意退款");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "退款已同意");
+        } catch (error) {
+          console.error("同意退款失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">同意退款失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `同意退款失败：${error.message}`, true);
+        }
+
+        return;
+      }
+
+      if (rejectRefundButton) {
+        const orderId = Number(rejectRefundButton.dataset.adminOrderRefundRejectId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要拒绝这个退款申请吗？拒绝后订单会回到退款前状态。");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          rejectRefundButton.disabled = true;
+          rejectRefundButton.textContent = "处理中...";
+
+          await rejectAdminRefundToApi(orderId, "管理员拒绝退款");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "已拒绝退款申请");
+        } catch (error) {
+          console.error("拒绝退款失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">拒绝退款失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `拒绝退款失败：${error.message}`, true);
+        }
+
         return;
       }
 

@@ -955,7 +955,7 @@ test('admin order detail and ship source wiring is present', () => {
   assert.ok(backend.includes('@app.post("/admin/orders/ship")'));
   assert.ok(backend.includes('AdminShipOrderRequest'));
   assert.ok(backend.includes('FOR UPDATE'));
-  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED')"));
+  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED')"));
   assert.ok(backend.includes('require_admin_user(authorization)'));
 
   assert.ok(mainJs.includes('loadAdminOrderDetailFromApi'));
@@ -963,6 +963,11 @@ test('admin order detail and ship source wiring is present', () => {
   assert.ok(mainJs.includes('data-admin-order-detail-id'));
   assert.ok(mainJs.includes('data-admin-order-ship-id'));
   assert.ok(mainJs.includes('data-admin-order-detail-container'));
+  assert.ok(mainJs.includes('data-admin-order-refund-approve-id'));
+  assert.ok(mainJs.includes('data-admin-order-refund-reject-id'));
+  assert.ok(mainJs.includes('approveAdminRefundToApi'));
+  assert.ok(mainJs.includes('rejectAdminRefundToApi'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
 
   assert.ok(html.includes('操作'));
 });
@@ -984,11 +989,16 @@ test('admin order unship source wiring is present', () => {
   assert.ok(mainJs.includes('无法发货'));
   assert.ok(mainJs.includes('取消发货'));
   assert.ok(mainJs.includes('activeAdminOrderDetailId = null'));
+  assert.ok(mainJs.includes('data-admin-order-refund-approve-id'));
+  assert.ok(mainJs.includes('data-admin-order-refund-reject-id'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+  assert.ok(mainJs.includes('退款待处理'));
 
   assert.ok(styles.includes('.admin-status-badge'));
   assert.ok(styles.includes('.admin-status-badge--shipped'));
   assert.ok(styles.includes('.admin-status-badge--paid'));
   assert.ok(styles.includes('.admin-status-badge--pending'));
+  assert.ok(styles.includes('.admin-status-badge--refund-requested'));
 });
 
 test('admin order status labels include shipped and the orders table keeps the operation column', () => {
@@ -998,8 +1008,10 @@ test('admin order status labels include shipped and the orders table keeps the o
 
   assert.ok(mainJs.includes('SHIPPED'));
   assert.ok(mainJs.includes('已发货'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+  assert.ok(mainJs.includes('退款待处理'));
   assert.ok(html.includes('<th>操作</th>'));
-  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED')"));
+  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED')"));
 });
 
 test('admin product filtering source wiring is present', () => {
@@ -1179,17 +1191,20 @@ test('admin auth state clears dashboard data on logout and auth failure', () => 
   assert.ok(initBody.includes('syncPanels();'));
 });
 
-test('refund order backend wiring is present in source and sql', () => {
+test('refund request backend wiring is present in source', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
-  const sql = readFileSync('06_add_refund_order.sql', 'utf8');
 
   assert.ok(backend.includes('RefundOrderRequest'));
   assert.ok(backend.includes('@app.post("/orders/refund")'));
-  assert.ok(backend.includes('sp_refund_paid_order'));
-  assert.ok(sql.includes('sp_refund_paid_order'));
-  assert.ok(sql.includes('REFUNDED'));
-  assert.ok(sql.includes('REFUND_RESTORE'));
-  assert.ok(sql.includes('product_sales_stat'));
+  assert.ok(backend.includes('REFUND_REQUESTED'));
+  assert.ok(backend.includes('order_status_log'));
+  assert.ok(backend.includes('payment_record'));
+  assert.ok(backend.includes('product_sales_stat'));
+  assert.ok(backend.includes('REFUND_RESTORE'));
+  assert.ok(backend.includes('@app.post("/admin/orders/refund/approve")'));
+  assert.ok(backend.includes('@app.post("/admin/orders/refund/reject")'));
+  assert.ok(backend.includes('ADMIN_APPROVE_REFUND'));
+  assert.ok(backend.includes('ADMIN_REJECT_REFUND'));
 });
 
 test('cart invalid-item source wiring is present', () => {
@@ -1220,8 +1235,8 @@ test('cart invalid-item source wiring is present', () => {
 test('frontend purchase record refund wiring is present', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
 
-  assert.ok(mainJs.includes('REFUNDED'));
-  assert.ok(mainJs.includes('已退款'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+  assert.ok(mainJs.includes('退款待处理'));
   assert.ok(mainJs.includes('data-order-refund-id'));
   assert.ok(mainJs.includes('refundOrderFromApi'));
   assert.ok(mainJs.includes('handleRefundOrder'));

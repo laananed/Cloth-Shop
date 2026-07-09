@@ -1,5 +1,10 @@
 ﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260705a';
-import { formatSalesRank, getSalesRankMap } from './ranking.js?v=20260705a';
+import { formatSalesRank, getSalesRankMap, parseSalesValue } from './ranking.js?v=20260709b';
+import {
+  compareProductsForCustomer,
+  getProductUnavailableAt,
+  isProductSellable,
+} from './product-ordering.js?v=20260709a';
 import {
   buildPurchaseOrder,
   getCartItemTotal,
@@ -514,23 +519,6 @@ function getProductDisplayState(product) {
   };
 }
 
-function compareProductsForCustomer(a, b) {
-  const stateA = getProductDisplayState(a);
-  const stateB = getProductDisplayState(b);
-
-  if (stateA.priority !== stateB.priority) {
-    return stateA.priority - stateB.priority;
-  }
-
-  const salesDiff = Number(b.sales || 0) - Number(a.sales || 0);
-  if (salesDiff !== 0) {
-    return salesDiff;
-  }
-
-  return Number(b.productId || 0) - Number(a.productId || 0);
-}
-
-
 function convertApiProducts(apiRows) {
   const productMap = new Map();
 
@@ -564,10 +552,11 @@ function convertApiProducts(apiRows) {
         badge: "数据库商品",
 
         price: Number(row.price || 0),
-        sales: Number(row.total_sold_count || 0),
+        sales: parseSalesValue(row.total_sold_count),
 
         availableStock: Number(row.available_stock || 0),
         lockedStock: Number(row.locked_stock || 0),
+        productUpdatedAt: row.product_updated_at || "",
 
         skuList: [
           {
@@ -576,6 +565,7 @@ function convertApiProducts(apiRows) {
             price: Number(row.price || 0),
             availableStock: Number(row.available_stock || 0),
             lockedStock: Number(row.locked_stock || 0),
+            inventoryUpdatedAt: row.inventory_updated_at || "",
             skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
           },
         ],
@@ -603,11 +593,12 @@ function convertApiProducts(apiRows) {
       price: Number(row.price || 0),
       availableStock: Number(row.available_stock || 0),
       lockedStock: Number(row.locked_stock || 0),
+      inventoryUpdatedAt: row.inventory_updated_at || "",
       skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
     });
 
     product.price = Math.min(product.price, Number(row.price || 0));
-    product.sales += Number(row.total_sold_count || 0);
+    product.sales += parseSalesValue(row.total_sold_count);
     product.availableStock += Number(row.available_stock || 0);
     product.lockedStock += Number(row.locked_stock || 0);
   });
@@ -618,6 +609,7 @@ function convertApiProducts(apiRows) {
 
       product.detail = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
       product.skuId = product.defaultSkuId;
+      product.unavailableAt = getProductUnavailableAt(product);
       product.saleState = state.key;
       product.saleStateLabel = state.label;
       product.saleStateMessage = state.message;
@@ -2187,7 +2179,7 @@ function filteredProducts() {
       !keyword || getProductSearchText(product).includes(keyword);
 
     return matchCategory && matchKeyword;
-  });
+  }).sort(compareProductsForCustomer);
 }
 
 function renderProducts() {
@@ -2215,8 +2207,11 @@ function renderProducts() {
       const isPrimaryDetail = product.detailLayout === 'price-sales-rank';
       const isSplitDetail = product.detailLayout === 'split';
       const isPurchaseUi = product.purchaseLayout === 'buy';
-      const isTopSeller = salesRankMap.get(product.id) === 1;
-      const salesRankLabel = isTopSeller ? '网站销量第一' : formatSalesRank(salesRankMap.get(product.id));
+      const salesRank = salesRankMap.get(product.id);
+      const isTopSeller = salesRank === 1;
+      const salesRankLabel = isTopSeller
+        ? '网站销量第一'
+        : formatSalesRank(salesRank);
       const selectedSku = getExplicitSelectedSku(product);
       const displayPrice = Number(selectedSku?.price ?? product.price ?? 0);
       const selectedSkuName = selectedSku?.skuName || '请选择规格';
@@ -3893,8 +3888,7 @@ function convertApiRowsToAdminProducts(apiRows) {
         saleStateLabel: state.label,
         saleStateMessage: state.message,
       };
-    })
-    .sort(compareProductsForCustomer);
+    });
 }
 
 function renderAdminInventoryProductsView(adminProducts) {

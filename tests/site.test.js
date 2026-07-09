@@ -10,7 +10,13 @@ import {
   getProducts,
   getSiteCopy,
 } from '../src/content.js';
-import { getSalesRankMap, formatSalesRank } from '../src/ranking.js';
+import { compareProductsBySales, formatSalesRank, getSalesRankMap, parseSalesValue } from '../src/ranking.js';
+import {
+  compareProductsForCustomer,
+  getProductUnavailableAt,
+  isProductSellable,
+  parseDateTimeValue,
+} from '../src/product-ordering.js';
 import {
   buildPurchaseOrder,
   getCartItemTotal,
@@ -294,6 +300,163 @@ test('sales ranks are derived from the highest sales first', () => {
   assert.equal(rankMap.get(highest.id), 1);
   assert.equal(rankMap.get(lowest.id), products.length);
   assert.equal(formatSalesRank(rankMap.get(highest.id)).includes(String(rankMap.get(highest.id))), true);
+});
+
+test('sellable products sort ahead of unavailable ones and keep sales ordering inside the sellable group', () => {
+  const products = [
+    {
+      id: 'product-1',
+      productId: 1,
+      sales: 20,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-01T08:00:00',
+      skuList: [
+        { skuId: 11, skuStatus: 'ON_SALE', availableStock: 3, inventoryUpdatedAt: '2026-07-01T08:00:00' },
+      ],
+    },
+    {
+      id: 'product-2',
+      productId: 2,
+      sales: '10',
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-01T08:00:00',
+      skuList: [
+        { skuId: 21, skuStatus: 'ON_SALE', availableStock: 4, inventoryUpdatedAt: '2026-07-01T08:00:00' },
+      ],
+    },
+    {
+      id: 'product-3',
+      productId: 3,
+      sales: 999,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-04T10:00:00',
+      skuList: [
+        { skuId: 31, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-01T08:00:00' },
+      ],
+    },
+    {
+      id: 'product-4',
+      productId: 4,
+      sales: 888,
+      productStatus: 'OFF_SALE',
+      productUpdatedAt: '2026-07-05T10:00:00',
+      skuList: [
+        { skuId: 41, skuStatus: 'OFF_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-02T08:00:00' },
+      ],
+    },
+    {
+      id: 'product-5',
+      productId: 5,
+      sales: 1,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-06T10:00:00',
+      skuList: [
+        { skuId: 51, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-08T12:00:00' },
+      ],
+    },
+  ];
+
+  assert.equal(parseSalesValue('5.2k'), 5200);
+  assert.equal(parseSalesValue(12), 12);
+  assert.equal(isProductSellable(products[0]), true);
+  assert.equal(isProductSellable(products[1]), true);
+  assert.equal(isProductSellable(products[2]), false);
+  assert.equal(isProductSellable(products[3]), false);
+  assert.equal(isProductSellable(products[4]), false);
+  assert.equal(parseDateTimeValue('2026-07-01T08:00:00'), Date.parse('2026-07-01T08:00:00'));
+  assert.deepEqual([...products].sort(compareProductsForCustomer).map((product) => product.id), ['product-1', 'product-2', 'product-3', 'product-4', 'product-5']);
+  assert.ok(getProductUnavailableAt(products[2]) < getProductUnavailableAt(products[3]));
+  assert.ok(getProductUnavailableAt(products[3]) < getProductUnavailableAt(products[4]));
+  assert.equal(formatSalesRank(2), '销量第2名');
+});
+
+test('multi-sku products stay sellable while any on-sale sku has stock and use the latest inventory update when sold out', () => {
+  const sellableProduct = {
+    id: 'product-6',
+    productId: 6,
+    sales: 10,
+    productStatus: 'ON_SALE',
+    productUpdatedAt: '2026-07-02T09:00:00',
+    skuList: [
+      { skuId: 61, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-03T09:00:00' },
+      { skuId: 62, skuStatus: 'ON_SALE', availableStock: 5, inventoryUpdatedAt: '2026-07-04T09:00:00' },
+    ],
+  };
+  const soldOutProduct = {
+    id: 'product-7',
+    productId: 7,
+    sales: 10,
+    productStatus: 'ON_SALE',
+    productUpdatedAt: '2026-07-02T09:00:00',
+    skuList: [
+      { skuId: 71, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-03T09:00:00' },
+      { skuId: 72, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-04T09:00:00' },
+    ],
+  };
+
+  assert.equal(isProductSellable(sellableProduct), true);
+  assert.equal(isProductSellable(soldOutProduct), false);
+  assert.equal(getProductUnavailableAt(soldOutProduct), Date.parse('2026-07-04T09:00:00'));
+  assert.deepEqual([sellableProduct, soldOutProduct].sort(compareProductsForCustomer).map((product) => product.id), ['product-6', 'product-7']);
+});
+
+test('backend product queries expose inventory_updated_at from the view', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(backend.includes('inventory_updated_at'));
+  assert.ok(backend.includes('get("/products")'));
+  assert.ok(backend.includes('get("/admin/inventory")'));
+  assert.ok(backend.includes('post("/admin/inventory/update-stock")'));
+  assert.ok(backend.includes('post("/admin/products/update-status")'));
+  assert.ok(backend.includes('post("/products")'));
+  assert.ok(mainJs.includes('getSalesRankMap(products)'));
+  assert.ok(mainJs.includes("salesRankLabel = isTopSeller"));
+  assert.ok(!mainJs.includes('暂不可售'));
+});
+
+test('sales rank labels use the full catalog while sorting still keeps sellable products first', () => {
+  const products = [
+    {
+      id: 'product-1',
+      productId: 1,
+      sales: 100,
+      productStatus: 'OFF_SALE',
+      productUpdatedAt: '2026-07-01T10:00:00',
+      skuList: [
+        { skuId: 11, skuStatus: 'OFF_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-01T10:00:00' },
+      ],
+    },
+    {
+      id: 'product-2',
+      productId: 2,
+      sales: 80,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-02T10:00:00',
+      skuList: [
+        { skuId: 21, skuStatus: 'ON_SALE', availableStock: 0, inventoryUpdatedAt: '2026-07-02T10:00:00' },
+      ],
+    },
+    {
+      id: 'product-3',
+      productId: 3,
+      sales: 60,
+      productStatus: 'ON_SALE',
+      productUpdatedAt: '2026-07-03T10:00:00',
+      skuList: [
+        { skuId: 31, skuStatus: 'ON_SALE', availableStock: 2, inventoryUpdatedAt: '2026-07-03T10:00:00' },
+      ],
+    },
+  ];
+
+  const sorted = [...products].sort(compareProductsForCustomer);
+  const rankMap = getSalesRankMap(products);
+
+  assert.deepEqual(sorted.map((product) => product.id), ['product-3', 'product-1', 'product-2']);
+  assert.equal(rankMap.get('product-1'), 1);
+  assert.equal(rankMap.get('product-2'), 2);
+  assert.equal(rankMap.get('product-3'), 3);
+  assert.equal(formatSalesRank(rankMap.get('product-3')), '销量第3名');
 });
 
 test('auth modal shell stays closed on load', () => {

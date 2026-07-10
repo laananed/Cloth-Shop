@@ -3651,6 +3651,8 @@ function initAdminPage() {
   let products = [];
   let orders = [];
   let summary = null;
+  let activeAdminProductImageAppendId = null;
+  let adminProductImageAppendPreviewUrls = [];
   let productRows = [];
   let renderedStats = null;
   let renderedProducts = null;
@@ -4495,6 +4497,13 @@ async function refreshAdminProductsFromApi() {
                 <div class="admin-product-row__actions">
                   <button
                     type="button"
+                    class="ghost-button ghost-button--small ghost-button--solid"
+                    data-admin-product-image-append="${row.productId}"
+                  >
+                    追加图片
+                  </button>
+                  <button
+                    type="button"
                     class="ghost-button ghost-button--small ${isOnSaleProduct ? "ghost-button--danger" : "ghost-button--solid"}"
                     data-admin-product-status-id="${row.productId}"
                     data-admin-product-next-status="${nextStatus}"
@@ -4509,6 +4518,23 @@ async function refreshAdminProductsFromApi() {
                     删除商品
                   </button>
                 </div>
+                ${activeAdminProductImageAppendId === row.productId ? `
+                  <div class="admin-product-image-append" data-admin-product-image-append-panel="${row.productId}">
+                    <strong>为“${escapeHtml(row.name)}”追加图片</strong>
+                    <p class="admin-image-preview__note">新图片会追加到现有图片之后，原主图保持不变。</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      data-admin-product-image-append-input="${row.productId}"
+                    />
+                    <div class="admin-image-preview" data-admin-product-image-append-preview hidden aria-live="polite"></div>
+                    <div class="admin-product-image-append__actions">
+                      <button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-product-image-append-submit="${row.productId}" disabled>确认上传</button>
+                      <button type="button" class="ghost-button ghost-button--small" data-admin-product-image-append-cancel="${row.productId}">取消</button>
+                    </div>
+                  </div>
+                ` : ""}
               </div>
             </div>
           </article>
@@ -4699,6 +4725,26 @@ async function createAdminProductToApi(values, imageFiles = []) {
   return result;
 }
 
+async function appendAdminProductImagesToApi(productId, imageFiles) {
+  const formData = new FormData();
+  const files = Array.isArray(imageFiles) ? imageFiles : [];
+
+  files.forEach((file) => {
+    formData.append("images", file);
+  });
+
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/images`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!result.success) {
+    throw new Error(result.detail || result.message || "追加商品图片失败");
+  }
+
+  return result;
+}
+
   function syncPanels() {
     navButtons.forEach((button) => {
       button.classList.toggle('is-active', button.dataset.adminNavTarget === activePanel);
@@ -4774,6 +4820,11 @@ async function createAdminProductToApi(values, imageFiles = []) {
   });
 
   let productPreviewUrls = [];
+
+  function clearAdminProductImageAppendPreview() {
+    adminProductImageAppendPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+    adminProductImageAppendPreviewUrls = [];
+  }
 
   function renderProductImagePreview() {
     productPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -5070,10 +5121,92 @@ async function createAdminProductToApi(values, imageFiles = []) {
   }
 
   if (productList) {
+  productList.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-admin-product-image-append-input]");
+    if (!input) {
+      return;
+    }
+
+    clearAdminProductImageAppendPreview();
+    const files = Array.from(input.files || []);
+    const panel = input.closest("[data-admin-product-image-append-panel]");
+    const preview = panel?.querySelector("[data-admin-product-image-append-preview]");
+    const submitButton = panel?.querySelector("[data-admin-product-image-append-submit]");
+
+    if (submitButton) {
+      submitButton.disabled = files.length === 0;
+    }
+
+    if (!preview) {
+      return;
+    }
+
+    if (!files.length) {
+      preview.hidden = true;
+      preview.innerHTML = "";
+      return;
+    }
+
+    adminProductImageAppendPreviewUrls = files.slice(0, 4).map((file) => URL.createObjectURL(file));
+    preview.hidden = false;
+    preview.innerHTML = `
+      <p class="admin-image-preview__note">已选择 ${escapeHtml(files.length)} 张图片，原主图保持不变。</p>
+      <div class="admin-image-preview__grid">
+        ${adminProductImageAppendPreviewUrls.map((url, index) => `<img src="${escapeHtml(url)}" alt="待追加图片 ${index + 1}" />`).join("")}
+      </div>
+    `;
+  });
+
   productList.addEventListener("click", async (event) => {
     const stockButton = event.target.closest("[data-admin-stock-save]");
     const statusButton = event.target.closest("[data-admin-product-status-id]");
     const deleteButton = event.target.closest("[data-admin-product-delete-id]");
+    const appendButton = event.target.closest("[data-admin-product-image-append]");
+    const appendSubmitButton = event.target.closest("[data-admin-product-image-append-submit]");
+    const appendCancelButton = event.target.closest("[data-admin-product-image-append-cancel]");
+
+    if (appendButton) {
+      clearAdminProductImageAppendPreview();
+      activeAdminProductImageAppendId = Number(appendButton.dataset.adminProductImageAppend);
+      renderProducts();
+      return;
+    }
+
+    if (appendCancelButton) {
+      clearAdminProductImageAppendPreview();
+      activeAdminProductImageAppendId = null;
+      renderProducts();
+      return;
+    }
+
+    if (appendSubmitButton) {
+      const productId = Number(appendSubmitButton.dataset.adminProductImageAppendSubmit);
+      const panel = appendSubmitButton.closest("[data-admin-product-image-append-panel]");
+      const input = panel?.querySelector("[data-admin-product-image-append-input]");
+      const imageFiles = Array.from(input?.files || []);
+
+      if (!imageFiles.length) {
+        setFeedback(productManageFeedback || productFeedback, "请至少选择一张商品图片。", true);
+        return;
+      }
+
+      try {
+        appendSubmitButton.disabled = true;
+        appendSubmitButton.textContent = "上传中...";
+        const result = await appendAdminProductImagesToApi(productId, imageFiles);
+        setFeedback(productManageFeedback || productFeedback, result.message || "商品图片追加成功");
+        clearAdminProductImageAppendPreview();
+        activeAdminProductImageAppendId = null;
+        await refreshAdminProductsFromApi();
+      } catch (error) {
+        console.error("后台追加商品图片失败：", error);
+        appendSubmitButton.disabled = false;
+        appendSubmitButton.textContent = "确认上传";
+        setFeedback(productManageFeedback || productFeedback, `追加图片失败：${error.message}`, true);
+      }
+
+      return;
+    }
 
     if (stockButton) {
       const skuId = Number(stockButton.dataset.adminStockSave);

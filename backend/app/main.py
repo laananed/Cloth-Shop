@@ -56,6 +56,44 @@ def build_product_image_filename(original_filename: str) -> str:
     import uuid
     return f"{uuid.uuid4().hex}{suffix}"
 
+
+def cleanup_saved_product_images(saved_image_urls: list[str]) -> None:
+    for image_url in saved_image_urls:
+        image_path = PRODUCT_UPLOAD_DIR / Path(image_url).name
+        try:
+            if image_path.exists():
+                image_path.unlink()
+        except OSError:
+            pass
+
+
+async def save_product_uploads(uploaded_images: list[UploadFile]) -> list[str]:
+    saved_images = []
+    max_size = 8 * 1024 * 1024
+
+    try:
+        for uploaded_image in uploaded_images:
+            if not uploaded_image or not uploaded_image.filename:
+                continue
+
+            image_filename = build_product_image_filename(uploaded_image.filename)
+            content = await uploaded_image.read()
+
+            if not content:
+                raise HTTPException(status_code=400, detail="上传的图片文件为空")
+
+            if len(content) > max_size:
+                raise HTTPException(status_code=400, detail="图片不能超过 8MB")
+
+            image_path = PRODUCT_UPLOAD_DIR / image_filename
+            image_path.write_bytes(content)
+            saved_images.append(f"/uploads/products/{image_filename}")
+    except Exception:
+        cleanup_saved_product_images(saved_images)
+        raise
+
+    return saved_images
+
 def query_product_images(conn, product_ids: list[int]) -> dict[int, list[dict]]:
     ids = sorted({int(product_id) for product_id in product_ids if product_id is not None})
     if not ids:
@@ -725,26 +763,10 @@ async def create_product(
     if images:
         uploaded_images.extend(images)
 
-    saved_images = []
-    max_size = 8 * 1024 * 1024
-    for uploaded_image in uploaded_images:
-        if not uploaded_image or not uploaded_image.filename:
-            continue
-
-        image_filename = build_product_image_filename(uploaded_image.filename)
-        content = await uploaded_image.read()
-
-        if not content:
-            raise HTTPException(status_code=400, detail="上传的图片文件为空")
-
-        if len(content) > max_size:
-            raise HTTPException(status_code=400, detail="图片不能超过 8MB")
-
-        image_path = PRODUCT_UPLOAD_DIR / image_filename
-        image_path.write_bytes(content)
-        saved_images.append(f"/uploads/products/{image_filename}")
+    saved_images = await save_product_uploads(uploaded_images)
 
     image_url = saved_images[0] if saved_images else None
+    transaction_committed = False
     try:
         with get_db() as conn:
             try:
@@ -850,6 +872,7 @@ async def create_product(
                         )
 
                 conn.commit()
+                transaction_committed = True
 
                 # 6. 新增成功后，从 v_product_detail 查询完整商品信息
                 with conn.cursor() as cursor:
@@ -884,6 +907,8 @@ async def create_product(
 
             except Exception:
                 conn.rollback()
+                if not transaction_committed:
+                    cleanup_saved_product_images(saved_images)
                 raise
 
         return {
@@ -897,9 +922,13 @@ async def create_product(
         }
 
     except HTTPException:
+        if not transaction_committed:
+            cleanup_saved_product_images(saved_images)
         raise
 
     except MySQLError as e:
+        if not transaction_committed:
+            cleanup_saved_product_images(saved_images)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
@@ -907,10 +936,128 @@ async def create_product(
         )
 
     except Exception as e:
+        if not transaction_committed:
+            cleanup_saved_product_images(saved_images)
         raise HTTPException(
             status_code=500,
             detail=f"服务器错误：{str(e)}"
         )
+
+
+@app.post("/admin/products/{product_id}/images")
+async def append_admin_product_images(
+    product_id: int,
+    images: list[UploadFile] | None = File(None),
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+
+    uploaded_images = [image for image in (images or []) if image and image.filename]
+    if not uploaded_images:
+        raise HTTPException(status_code=400, detail="请至少选择一张商品图片")
+
+    saved_images = []
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, image_url
+                        FROM product
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    product = cursor.fetchone()
+
+                    if not product:
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+
+                    cursor.execute(
+                        """
+                        SELECT MAX(sort_order) AS max_sort_order
+                        FROM product_image
+                        WHERE product_id = %s
+                          AND is_deleted = 0
+                        """,
+                        (product_id,)
+                    )
+                    sort_row = cursor.fetchone() or {}
+                    max_sort_order = sort_row.get("max_sort_order")
+                    product_image_url = str(product.get("image_url") or "").strip()
+
+                    if max_sort_order is None and product_image_url:
+                        cursor.execute(
+                            """
+                            INSERT INTO product_image(
+                                product_id, image_url, sort_order, is_main, is_deleted
+                            )
+                            VALUES(%s, %s, 0, 1, 0)
+                            """,
+                            (product_id, product_image_url)
+                        )
+                        next_sort_order = 1
+                    else:
+                        next_sort_order = int(max_sort_order) + 1 if max_sort_order is not None else 0
+
+                    saved_images = await save_product_uploads(uploaded_images)
+                    first_upload_becomes_main = max_sort_order is None and not product_image_url
+
+                    for index, saved_image_url in enumerate(saved_images):
+                        cursor.execute(
+                            """
+                            INSERT INTO product_image(
+                                product_id, image_url, sort_order, is_main, is_deleted
+                            )
+                            VALUES(%s, %s, %s, %s, 0)
+                            """,
+                            (
+                                product_id,
+                                saved_image_url,
+                                next_sort_order + index,
+                                1 if first_upload_becomes_main and index == 0 else 0,
+                            )
+                        )
+
+                    if first_upload_becomes_main:
+                        product_image_url = saved_images[0]
+                        cursor.execute(
+                            """
+                            UPDATE product
+                            SET image_url = %s
+                            WHERE id = %s
+                            """,
+                            (product_image_url, product_id)
+                        )
+
+                    image_map = query_product_images(conn, [product_id])
+                    product_images = image_map.get(product_id, [])
+
+                conn.commit()
+
+            except Exception:
+                conn.rollback()
+                cleanup_saved_product_images(saved_images)
+                raise
+
+        return {
+            "success": True,
+            "message": "商品图片追加成功",
+            "product_id": product_id,
+            "image_url": product_image_url,
+            "images": jsonable_encoder(product_images),
+            "image_count": len(product_images),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"商品图片追加失败：{str(e)}")
 
 
 def query_user_addresses(conn, user_id: int):

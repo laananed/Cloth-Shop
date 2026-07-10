@@ -3765,6 +3765,27 @@ button.sku-option--disabled {
   width: 42px;
   height: 52px;
 }
+
+.admin-product-image-append {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid rgba(105, 174, 230, 0.24);
+  border-radius: 16px;
+  background: rgba(248, 251, 255, 0.82);
+}
+
+.admin-product-image-append input[type="file"] {
+  width: 100%;
+}
+
+.admin-product-image-append__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .admin-product-row__main {
   display: grid;
   grid-template-columns: 96px 1fr;

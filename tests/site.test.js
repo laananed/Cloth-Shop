@@ -1177,6 +1177,49 @@ test('admin product image counts use the admin helper without changing the store
   assert.ok(mainJs.includes('function getProductImages(product)'));
 });
 
+test('admin API appends multiple images to an existing product without replacing its main image', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const endpoint = sliceBetween(
+    backend,
+    '@app.post("/admin/products/{product_id}/images")',
+    'def query_user_addresses(conn, user_id: int):',
+  );
+
+  assert.match(endpoint, /images:\s*list\[UploadFile\]\s*\|\s*None\s*=\s*File\(None\)/);
+  assert.ok(endpoint.includes('require_admin_user(authorization)'));
+  assert.match(endpoint, /WHERE id = %s\s+AND is_deleted = 0/);
+  assert.ok(endpoint.includes('SELECT MAX(sort_order) AS max_sort_order'));
+  assert.ok(endpoint.includes('is_main') && endpoint.includes('sort_order'));
+  assert.ok(endpoint.includes('query_product_images(conn, [product_id])'));
+  assert.ok(endpoint.includes('conn.commit()'));
+  assert.ok(endpoint.includes('conn.rollback()'));
+  assert.ok(endpoint.includes('cleanup_saved_product_images(saved_images)'));
+  assert.match(endpoint, /if first_upload_becomes_main:[\s\S]*?UPDATE product\s+SET image_url = %s/);
+  assert.equal((endpoint.match(/UPDATE product\s+SET image_url = %s/g) || []).length, 1);
+});
+
+test('admin product cards append images through authenticated multipart upload and refresh the list', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const uploadHelper = sliceBetween(
+    mainJs,
+    'async function appendAdminProductImagesToApi(productId, imageFiles)',
+    'function parseAdminSkuRows(values)',
+  );
+
+  assert.ok(mainJs.includes('data-admin-product-image-append'));
+  assert.match(mainJs, /type="file"[^>]+accept="image\/\*"[^>]+multiple/);
+  assert.ok(mainJs.includes('追加图片'));
+  assert.ok(mainJs.includes('原主图保持不变'));
+  assert.match(uploadHelper, /files\.forEach\(\(file\) => \{\s*formData\.append\("images", file\);/);
+  assert.doesNotMatch(uploadHelper, /formData\.append\("image",/);
+  assert.ok(uploadHelper.includes('adminFetch(`${API_BASE_URL}/admin/products/${productId}/images`'));
+  assert.ok(mainJs.includes('await appendAdminProductImagesToApi(productId, imageFiles);'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
+  assert.ok(mainJs.includes('function getProductImages(product)'));
+  assert.ok(styles.includes('.admin-product-image-append'));
+});
+
 test('admin authentication source wiring is present', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const html = readFileSync('admin.html', 'utf8');

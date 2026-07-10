@@ -1182,7 +1182,7 @@ test('admin API appends multiple images to an existing product without replacing
   const endpoint = sliceBetween(
     backend,
     '@app.post("/admin/products/{product_id}/images")',
-    'def query_user_addresses(conn, user_id: int):',
+    '@app.delete("/admin/products/{product_id}/images/{image_id}")',
   );
 
   assert.match(endpoint, /images:\s*list\[UploadFile\]\s*\|\s*None\s*=\s*File\(None\)/);
@@ -1218,6 +1218,62 @@ test('admin product cards append images through authenticated multipart upload a
   assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
   assert.ok(mainJs.includes('function getProductImages(product)'));
   assert.ok(styles.includes('.admin-product-image-append'));
+});
+
+test('admin API logically deletes product images and promotes a replacement main image', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const endpoint = sliceBetween(
+    backend,
+    '@app.delete("/admin/products/{product_id}/images/{image_id}")',
+    'def query_user_addresses(conn, user_id: int):',
+  );
+
+  assert.ok(endpoint.includes('require_admin_user(authorization)'));
+  assert.match(endpoint, /WHERE id = %s\s+AND is_deleted = 0/);
+  assert.match(endpoint, /WHERE id = %s\s+AND product_id = %s\s+AND is_deleted = 0/);
+  assert.ok(endpoint.includes('商品至少需要保留一张图片'));
+  assert.match(endpoint, /UPDATE product_image\s+SET is_deleted = 1/);
+  assert.match(endpoint, /ORDER BY sort_order ASC, id ASC/);
+  assert.match(endpoint, /UPDATE product_image\s+SET is_main = 1/);
+  assert.match(endpoint, /UPDATE product\s+SET image_url = %s/);
+  assert.ok(endpoint.includes('query_product_images(conn, [product_id])'));
+  assert.ok(endpoint.includes('conn.commit()'));
+  assert.ok(endpoint.includes('conn.rollback()'));
+  assert.doesNotMatch(endpoint, /unlink\(|cleanup_saved_product_images/);
+});
+
+test('admin image manager deletes by real image id and keeps card thumbnail limits intact', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const deleteHelper = sliceBetween(
+    mainJs,
+    'async function deleteAdminProductImageToApi(productId, imageId)',
+    'function parseAdminSkuRows(values)',
+  );
+  const managerRenderer = sliceBetween(
+    mainJs,
+    'function renderAdminProductImageManager()',
+    'function renderProductImagePreview()',
+  );
+
+  assert.ok(html.includes('data-admin-image-manager'));
+  assert.ok(html.includes('data-admin-image-manager-list'));
+  assert.ok(mainJs.includes('data-admin-product-image-manage'));
+  assert.ok(managerRenderer.includes('getAdminProductImages(activeAdminImageManagerProduct)'));
+  assert.doesNotMatch(managerRenderer, /\.slice\(/);
+  assert.ok(managerRenderer.includes('image.id'));
+  assert.ok(managerRenderer.includes('兼容主图暂不能直接删除'));
+  assert.ok(managerRenderer.includes('至少保留一张图片'));
+  assert.ok(deleteHelper.includes('method: "DELETE"'));
+  assert.ok(deleteHelper.includes('adminFetch(`${API_BASE_URL}/admin/products/${productId}/images/${imageId}`'));
+  assert.ok(mainJs.includes('window.confirm'));
+  assert.ok(mainJs.includes('await deleteAdminProductImageToApi(productId, imageId);'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
+  assert.ok(mainJs.includes('getAdminProductImages(row).slice(0, 4)'));
+  assert.ok(mainJs.includes('formData.append("images", file)'));
+  assert.ok(mainJs.includes('function getProductImages(product)'));
+  assert.ok(styles.includes('.admin-image-manager'));
 });
 
 test('admin authentication source wiring is present', () => {

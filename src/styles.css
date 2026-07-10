@@ -3786,6 +3786,119 @@ button.sku-option--disabled {
   gap: 10px;
 }
 
+.admin-image-manager {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  place-items: center;
+  padding: 24px;
+}
+
+.admin-image-manager.is-open {
+  display: grid;
+}
+
+.admin-image-manager__backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(10, 28, 46, 0.48);
+  backdrop-filter: blur(3px);
+}
+
+.admin-image-manager__panel {
+  position: relative;
+  z-index: 1;
+  width: min(920px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.74);
+  border-radius: 28px;
+  background: rgba(248, 251, 255, 0.96);
+  box-shadow: 0 30px 80px rgba(15, 36, 58, 0.28);
+}
+
+.admin-image-manager__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-image-manager__eyebrow,
+.admin-image-manager__summary {
+  margin: 0;
+  color: var(--muted);
+}
+
+.admin-image-manager__header h2 {
+  margin: 6px 0 16px;
+}
+
+.admin-image-manager__close {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(105, 174, 230, 0.14);
+  color: var(--ink);
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.admin-image-manager__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.admin-image-manager__item {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(105, 174, 230, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.admin-image-manager__visual {
+  position: relative;
+}
+
+.admin-image-manager__visual img {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  border-radius: 14px;
+  object-fit: cover;
+  object-position: center top;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.admin-image-manager__badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(47, 95, 141, 0.92);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-image-manager__item-meta {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-image-manager__item-meta small {
+  min-height: 34px;
+  color: var(--muted);
+}
+
 .admin-product-row__main {
   display: grid;
   grid-template-columns: 96px 1fr;

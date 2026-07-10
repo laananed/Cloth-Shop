@@ -1060,6 +1060,144 @@ async def append_admin_product_images(
         raise HTTPException(status_code=500, detail=f"商品图片追加失败：{str(e)}")
 
 
+@app.delete("/admin/products/{product_id}/images/{image_id}")
+def delete_admin_product_image(
+    product_id: int,
+    image_id: int,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, image_url
+                        FROM product
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    product = cursor.fetchone()
+
+                    if not product:
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+
+                    cursor.execute(
+                        """
+                        SELECT id, product_id, image_url, sort_order, is_main
+                        FROM product_image
+                        WHERE id = %s
+                          AND product_id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (image_id, product_id)
+                    )
+                    image = cursor.fetchone()
+
+                    if not image:
+                        raise HTTPException(status_code=404, detail="商品图片不存在、已删除或不属于该商品")
+
+                    cursor.execute(
+                        """
+                        SELECT id, image_url, sort_order, is_main
+                        FROM product_image
+                        WHERE product_id = %s
+                          AND is_deleted = 0
+                        ORDER BY sort_order ASC, id ASC
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    active_images = cursor.fetchall()
+
+                    if len(active_images) <= 1:
+                        raise HTTPException(status_code=400, detail="商品至少需要保留一张图片")
+
+                    cursor.execute(
+                        """
+                        UPDATE product_image
+                        SET is_deleted = 1,
+                            is_main = 0
+                        WHERE id = %s
+                          AND product_id = %s
+                          AND is_deleted = 0
+                        """,
+                        (image_id, product_id)
+                    )
+
+                    current_image_url = str(product.get("image_url") or "").strip()
+
+                    if int(image.get("is_main") or 0) == 1:
+                        remaining_images = [item for item in active_images if int(item["id"]) != image_id]
+                        new_main_image = remaining_images[0]
+
+                        cursor.execute(
+                            """
+                            UPDATE product_image
+                            SET is_main = 0
+                            WHERE product_id = %s
+                              AND is_deleted = 0
+                            """,
+                            (product_id,)
+                        )
+                        cursor.execute(
+                            """
+                            UPDATE product_image
+                            SET is_main = 1
+                            WHERE id = %s
+                              AND product_id = %s
+                              AND is_deleted = 0
+                            """,
+                            (new_main_image["id"], product_id)
+                        )
+
+                        current_image_url = new_main_image["image_url"]
+                        cursor.execute(
+                            """
+                            UPDATE product
+                            SET image_url = %s
+                            WHERE id = %s
+                              AND is_deleted = 0
+                            """,
+                            (current_image_url, product_id)
+                        )
+
+                    image_map = query_product_images(conn, [product_id])
+                    product_images = image_map.get(product_id, [])
+
+                conn.commit()
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "商品图片删除成功",
+            "product_id": product_id,
+            "deleted_image_id": image_id,
+            "image_url": current_image_url,
+            "images": jsonable_encoder(product_images),
+            "image_count": len(product_images),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"商品图片删除失败：{str(e)}")
+
+
 def query_user_addresses(conn, user_id: int):
     with conn.cursor() as cursor:
         cursor.execute(

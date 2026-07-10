@@ -81,6 +81,7 @@ const purchaseBadge = document.querySelector('[data-purchase-badge]');
 const purchasePrice = document.querySelector('[data-purchase-price]');
 const purchaseSales = document.querySelector('[data-purchase-sales]');
 const purchaseImage = document.querySelector('[data-purchase-image]');
+const purchaseGallery = document.querySelector('[data-purchase-gallery]');
 const purchaseAddressList = document.querySelector('[data-purchase-address-list]');
 const purchaseQuantityValue = document.querySelector('[data-purchase-quantity-value]');
 const purchaseQuantityDecrease = document.querySelector('[data-purchase-quantity-decrease]');
@@ -129,6 +130,7 @@ const storage = window.localStorage;
 const pageRoot = document.documentElement;
 const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
+let activePurchaseImageUrl = '';
 let activePurchaseSkuId = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
@@ -220,7 +222,7 @@ function clearAdminDashboardData(targets = {}) {
   const emptyMessage = '请先登录管理员账号';
 
   if (ordersBody) {
-    ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyMessage)}</div></td></tr>`;
+    ordersBody.innerHTML = `<tr><td colspan="7"><div class="admin-empty">${escapeHtml(emptyMessage)}</div></td></tr>`;
   }
 
   if (statsSummary) {
@@ -462,6 +464,7 @@ const orderStatusFilters = [
   { value: 'ALL', label: '全部' },
   { value: 'PENDING_PAYMENT', label: '待支付' },
   { value: 'PAID', label: '已支付' },
+  { value: 'REFUND_REQUESTED', label: '退款待处理' },
   { value: 'CANCELLED', label: '已取消' },
   { value: 'REFUNDED', label: '已退款' },
 ];
@@ -519,6 +522,43 @@ function getProductDisplayState(product) {
   };
 }
 
+function getProductImages(product) {
+  const sourceImages = Array.isArray(product?.images)
+    ? product.images
+    : Array.isArray(product?.product_images)
+      ? product.product_images
+      : [];
+  const fallbackImage = String(product?.image_url || product?.image || '').trim();
+  const candidates = sourceImages.length > 0
+    ? sourceImages
+    : fallbackImage
+      ? [{ image_url: fallbackImage, is_main: 1, sort_order: 0 }]
+      : [];
+  const seen = new Set();
+
+  return candidates
+    .map((image, index) => {
+      const rawUrl = String(image?.image_url || '').trim();
+      if (!rawUrl) return null;
+      const imageUrl = rawUrl.startsWith('/') ? `${API_BASE_URL}${rawUrl}` : rawUrl;
+      if (seen.has(imageUrl)) return null;
+      seen.add(imageUrl);
+      return {
+        id: image?.id ?? null,
+        image_url: imageUrl,
+        is_main: Number(image?.is_main || 0),
+        sort_order: Number(image?.sort_order ?? index),
+        originalIndex: index,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.is_main - a.is_main || a.sort_order - b.sort_order || a.originalIndex - b.originalIndex)
+    .map(({ originalIndex, ...image }) => image);
+}
+
+function getProductMainImage(product) {
+  return getProductImages(product)[0]?.image_url || String(product?.image || '').trim();
+}
 function convertApiProducts(apiRows) {
   const productMap = new Map();
 
@@ -574,6 +614,7 @@ function convertApiProducts(apiRows) {
 
         // 优先使用数据库图片；没有 image_url 时才复用原来的静态图片
         image: productImage,
+        images: getProductImages(row),
         imageFit: dbImageUrl ? "cover" : imageSource.imageFit,
         imageFocus: dbImageUrl ? "center top" : imageSource.imageFocus,
         imageZoom: dbImageUrl ? 1 : imageSource.imageZoom,
@@ -1480,6 +1521,7 @@ function formatOrderStatus(status) {
   const statusMap = {
     PENDING_PAYMENT: "待支付",
     PAID: "已支付",
+    REFUND_REQUESTED: "退款待处理",
     CANCELLED: "已取消",
     REFUNDED: "已退款",
     SHIPPED: "已发货",
@@ -1487,6 +1529,26 @@ function formatOrderStatus(status) {
   };
 
   return statusMap[status] || status || "未知状态";
+}
+
+function renderAdminOrderStatusBadge(status) {
+  const normalizedStatus = normalizeStatus(status);
+  const badgeMap = {
+    PENDING_PAYMENT: { className: 'admin-status-badge--pending', label: '待支付' },
+    PAID: { className: 'admin-status-badge--paid', label: '已支付' },
+    REFUND_REQUESTED: { className: 'admin-status-badge--refund-requested', label: '退款待处理' },
+    SHIPPED: { className: 'admin-status-badge--shipped', label: '已发货' },
+    REFUNDED: { className: 'admin-status-badge--refunded', label: '已退款' },
+    CANCELLED: { className: 'admin-status-badge--cancelled', label: '已取消' },
+    COMPLETED: { className: 'admin-status-badge--completed', label: '已完成' },
+  };
+  const badge = badgeMap[normalizedStatus] || { className: 'admin-status-badge--default', label: formatOrderStatus(normalizedStatus) };
+
+  return `
+    <span class="admin-status-badge ${badge.className}">
+      ${escapeHtml(badge.label)}
+    </span>
+  `;
 }
 
 function getOrderStatusFilterLabel(status) {
@@ -1591,10 +1653,14 @@ function getOrderCancelHint(status) {
 }
 
 function canRefundOrder(status) {
-  return status === "PAID";
+  return status === "PAID" || status === "SHIPPED";
 }
 
 function getOrderRefundHint(status) {
+  if (status === "REFUND_REQUESTED") {
+    return "退款申请处理中";
+  }
+
   if (status === "REFUNDED") {
     return "订单已退款";
   }
@@ -1629,7 +1695,7 @@ async function refundOrderFromApi(orderId, remark = "用户在前台购买记录
     throw new Error(result.detail || "申请退款失败");
   }
 
-  console.log("订单退款成功：", result);
+  console.log("退款申请提交成功：", result);
   return result;
 }
 
@@ -1871,13 +1937,14 @@ async function handleRefundOrder(orderId) {
 
     const result = await refundOrderFromApi(orderId, "用户在前台购买记录申请退款");
 
-    console.log("前台订单退款完整流程成功：", result);
+    console.log("前台订单退款申请成功：", result);
 
-    activeOrderStatusFilter = "REFUNDED";
+    activeOrderStatusFilter = "REFUND_REQUESTED";
 
     await refreshOrdersFromApi();
     await showOrderDetail(orderId);
     await loadProductsFromApi();
+    setOrderActionFeedback(orderId, "退款申请已提交，等待商家处理");
   } catch (error) {
     console.error("申请退款失败：", error);
     setOrderActionFeedback(orderId, `申请退款失败：${error.message}`, true);
@@ -2530,11 +2597,34 @@ function renderPurchaseModal() {
       : '请选择商品规格后继续';
   }
 
+  const productImages = getProductImages(product);
+  const selectedImage = productImages.find((image) => image.image_url === activePurchaseImageUrl) || productImages[0] || null;
+  activePurchaseImageUrl = selectedImage?.image_url || '';
+
   if (purchaseImage) {
-    if (product) {
-      purchaseImage.src = product.image;
-      purchaseImage.alt = `${product.name} 预览`;
+    if (selectedImage) {
+      purchaseImage.src = selectedImage.image_url;
+      purchaseImage.alt = `${product?.name || '商品'} 预览`;
+    } else {
+      purchaseImage.removeAttribute('src');
+      purchaseImage.alt = product?.name ? `${product.name} 预览` : '';
     }
+  }
+
+  if (purchaseGallery) {
+    purchaseGallery.hidden = productImages.length < 2;
+    purchaseGallery.innerHTML = productImages.length < 2
+      ? ''
+      : productImages.map((image) => `
+          <button
+            type="button"
+            class="purchase-modal__gallery-button${image.image_url === activePurchaseImageUrl ? ' is-active' : ''}"
+            data-purchase-gallery-image="${escapeHtml(image.image_url)}"
+            aria-label="切换到商品图片"
+          >
+            <img class="purchase-modal__gallery-thumb" src="${escapeHtml(image.image_url)}" alt="" loading="lazy" decoding="async" />
+          </button>
+        `).join('');
   }
 
   if (purchaseQuantityValue) {
@@ -2645,6 +2735,7 @@ function renderPurchaseModal() {
 
 async function openPurchaseModal(product, action = 'buy') {
   activePurchaseProduct = product;
+  activePurchaseImageUrl = getProductMainImage(product);
   activePurchaseAction = getPurchaseActionConfig(action).key;
   activePurchaseSkuId = null;
   activePurchaseQuantity = 1;
@@ -2855,6 +2946,14 @@ function openSidebar(section = 'account') {
   document.body.classList.add('has-sidebar');
   renderSidebar();
 
+  const sidebarContent = getActiveSidebarScrollContainer();
+  if (sidebarContent) {
+    sidebarContent.scrollTo({
+      top: 0,
+      behavior: 'auto',
+    });
+  }
+
   if (activeSidebarSection === "orders") {
     refreshOrdersFromApi();
   }
@@ -2882,7 +2981,7 @@ function getActiveSidebarScrollContainer() {
     return null;
   }
 
-  return sidebar.querySelector('.sidebar__panel');
+  return sidebar.querySelector('.sidebar__content');
 }
 
 function getStoredProductById(productId) {
@@ -3530,6 +3629,7 @@ function initAdminPage() {
   const statsRows = shell.querySelector('[data-admin-stats-rows]');
   const productList = shell.querySelector('[data-admin-products-list]');
   const productSummary = shell.querySelector('[data-admin-product-summary]');
+  const orderFeedback = shell.querySelector('[data-admin-order-feedback]');
   const adminProductSearchInput = shell.querySelector('[data-admin-product-search]');
   const adminProductSearchClear = shell.querySelector('[data-admin-product-search-clear]');
   const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
@@ -3537,6 +3637,14 @@ function initAdminPage() {
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
   const imageSelect = shell.querySelector('[data-admin-image-select]');
+  const productImageInput = shell.querySelector('input[type="file"][name="image"]');
+  const productImagePreview = shell.querySelector('[data-admin-image-preview]');
+  const adminImageManager = document.querySelector('[data-admin-image-manager]');
+  const adminImageManagerTitle = document.querySelector('[data-admin-image-manager-title]');
+  const adminImageManagerSummary = document.querySelector('[data-admin-image-manager-summary]');
+  const adminImageManagerFeedback = document.querySelector('[data-admin-image-manager-feedback]');
+  const adminImageManagerList = document.querySelector('[data-admin-image-manager-list]');
+  const adminImageManagerCloseButtons = document.querySelectorAll('[data-admin-image-manager-close]');
   const dashboardTargets = {
     ordersBody,
     statsSummary,
@@ -3545,9 +3653,13 @@ function initAdminPage() {
     productSummary,
   };
   let activePanel = 'orders';
+  let activeAdminOrderDetailId = null;
   let products = [];
   let orders = [];
   let summary = null;
+  let activeAdminProductImageAppendId = null;
+  let adminProductImageAppendPreviewUrls = [];
+  let activeAdminImageManagerProduct = null;
   let productRows = [];
   let renderedStats = null;
   let renderedProducts = null;
@@ -3561,6 +3673,7 @@ function initAdminPage() {
   let activeAdminProductSearchKeyword = "";
 
   function resetAdminDashboardState() {
+    closeAdminProductImageManager();
     products = [];
     orders = [];
     summary = null;
@@ -3670,6 +3783,147 @@ function initAdminPage() {
     }
   }
 
+  function getAdminOrderDetailRow(orderId) {
+    return ordersBody?.querySelector(`[data-admin-order-detail-row="${orderId}"]`) || null;
+  }
+
+  function getAdminOrderDetailContainer(orderId) {
+    return ordersBody?.querySelector(`[data-admin-order-detail-container="${orderId}"]`) || null;
+  }
+
+  function collapseAdminOrderDetail(orderId) {
+    const row = getAdminOrderDetailRow(orderId);
+    const container = getAdminOrderDetailContainer(orderId);
+
+    if (row) {
+      row.hidden = true;
+    }
+
+    if (container) {
+      container.innerHTML = '';
+    }
+
+    if (activeAdminOrderDetailId === orderId) {
+      activeAdminOrderDetailId = null;
+    }
+  }
+
+  function expandAdminOrderDetailRow(orderId) {
+    const row = getAdminOrderDetailRow(orderId);
+
+    if (row) {
+      row.hidden = false;
+    }
+
+    activeAdminOrderDetailId = orderId;
+  }
+
+  async function loadAdminOrderDetailFromApi(orderId) {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/${orderId}`);
+
+    if (!result.success) {
+      throw new Error(result.detail || '加载后台订单详情失败');
+    }
+
+    return result;
+  }
+
+  async function shipAdminOrderToApi(orderId, remark = '管理员后台发货') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/ship`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '后台发货失败');
+    }
+
+    return result;
+  }
+
+  async function unshipAdminOrderToApi(orderId, remark = '管理员后台取消发货') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/unship`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '后台取消发货失败');
+    }
+
+    return result;
+  }
+
+  async function approveAdminRefundToApi(orderId, remark = '管理员同意退款') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/refund/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '同意退款失败');
+    }
+
+    return result;
+  }
+
+  async function rejectAdminRefundToApi(orderId, remark = '管理员拒绝退款') {
+    const result = await adminFetch(`${API_BASE_URL}/admin/orders/refund/reject`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        order_id: Number(orderId),
+        remark,
+      }),
+    });
+
+    if (!result.success) {
+      throw new Error(result.detail || '拒绝退款失败');
+    }
+
+    return result;
+  }
+
+  async function renderAdminOrderDetail(orderId, detail = null) {
+    const row = getAdminOrderDetailRow(orderId);
+    const container = getAdminOrderDetailContainer(orderId);
+
+    if (!row || !container) {
+      return;
+    }
+
+    expandAdminOrderDetailRow(orderId);
+    container.innerHTML = '<p class="order-detail__loading">正在加载订单详情...</p>';
+
+    try {
+      const detailData = detail || await loadAdminOrderDetailFromApi(orderId);
+      container.innerHTML = renderApiOrderDetail(detailData);
+    } catch (error) {
+      console.error('加载后台订单详情失败：', error);
+      container.innerHTML = `<p class="order-detail__empty">加载订单详情失败：${escapeHtml(error.message)}</p>`;
+    }
+  }
+
   function normalizeAdminOrderRow(row) {
     const orderId = Number(row?.order_id || 0);
     const itemKindCount = Number(row?.item_kind_count || 0);
@@ -3712,22 +3966,102 @@ function initAdminPage() {
     const rows = Array.isArray(orderList) ? orderList : [];
 
     if (!rows.length) {
-      ordersBody.innerHTML = `<tr><td colspan="6"><div class="admin-empty">${escapeHtml(emptyText)}</div></td></tr>`;
+      ordersBody.innerHTML = `<tr><td colspan="7"><div class="admin-empty">${escapeHtml(emptyText)}</div></td></tr>`;
       return;
     }
 
     ordersBody.innerHTML = rows
       .map(
-        (row) => `
+        (row) => {
+          const isExpanded = activeAdminOrderDetailId === row.orderId;
+          const status = normalizeStatus(row.status);
+          const statusBadge = renderAdminOrderStatusBadge(status);
+          const canShip = status === 'PAID';
+          const canUnship = status === 'SHIPPED';
+          const canReviewRefund = status === 'REFUND_REQUESTED';
+          const detailButtonLabel = isExpanded ? '收起详情' : '查看详情';
+          const detailRowHidden = isExpanded ? '' : ' hidden';
+          let actionButtonHtml = `
+            <button
+              class="admin-order-action-button admin-order-action-button--disabled"
+              type="button"
+              disabled
+            >
+              无法发货
+            </button>
+          `;
+
+          if (canReviewRefund) {
+            actionButtonHtml = `
+              <button
+                class="admin-order-action-button admin-order-action-button--primary"
+                type="button"
+                data-admin-order-refund-approve-id="${row.orderId}"
+              >
+                同意退款
+              </button>
+              <button
+                class="admin-order-action-button admin-order-action-button--warning"
+                type="button"
+                data-admin-order-refund-reject-id="${row.orderId}"
+              >
+                拒绝退款
+              </button>
+            `;
+          }
+
+          if (canShip) {
+            actionButtonHtml = `
+              <button
+                class="admin-order-action-button admin-order-action-button--primary"
+                type="button"
+                data-admin-order-ship-id="${row.orderId}"
+              >
+                发货
+              </button>
+            `;
+          }
+
+          if (canUnship) {
+            actionButtonHtml = `
+              <button
+                class="admin-order-action-button admin-order-action-button--warning"
+                type="button"
+                data-admin-order-unship-id="${row.orderId}"
+              >
+                取消发货
+              </button>
+            `;
+          }
+
+          return `
           <tr>
             <td>${escapeHtml(row.orderNo)}</td>
             <td>${escapeHtml(row.email || `用户 ${row.userId || ""}`)}</td>
             <td>${escapeHtml(row.productSummary || `${row.itemKindCount} 类商品 / ${row.totalQuantity} 件`)}</td>
             <td>${escapeHtml(formatPrice(row.totalAmount))}</td>
-            <td>${escapeHtml(row.statusLabel || formatOrderStatus(row.status))}</td>
+            <td>${statusBadge}</td>
             <td>${escapeHtml(row.createdAt)}</td>
+            <td>
+              <div class="admin-order-actions">
+                <button
+                  class="admin-order-action-button"
+                  type="button"
+                  data-admin-order-detail-id="${row.orderId}"
+                >
+                  ${escapeHtml(detailButtonLabel)}
+                </button>
+                ${actionButtonHtml}
+              </div>
+            </td>
           </tr>
-        `,
+          <tr class="admin-order-detail-row" data-admin-order-detail-row="${row.orderId}"${detailRowHidden}>
+            <td colspan="7">
+              <div class="admin-order-detail-container" data-admin-order-detail-container="${row.orderId}"></div>
+            </td>
+          </tr>
+        `;
+        },
       )
       .join("");
   }
@@ -3736,6 +4070,10 @@ function initAdminPage() {
     try {
       orders = await loadAdminOrdersFromApi();
       renderAdminOrders(orders);
+
+      if (activeAdminOrderDetailId) {
+        await renderAdminOrderDetail(activeAdminOrderDetailId);
+      }
 
       console.log("后台订单已切换为数据库订单：", orders);
     } catch (error) {
@@ -3766,7 +4104,7 @@ function convertApiStatsToRenderedStats(result) {
       {
         label: "已支付销售额",
         value: formatPrice(summary.total_revenue || 0),
-        detail: `已支付订单 ${Number(summary.paid_order_count || 0)} 单`,
+        detail: `已支付/退款待处理订单 ${Number(summary.paid_order_count || 0)} 单`,
       },
       {
         label: "订单总数",
@@ -3776,7 +4114,7 @@ function convertApiStatsToRenderedStats(result) {
       {
         label: "售出件数",
         value: String(Number(summary.total_units_sold || 0)),
-        detail: "按已支付订单统计",
+        detail: "按已支付/退款待处理订单统计",
       },
       {
         label: "商品数量",
@@ -3822,6 +4160,34 @@ async function refreshAdminStatsFromApi() {
   }
 }
 
+function getAdminProductImages(product) {
+  const sourceImages = Array.isArray(product?.images)
+    ? product.images
+    : Array.isArray(product?.product_images)
+      ? product.product_images
+      : [];
+
+  if (sourceImages.length > 0) {
+    return sourceImages
+      .filter((image) => image && image.image_url)
+      .map((image) => ({
+        id: image.id ?? null,
+        image_url: String(image.image_url),
+        is_main: Number(image.is_main || 0),
+        sort_order: Number(image.sort_order || 0),
+      }));
+  }
+
+  const imageUrl = String(product?.image_url || product?.image || '').trim();
+  return imageUrl
+    ? [{ id: null, image_url: imageUrl, is_main: 1, sort_order: 0 }]
+    : [];
+}
+
+function getAdminProductImageCount(product) {
+  const count = Number(product?.image_count);
+  return Number.isFinite(count) && count >= 0 ? count : getAdminProductImages(product).length;
+}
 function convertApiRowsToAdminProducts(apiRows) {
   const productMap = new Map();
 
@@ -3849,6 +4215,8 @@ function convertApiRowsToAdminProducts(apiRows) {
         badge: "数据库商品",
         status: row.product_status || "UNKNOWN",
         image: imageUrl,
+        images: getAdminProductImages(row),
+        imageCount: getAdminProductImageCount(row),
         imageLabel: imageUrl ? imageUrl.split("/").pop() : "暂无图片",
         createdAt: row.product_created_at || "",
         skuCount: 0,
@@ -3904,6 +4272,8 @@ function renderAdminInventoryProductsView(adminProducts) {
       status: normalizeStatus(product.status || "UNKNOWN"),
       image: product.image || "",
       imageLabel: product.imageLabel || "暂无图片",
+      images: getAdminProductImages(product),
+      imageCount: getAdminProductImageCount(product),
       createdAt: product.createdAt || "",
 
       skuCount: product.skuCount || 0,
@@ -4062,7 +4432,9 @@ async function refreshAdminProductsFromApi() {
 
     productList.innerHTML = filteredRows
       .map((row) => {
-        const imageSrc = getAdminImageSrc(row.image);
+        const imageItems = getAdminProductImages(row).slice(0, 4);
+        const imageSrc = getAdminImageSrc(imageItems[0]?.image_url || row.image);
+        const imageCount = getAdminProductImageCount(row);
         const isOnSaleProduct = getAdminProductSaleState(row).key === "ON_SALE";
         const statusLabel = getAdminProductSaleState(row).label;
         const nextStatus = isOnSaleProduct ? "OFF_SALE" : "ON_SALE";
@@ -4074,9 +4446,14 @@ async function refreshAdminProductsFromApi() {
               <div class="admin-product-thumb-wrap">
                 ${
                   imageSrc
-                    ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 预览图" loading="lazy" decoding="async" />`
+                    ? `<img class="admin-product-thumb" src="${escapeHtml(imageSrc)}" alt="${escapeHtml(row.name)} 主图" loading="lazy" decoding="async" />`
                     : `<div class="admin-product-thumb admin-product-thumb--empty">暂无图</div>`
                 }
+                ${imageItems.length > 1 ? `
+                  <div class="admin-product-thumbnails" aria-label="${escapeHtml(row.name)} 图片预览">
+                    ${imageItems.map((image) => `<img src="${escapeHtml(getAdminImageSrc(image.image_url))}" alt="" loading="lazy" decoding="async" />`).join("")}
+                  </div>
+                ` : ""}
               </div>
 
               <div class="admin-product-row__content">
@@ -4086,7 +4463,7 @@ async function refreshAdminProductsFromApi() {
                 </div>
 
                 <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
-                <span>状态：${escapeHtml(statusLabel)} · ${escapeHtml(row.imageLabel)}</span>
+                <span>状态：${escapeHtml(statusLabel)} · 图片 ${escapeHtml(imageCount)} 张 · ${escapeHtml(row.imageLabel)}</span>
                 <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
 
                 <div class="admin-sku-list">
@@ -4128,6 +4505,20 @@ async function refreshAdminProductsFromApi() {
                 <div class="admin-product-row__actions">
                   <button
                     type="button"
+                    class="ghost-button ghost-button--small"
+                    data-admin-product-image-manage="${row.productId}"
+                  >
+                    管理图片
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost-button ghost-button--small ghost-button--solid"
+                    data-admin-product-image-append="${row.productId}"
+                  >
+                    追加图片
+                  </button>
+                  <button
+                    type="button"
                     class="ghost-button ghost-button--small ${isOnSaleProduct ? "ghost-button--danger" : "ghost-button--solid"}"
                     data-admin-product-status-id="${row.productId}"
                     data-admin-product-next-status="${nextStatus}"
@@ -4142,6 +4533,23 @@ async function refreshAdminProductsFromApi() {
                     删除商品
                   </button>
                 </div>
+                ${activeAdminProductImageAppendId === row.productId ? `
+                  <div class="admin-product-image-append" data-admin-product-image-append-panel="${row.productId}">
+                    <strong>为“${escapeHtml(row.name)}”追加图片</strong>
+                    <p class="admin-image-preview__note">新图片会追加到现有图片之后，原主图保持不变。</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      data-admin-product-image-append-input="${row.productId}"
+                    />
+                    <div class="admin-image-preview" data-admin-product-image-append-preview hidden aria-live="polite"></div>
+                    <div class="admin-product-image-append__actions">
+                      <button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-product-image-append-submit="${row.productId}" disabled>确认上传</button>
+                      <button type="button" class="ghost-button ghost-button--small" data-admin-product-image-append-cancel="${row.productId}">取消</button>
+                    </div>
+                  </div>
+                ` : ""}
               </div>
             </div>
           </article>
@@ -4297,7 +4705,7 @@ function parseAdminSkuRows(values) {
 }
 
 
-async function createAdminProductToApi(values, imageFile) {
+async function createAdminProductToApi(values, imageFiles = []) {
   const formData = new FormData();
   const skuRows = Array.isArray(values.skuRows)
     ? values.skuRows
@@ -4314,9 +4722,10 @@ async function createAdminProductToApi(values, imageFile) {
 
   formData.append("skus_json", JSON.stringify(skuRows));
 
-  if (imageFile) {
-    formData.append("image", imageFile);
-  }
+  const files = Array.isArray(imageFiles) ? imageFiles : imageFiles ? [imageFiles] : [];
+  files.forEach((file) => {
+    formData.append("images", file);
+  });
 
   const result = await adminFetch(`${API_BASE_URL}/products`, {
     method: "POST",
@@ -4328,6 +4737,38 @@ async function createAdminProductToApi(values, imageFile) {
   }
 
   console.log("后台商品已写入数据库：", result);
+  return result;
+}
+
+async function appendAdminProductImagesToApi(productId, imageFiles) {
+  const formData = new FormData();
+  const files = Array.isArray(imageFiles) ? imageFiles : [];
+
+  files.forEach((file) => {
+    formData.append("images", file);
+  });
+
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/images`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!result.success) {
+    throw new Error(result.detail || result.message || "追加商品图片失败");
+  }
+
+  return result;
+}
+
+async function deleteAdminProductImageToApi(productId, imageId) {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/images/${imageId}`, {
+    method: "DELETE",
+  });
+
+  if (!result.success) {
+    throw new Error(result.detail || result.message || "删除商品图片失败");
+  }
+
   return result;
 }
 
@@ -4405,13 +4846,184 @@ async function createAdminProductToApi(values, imageFile) {
     });
   });
 
+  let productPreviewUrls = [];
+
+  function clearAdminProductImageAppendPreview() {
+    adminProductImageAppendPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+    adminProductImageAppendPreviewUrls = [];
+  }
+
+  function closeAdminProductImageManager() {
+    activeAdminImageManagerProduct = null;
+    if (adminImageManager) {
+      adminImageManager.hidden = true;
+      adminImageManager.classList.remove("is-open");
+      adminImageManager.setAttribute("aria-hidden", "true");
+    }
+    document.body.classList.remove("has-modal");
+  }
+
+  function renderAdminProductImageManager() {
+    if (!adminImageManager || !activeAdminImageManagerProduct) {
+      closeAdminProductImageManager();
+      return;
+    }
+
+    const images = getAdminProductImages(activeAdminImageManagerProduct);
+    const onlyOneImage = images.length <= 1;
+
+    adminImageManager.hidden = false;
+    adminImageManager.classList.add("is-open");
+    adminImageManager.setAttribute("aria-hidden", "false");
+    document.body.classList.add("has-modal");
+
+    if (adminImageManagerTitle) {
+      adminImageManagerTitle.textContent = `管理“${activeAdminImageManagerProduct.name}”的图片`;
+    }
+
+    if (adminImageManagerSummary) {
+      adminImageManagerSummary.textContent = `当前共 ${images.length} 张有效图片${onlyOneImage ? "，至少保留一张图片" : ""}`;
+    }
+
+    if (adminImageManagerFeedback) {
+      adminImageManagerFeedback.textContent = "";
+      adminImageManagerFeedback.classList.remove("is-error");
+    }
+
+    if (adminImageManagerList) {
+      adminImageManagerList.innerHTML = images.map((image, index) => {
+        const imageId = Number(image.id);
+        const hasRealImageId = Number.isInteger(imageId) && imageId > 0;
+        const isMain = Number(image.is_main || 0) === 1;
+        const deleteDisabled = onlyOneImage || !hasRealImageId;
+        const hint = !hasRealImageId
+          ? "兼容主图暂不能直接删除"
+          : onlyOneImage
+            ? "至少保留一张图片"
+            : "删除后不可在页面中继续使用该图片";
+
+        return `
+          <article class="admin-image-manager__item">
+            <div class="admin-image-manager__visual">
+              <img src="${escapeHtml(getAdminImageSrc(image.image_url))}" alt="${escapeHtml(activeAdminImageManagerProduct.name)} 图片 ${index + 1}" loading="lazy" decoding="async" />
+              ${isMain ? '<span class="admin-image-manager__badge">主图</span>' : ""}
+            </div>
+            <div class="admin-image-manager__item-meta">
+              <span>图片 ID：${hasRealImageId ? escapeHtml(imageId) : "兼容图片"}</span>
+              <small>${escapeHtml(hint)}</small>
+              <button
+                type="button"
+                class="ghost-button ghost-button--small ghost-button--danger"
+                data-admin-image-delete-id="${hasRealImageId ? imageId : ""}"
+                data-admin-image-delete-product-id="${activeAdminImageManagerProduct.productId}"
+                data-admin-image-delete-main="${isMain ? "1" : "0"}"
+                ${deleteDisabled ? "disabled" : ""}
+              >
+                删除图片
+              </button>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+  }
+
+  function renderProductImagePreview() {
+    productPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+    productPreviewUrls = [];
+
+    if (!productImagePreview) {
+      return;
+    }
+
+    const files = Array.from(productImageInput?.files || []);
+    if (!files.length) {
+      productImagePreview.hidden = true;
+      productImagePreview.innerHTML = "";
+      return;
+    }
+
+    productPreviewUrls = files.slice(0, 4).map((file) => URL.createObjectURL(file));
+    productImagePreview.hidden = false;
+    productImagePreview.innerHTML = `
+      <p class="admin-image-preview__note">第 1 张将作为主图，共选择 ${escapeHtml(files.length)} 张</p>
+      <div class="admin-image-preview__grid">
+        ${productPreviewUrls.map((url, index) => `<img src="${escapeHtml(url)}" alt="本地图片 ${index + 1}" />`).join("")}
+      </div>
+    `;
+  }
+
+  if (productImageInput) {
+    productImageInput.addEventListener("change", renderProductImagePreview);
+  }
+
+  adminImageManagerCloseButtons.forEach((button) => {
+    button.addEventListener("click", closeAdminProductImageManager);
+  });
+
+  if (adminImageManagerList) {
+    adminImageManagerList.addEventListener("click", async (event) => {
+      const deleteButton = event.target.closest("[data-admin-image-delete-id]");
+      if (!deleteButton || deleteButton.disabled || !activeAdminImageManagerProduct) {
+        return;
+      }
+
+      const productId = Number(deleteButton.dataset.adminImageDeleteProductId);
+      const imageId = Number(deleteButton.dataset.adminImageDeleteId);
+      const isMain = deleteButton.dataset.adminImageDeleteMain === "1";
+
+      if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(imageId) || imageId <= 0) {
+        setFeedback(adminImageManagerFeedback, "图片 ID 不正确，无法删除。", true);
+        return;
+      }
+
+      const mainImageNote = isMain
+        ? "这是当前主图，删除后系统会自动选择下一张图片作为主图。"
+        : "这不是当前主图，删除后原主图保持不变。";
+      const confirmed = window.confirm(
+        `确定删除“${activeAdminImageManagerProduct.name}”的这张图片吗？\n${mainImageNote}\n删除后不可在页面中继续使用该图片。`
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        deleteButton.disabled = true;
+        deleteButton.textContent = "删除中...";
+        const result = await deleteAdminProductImageToApi(productId, imageId);
+
+        activeAdminImageManagerProduct = {
+          ...activeAdminImageManagerProduct,
+          image: result.image_url,
+          image_url: result.image_url,
+          images: result.images,
+          imageCount: result.image_count,
+          image_count: result.image_count,
+        };
+        renderAdminProductImageManager();
+        setFeedback(adminImageManagerFeedback, result.message || "商品图片删除成功");
+        setFeedback(productManageFeedback || productFeedback, result.message || "商品图片删除成功");
+
+        await refreshAdminProductsFromApi();
+        activeAdminImageManagerProduct = products.find((product) => product.productId === productId) || activeAdminImageManagerProduct;
+        renderAdminProductImageManager();
+        setFeedback(adminImageManagerFeedback, result.message || "商品图片删除成功");
+      } catch (error) {
+        console.error("后台删除商品图片失败：", error);
+        deleteButton.disabled = false;
+        deleteButton.textContent = "删除图片";
+        setFeedback(adminImageManagerFeedback, error.message || "删除商品图片失败", true);
+      }
+    });
+  }
+
   if (productForm) {
     productForm.addEventListener('submit', async (event) => {
       event.preventDefault();
 
       const values = Object.fromEntries(new FormData(productForm).entries());
-      const imageInput = productForm.querySelector('input[type="file"][name="image"]');
-      const imageFile = imageInput?.files?.[0] || null;
+      const imageFiles = Array.from(productImageInput?.files || []);
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
       const skuName = String(values.skuName || "默认规格").trim() || "默认规格";
@@ -4440,7 +5052,7 @@ async function createAdminProductToApi(values, imageFile) {
           category,
           skuRows,
         },
-        imageFile
+        imageFiles
       );
 
         setFeedback(
@@ -4449,6 +5061,7 @@ async function createAdminProductToApi(values, imageFile) {
         );
 
         productForm.reset();
+        renderProductImagePreview();
 
         if (imageSelect?.options.length) {
           imageSelect.selectedIndex = 0;
@@ -4504,11 +5117,274 @@ async function createAdminProductToApi(values, imageFile) {
     });
   }
 
+  if (ordersBody) {
+    ordersBody.addEventListener("click", async (event) => {
+      const detailButton = event.target.closest("[data-admin-order-detail-id]");
+      const approveRefundButton = event.target.closest("[data-admin-order-refund-approve-id]");
+      const rejectRefundButton = event.target.closest("[data-admin-order-refund-reject-id]");
+      const shipButton = event.target.closest("[data-admin-order-ship-id]");
+      const unshipButton = event.target.closest("[data-admin-order-unship-id]");
+
+      if (detailButton) {
+        const orderId = Number(detailButton.dataset.adminOrderDetailId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        if (activeAdminOrderDetailId === orderId) {
+          collapseAdminOrderDetail(orderId);
+          renderAdminOrders(orders);
+          return;
+        }
+
+        activeAdminOrderDetailId = orderId;
+        renderAdminOrders(orders);
+        await renderAdminOrderDetail(orderId);
+        return;
+      }
+
+      if (approveRefundButton) {
+        const orderId = Number(approveRefundButton.dataset.adminOrderRefundApproveId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要同意这个退款申请吗？同意后会恢复库存并回滚销量。");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          approveRefundButton.disabled = true;
+          approveRefundButton.textContent = "处理中...";
+
+          await approveAdminRefundToApi(orderId, "管理员同意退款");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "退款已同意");
+        } catch (error) {
+          console.error("同意退款失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">同意退款失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `同意退款失败：${error.message}`, true);
+        }
+
+        return;
+      }
+
+      if (rejectRefundButton) {
+        const orderId = Number(rejectRefundButton.dataset.adminOrderRefundRejectId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要拒绝这个退款申请吗？拒绝后订单会回到退款前状态。");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          rejectRefundButton.disabled = true;
+          rejectRefundButton.textContent = "处理中...";
+
+          await rejectAdminRefundToApi(orderId, "管理员拒绝退款");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "已拒绝退款申请");
+        } catch (error) {
+          console.error("拒绝退款失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">拒绝退款失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `拒绝退款失败：${error.message}`, true);
+        }
+
+        return;
+      }
+
+      if (shipButton) {
+        const orderId = Number(shipButton.dataset.adminOrderShipId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要给这个已支付订单发货吗？发货后状态会变为已发货。");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          shipButton.disabled = true;
+          shipButton.textContent = "发货中...";
+
+          await shipAdminOrderToApi(orderId, "管理员后台发货");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "发货成功");
+        } catch (error) {
+          console.error("后台发货失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">发货失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `发货失败：${error.message}`, true);
+        }
+
+        return;
+      }
+
+      if (unshipButton) {
+        const orderId = Number(unshipButton.dataset.adminOrderUnshipId);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          return;
+        }
+
+        const confirmed = window.confirm("确定要取消这个已发货订单的发货状态吗？");
+
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          unshipButton.disabled = true;
+          unshipButton.textContent = "取消中...";
+
+          await unshipAdminOrderToApi(orderId, "管理员后台取消发货");
+          await refreshAdminOrdersFromApi();
+          setFeedback(orderFeedback, "取消发货成功");
+        } catch (error) {
+          console.error("后台取消发货失败：", error);
+
+          const container = getAdminOrderDetailContainer(orderId);
+
+          if (container) {
+            container.innerHTML = `<p class="order-detail__empty">取消发货失败：${escapeHtml(error.message)}</p>`;
+          }
+
+          setFeedback(orderFeedback, `取消发货失败：${error.message}`, true);
+        }
+      }
+    });
+  }
+
   if (productList) {
+  productList.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-admin-product-image-append-input]");
+    if (!input) {
+      return;
+    }
+
+    clearAdminProductImageAppendPreview();
+    const files = Array.from(input.files || []);
+    const panel = input.closest("[data-admin-product-image-append-panel]");
+    const preview = panel?.querySelector("[data-admin-product-image-append-preview]");
+    const submitButton = panel?.querySelector("[data-admin-product-image-append-submit]");
+
+    if (submitButton) {
+      submitButton.disabled = files.length === 0;
+    }
+
+    if (!preview) {
+      return;
+    }
+
+    if (!files.length) {
+      preview.hidden = true;
+      preview.innerHTML = "";
+      return;
+    }
+
+    adminProductImageAppendPreviewUrls = files.slice(0, 4).map((file) => URL.createObjectURL(file));
+    preview.hidden = false;
+    preview.innerHTML = `
+      <p class="admin-image-preview__note">已选择 ${escapeHtml(files.length)} 张图片，原主图保持不变。</p>
+      <div class="admin-image-preview__grid">
+        ${adminProductImageAppendPreviewUrls.map((url, index) => `<img src="${escapeHtml(url)}" alt="待追加图片 ${index + 1}" />`).join("")}
+      </div>
+    `;
+  });
+
   productList.addEventListener("click", async (event) => {
     const stockButton = event.target.closest("[data-admin-stock-save]");
     const statusButton = event.target.closest("[data-admin-product-status-id]");
     const deleteButton = event.target.closest("[data-admin-product-delete-id]");
+    const appendButton = event.target.closest("[data-admin-product-image-append]");
+    const appendSubmitButton = event.target.closest("[data-admin-product-image-append-submit]");
+    const appendCancelButton = event.target.closest("[data-admin-product-image-append-cancel]");
+    const manageImagesButton = event.target.closest("[data-admin-product-image-manage]");
+
+    if (manageImagesButton) {
+      const productId = Number(manageImagesButton.dataset.adminProductImageManage);
+      activeAdminImageManagerProduct = products.find((product) => product.productId === productId) || null;
+
+      if (!activeAdminImageManagerProduct) {
+        setFeedback(productManageFeedback || productFeedback, "商品数据不存在，无法管理图片。", true);
+        return;
+      }
+
+      renderAdminProductImageManager();
+      return;
+    }
+
+    if (appendButton) {
+      clearAdminProductImageAppendPreview();
+      activeAdminProductImageAppendId = Number(appendButton.dataset.adminProductImageAppend);
+      renderProducts();
+      return;
+    }
+
+    if (appendCancelButton) {
+      clearAdminProductImageAppendPreview();
+      activeAdminProductImageAppendId = null;
+      renderProducts();
+      return;
+    }
+
+    if (appendSubmitButton) {
+      const productId = Number(appendSubmitButton.dataset.adminProductImageAppendSubmit);
+      const panel = appendSubmitButton.closest("[data-admin-product-image-append-panel]");
+      const input = panel?.querySelector("[data-admin-product-image-append-input]");
+      const imageFiles = Array.from(input?.files || []);
+
+      if (!imageFiles.length) {
+        setFeedback(productManageFeedback || productFeedback, "请至少选择一张商品图片。", true);
+        return;
+      }
+
+      try {
+        appendSubmitButton.disabled = true;
+        appendSubmitButton.textContent = "上传中...";
+        const result = await appendAdminProductImagesToApi(productId, imageFiles);
+        setFeedback(productManageFeedback || productFeedback, result.message || "商品图片追加成功");
+        clearAdminProductImageAppendPreview();
+        activeAdminProductImageAppendId = null;
+        await refreshAdminProductsFromApi();
+      } catch (error) {
+        console.error("后台追加商品图片失败：", error);
+        appendSubmitButton.disabled = false;
+        appendSubmitButton.textContent = "确认上传";
+        setFeedback(productManageFeedback || productFeedback, `追加图片失败：${error.message}`, true);
+      }
+
+      return;
+    }
 
     if (stockButton) {
       const skuId = Number(stockButton.dataset.adminStockSave);
@@ -4845,6 +5721,7 @@ purchaseCloseButtons.forEach((button) => {
 
 if (purchaseModal) {
   purchaseModal.addEventListener('click', (event) => {
+    const galleryButton = event.target.closest('[data-purchase-gallery-image]');
     const quantityDecrease = event.target.closest('[data-purchase-quantity-decrease]');
     const quantityIncrease = event.target.closest('[data-purchase-quantity-increase]');
     const addressButton = event.target.closest('[data-purchase-address-id]');
@@ -4853,6 +5730,11 @@ if (purchaseModal) {
     const manageAddressButton = event.target.closest('[data-purchase-manage-address]');
     const submitButton = event.target.closest('[data-purchase-submit]');
 
+    if (galleryButton) {
+      activePurchaseImageUrl = galleryButton.dataset.purchaseGalleryImage || '';
+      renderPurchaseModal();
+      return;
+    }
     if (quantityDecrease) {
       setPurchaseQuantity(activePurchaseQuantity - 1);
       return;

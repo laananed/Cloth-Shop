@@ -53,6 +53,14 @@ function sliceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+const mojibakeFragments = ['鐺', '锟', '鏂', '绾', '閿', '美亘', '闆', 'Ã', '�'];
+
+function assertNoMojibake(source, fileName) {
+  for (const fragment of mojibakeFragments) {
+    assert.ok(!source.includes(fragment), `${fileName} should not contain mojibake fragment: ${fragment}`);
+  }
+}
+
 test('site copy keeps the one-page brand-led direction', () => {
   const copy = getSiteCopy();
 
@@ -194,6 +202,25 @@ test('purchase modal source keeps product selection before derived state', () =>
   assert.ok(selectedSkuIndex < selectedSkuOnSaleIndex);
 });
 
+test('purchase modal supports product image galleries without changing purchase actions', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(html.includes('data-purchase-modal'));
+  assert.ok(html.includes('data-purchase-image'));
+  assert.ok(html.includes('data-purchase-gallery'));
+  assert.ok(mainJs.includes('function getProductImages('));
+  assert.ok(mainJs.includes('product.images'));
+  assert.ok(mainJs.includes('product.product_images'));
+  assert.ok(mainJs.includes('data-purchase-gallery'));
+  assert.ok(mainJs.includes('data-purchase-gallery-image'));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(styles.includes('.purchase-modal__gallery'));
+  assert.ok(styles.includes('.purchase-modal__gallery-button.is-active'));
+});
 test('purchase modal routes actions through the shared selection flow', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
@@ -271,7 +298,7 @@ test('scroll tools route sidebar and page scrolling through the right targets', 
   const initScrollToolsBody = sliceBetween(mainJs, 'function initScrollTools() {', 'function initAdminPage() {');
 
   assert.ok(mainJs.includes('function getActiveSidebarScrollContainer()'));
-  assert.ok(mainJs.includes('.sidebar__panel'));
+  assert.ok(mainJs.includes(".sidebar__content"));
   assert.ok(initScrollToolsBody.includes('sidebarPanel.scrollTo({'));
   assert.ok(mainJs.includes('window.scrollTo({'));
   assert.ok(mainJs.includes('[data-scroll-to]'));
@@ -413,6 +440,58 @@ test('backend product queries expose inventory_updated_at from the view', () => 
   assert.ok(mainJs.includes('getSalesRankMap(products)'));
   assert.ok(mainJs.includes("salesRankLabel = isTopSeller"));
   assert.ok(!mainJs.includes('暂不可售'));
+});
+
+test('backend product endpoints expose product image collections and accept multiple uploads', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(backend.includes('def query_product_images('));
+  assert.ok(backend.includes('product_image'));
+  assert.ok(backend.includes('images: list[UploadFile] | None = File(None)'));
+  assert.ok(backend.includes('image_url'));
+  assert.ok(backend.includes('image_count'));
+  assert.ok(backend.includes('sort_order'));
+  assert.ok(backend.includes('is_main'));
+  assert.ok(backend.includes('"source": "product.image_url"'));
+  assert.ok(backend.includes('FROM v_product_detail'));
+});
+test('backend and frontend source files do not contain obvious mojibake fragments', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assertNoMojibake(backend, 'backend/app/main.py');
+  assertNoMojibake(mainJs, 'src/main.js');
+  assert.ok(backend.includes('订单发货成功'));
+  assert.ok(backend.includes('取消发货成功'));
+  assert.ok(backend.includes('退款申请已提交'));
+  assert.ok(backend.includes('退款已同意'));
+  assert.ok(backend.includes('已拒绝退款申请'));
+  assert.ok(backend.includes('管理员登录成功'));
+  assert.ok(mainJs.includes('退款待处理'));
+  assert.ok(mainJs.includes('同意退款'));
+  assert.ok(mainJs.includes('拒绝退款'));
+  assert.ok(mainJs.includes('无法发货'));
+});
+
+test('index html keeps the restored document structure and the search hook markup', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mojibakeFragments = ['?/title', '?/button', '?/p', '?/h3', '?/span', '?/strong', 'Ʒ', '֧Ʒ', '͹ؼ'];
+
+  assert.ok(html.includes('<title>蓝笙织梦 · 二次元服装售卖首页</title>'));
+  assert.ok(html.includes('./src/styles.css'));
+  assert.ok(html.includes('./src/main.js'));
+  assert.ok(html.includes('data-product-search'));
+  assert.ok(html.includes('data-product-search-clear'));
+  assert.ok(html.includes('data-product-grid'));
+  assert.ok(html.includes('data-product-count'));
+  assert.ok(html.includes('data-active-collection'));
+  assert.ok(html.includes('data-sidebar'));
+  assert.ok(html.includes('data-purchase-modal'));
+  assert.ok(html.includes('清空'));
+
+  for (const fragment of mojibakeFragments) {
+    assert.ok(!html.includes(fragment), `index.html should not contain mojibake fragment: ${fragment}`);
+  }
 });
 
 test('sales rank labels use the full catalog while sorting still keeps sellable products first', () => {
@@ -796,11 +875,36 @@ test('saved product shelves render an empty state when there are no items', () =
 test('sidebar layout uses a fixed visual anchor across sections', () => {
   const css = readFileSync('src/styles.css', 'utf8');
 
-  assert.match(css, /--sidebar-layout-anchor-offset:\s*144px;/);
-  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?align-content:\s*start;/);
-  assert.match(css, /\.sidebar__layout\s*\{[\s\S]*?margin-top:\s*var\(--sidebar-layout-anchor-offset\);/);
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?overflow:\s*hidden;/);
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?display:\s*grid;/);
 });
 
+test('sidebar keeps the five nav buttons visible while content scrolls independently', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const css = readFileSync('src/styles.css', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(html.includes('data-sidebar-nav'));
+  assert.ok(html.includes('data-sidebar-target="account"'));
+  assert.ok(html.includes('data-sidebar-target="address"'));
+  assert.ok(html.includes('data-sidebar-target="orders"'));
+  assert.ok(html.includes('data-sidebar-target="favorites"'));
+  assert.ok(html.includes('data-sidebar-target="cart"'));
+  assert.match(css, /\.sidebar__panel\s*\{[\s\S]*?height:\s*100vh;/);
+  assert.match(css, /\.sidebar-nav\s*\{[\s\S]*?position:\s*sticky;/);
+  assert.match(css, /\.sidebar__content\s*\{[\s\S]*?overflow-y:\s*auto;/);
+  assert.match(mainJs, /function getActiveSidebarScrollContainer\(\) \{[\s\S]*?return sidebar\.querySelector\('\.sidebar__content'\);/);
+});
+
+test('sidebar content starts at the top beside the left rail', () => {
+  const css = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(css, /sidebar__panel[\s\S]*?display:\s*grid/);
+  assert.match(css, /sidebar__layout[\s\S]*?display:\s*contents/);
+  assert.match(css, /sidebar__content[\s\S]*?grid-column:\s*2/);
+  assert.match(css, /sidebar__content[\s\S]*?grid-row:\s*1\s*\/\s*span\s*2/);
+  assert.doesNotMatch(css, /sidebar__layout[\s\S]*?margin-top:\s*var\(--sidebar-layout-anchor-offset\)/);
+});
 test('admin storage seeds mock products and mock orders', () => {
   const storage = createMemoryStorage();
   const products = getStoredAdminProducts(storage);
@@ -945,6 +1049,75 @@ test('admin orders source is wired to database orders and not mock render helper
   assert.ok(!adminOrdersSection.includes('renderAdminOrdersView(products, orders)'));
 });
 
+test('admin order detail and ship source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const html = readFileSync('admin.html', 'utf8');
+
+  assert.ok(backend.includes('query_order_detail('));
+  assert.ok(backend.includes('@app.get("/admin/orders/{order_id}")'));
+  assert.ok(backend.includes('@app.post("/admin/orders/ship")'));
+  assert.ok(backend.includes('AdminShipOrderRequest'));
+  assert.ok(backend.includes('FOR UPDATE'));
+  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED')"));
+  assert.ok(backend.includes('require_admin_user(authorization)'));
+
+  assert.ok(mainJs.includes('loadAdminOrderDetailFromApi'));
+  assert.ok(mainJs.includes('shipAdminOrderToApi'));
+  assert.ok(mainJs.includes('data-admin-order-detail-id'));
+  assert.ok(mainJs.includes('data-admin-order-ship-id'));
+  assert.ok(mainJs.includes('data-admin-order-detail-container'));
+  assert.ok(mainJs.includes('data-admin-order-refund-approve-id'));
+  assert.ok(mainJs.includes('data-admin-order-refund-reject-id'));
+  assert.ok(mainJs.includes('approveAdminRefundToApi'));
+  assert.ok(mainJs.includes('rejectAdminRefundToApi'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+
+  assert.ok(html.includes('操作'));
+});
+
+test('admin order unship source wiring is present', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(backend.includes('AdminUnshipOrderRequest'));
+  assert.ok(backend.includes('@app.post("/admin/orders/unship")'));
+  assert.ok(backend.includes('ADMIN_UNSHIP_ORDER'));
+  assert.ok(backend.includes("UPDATE order_main SET status = 'PAID'"));
+  assert.ok(backend.includes('取消发货成功'));
+
+  assert.ok(mainJs.includes('unshipAdminOrderToApi'));
+  assert.ok(mainJs.includes('renderAdminOrderStatusBadge'));
+  assert.ok(mainJs.includes('data-admin-order-unship-id'));
+  assert.ok(mainJs.includes('无法发货'));
+  assert.ok(mainJs.includes('取消发货'));
+  assert.ok(mainJs.includes('activeAdminOrderDetailId = null'));
+  assert.ok(mainJs.includes('data-admin-order-refund-approve-id'));
+  assert.ok(mainJs.includes('data-admin-order-refund-reject-id'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+  assert.ok(mainJs.includes('退款待处理'));
+
+  assert.ok(styles.includes('.admin-status-badge'));
+  assert.ok(styles.includes('.admin-status-badge--shipped'));
+  assert.ok(styles.includes('.admin-status-badge--paid'));
+  assert.ok(styles.includes('.admin-status-badge--pending'));
+  assert.ok(styles.includes('.admin-status-badge--refund-requested'));
+});
+
+test('admin order status labels include shipped and the orders table keeps the operation column', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const html = readFileSync('admin.html', 'utf8');
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(mainJs.includes('SHIPPED'));
+  assert.ok(mainJs.includes('已发货'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+  assert.ok(mainJs.includes('退款待处理'));
+  assert.ok(html.includes('<th>操作</th>'));
+  assert.ok(backend.includes("status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED')"));
+});
+
 test('admin product filtering source wiring is present', () => {
   const html = readFileSync('admin.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
@@ -975,6 +1148,132 @@ test('admin product search source wiring is present', () => {
   assert.ok(mainJs.includes('matchesAdminProductSearch(row)'));
   assert.ok(styles.includes('.admin-product-search'));
   assert.ok(styles.includes('.admin-product-search__input'));
+});
+
+test('admin product management supports multi-image upload and previews', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(html, /name="image"[^>]*multiple/);
+  assert.match(html, /第一张[^<]*主图/);
+  assert.ok(html.includes('data-admin-image-preview'));
+  assert.ok(mainJs.includes('formData.append("images", file)'));
+  assert.ok(mainJs.includes('getProductImages('));
+  assert.ok(mainJs.includes('image_count'));
+  assert.ok(mainJs.includes('URL.createObjectURL'));
+  assert.ok(styles.includes('.admin-image-preview'));
+  assert.ok(styles.includes('.admin-product-thumbnails'));
+});
+
+test('admin product image counts use the admin helper without changing the storefront image helper', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('function getAdminProductImageCount(product)'));
+  assert.match(mainJs, /imageCount:\s*getAdminProductImageCount\(row\)/);
+  assert.match(mainJs, /imageCount:\s*getAdminProductImageCount\(product\)/);
+  assert.match(mainJs, /const imageCount = getAdminProductImageCount\(row\)/);
+  assert.doesNotMatch(mainJs, /\bgetProductImageCount\s*\(/);
+  assert.ok(mainJs.includes('function getProductImages(product)'));
+});
+
+test('admin API appends multiple images to an existing product without replacing its main image', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const endpoint = sliceBetween(
+    backend,
+    '@app.post("/admin/products/{product_id}/images")',
+    '@app.delete("/admin/products/{product_id}/images/{image_id}")',
+  );
+
+  assert.match(endpoint, /images:\s*list\[UploadFile\]\s*\|\s*None\s*=\s*File\(None\)/);
+  assert.ok(endpoint.includes('require_admin_user(authorization)'));
+  assert.match(endpoint, /WHERE id = %s\s+AND is_deleted = 0/);
+  assert.ok(endpoint.includes('SELECT MAX(sort_order) AS max_sort_order'));
+  assert.ok(endpoint.includes('is_main') && endpoint.includes('sort_order'));
+  assert.ok(endpoint.includes('query_product_images(conn, [product_id])'));
+  assert.ok(endpoint.includes('conn.commit()'));
+  assert.ok(endpoint.includes('conn.rollback()'));
+  assert.ok(endpoint.includes('cleanup_saved_product_images(saved_images)'));
+  assert.match(endpoint, /if first_upload_becomes_main:[\s\S]*?UPDATE product\s+SET image_url = %s/);
+  assert.equal((endpoint.match(/UPDATE product\s+SET image_url = %s/g) || []).length, 1);
+});
+
+test('admin product cards append images through authenticated multipart upload and refresh the list', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const uploadHelper = sliceBetween(
+    mainJs,
+    'async function appendAdminProductImagesToApi(productId, imageFiles)',
+    'function parseAdminSkuRows(values)',
+  );
+
+  assert.ok(mainJs.includes('data-admin-product-image-append'));
+  assert.match(mainJs, /type="file"[^>]+accept="image\/\*"[^>]+multiple/);
+  assert.ok(mainJs.includes('追加图片'));
+  assert.ok(mainJs.includes('原主图保持不变'));
+  assert.match(uploadHelper, /files\.forEach\(\(file\) => \{\s*formData\.append\("images", file\);/);
+  assert.doesNotMatch(uploadHelper, /formData\.append\("image",/);
+  assert.ok(uploadHelper.includes('adminFetch(`${API_BASE_URL}/admin/products/${productId}/images`'));
+  assert.ok(mainJs.includes('await appendAdminProductImagesToApi(productId, imageFiles);'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
+  assert.ok(mainJs.includes('function getProductImages(product)'));
+  assert.ok(styles.includes('.admin-product-image-append'));
+});
+
+test('admin API logically deletes product images and promotes a replacement main image', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const endpoint = sliceBetween(
+    backend,
+    '@app.delete("/admin/products/{product_id}/images/{image_id}")',
+    'def query_user_addresses(conn, user_id: int):',
+  );
+
+  assert.ok(endpoint.includes('require_admin_user(authorization)'));
+  assert.match(endpoint, /WHERE id = %s\s+AND is_deleted = 0/);
+  assert.match(endpoint, /WHERE id = %s\s+AND product_id = %s\s+AND is_deleted = 0/);
+  assert.ok(endpoint.includes('商品至少需要保留一张图片'));
+  assert.match(endpoint, /UPDATE product_image\s+SET is_deleted = 1/);
+  assert.match(endpoint, /ORDER BY sort_order ASC, id ASC/);
+  assert.match(endpoint, /UPDATE product_image\s+SET is_main = 1/);
+  assert.match(endpoint, /UPDATE product\s+SET image_url = %s/);
+  assert.ok(endpoint.includes('query_product_images(conn, [product_id])'));
+  assert.ok(endpoint.includes('conn.commit()'));
+  assert.ok(endpoint.includes('conn.rollback()'));
+  assert.doesNotMatch(endpoint, /unlink\(|cleanup_saved_product_images/);
+});
+
+test('admin image manager deletes by real image id and keeps card thumbnail limits intact', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const deleteHelper = sliceBetween(
+    mainJs,
+    'async function deleteAdminProductImageToApi(productId, imageId)',
+    'function parseAdminSkuRows(values)',
+  );
+  const managerRenderer = sliceBetween(
+    mainJs,
+    'function renderAdminProductImageManager()',
+    'function renderProductImagePreview()',
+  );
+
+  assert.ok(html.includes('data-admin-image-manager'));
+  assert.ok(html.includes('data-admin-image-manager-list'));
+  assert.ok(mainJs.includes('data-admin-product-image-manage'));
+  assert.ok(managerRenderer.includes('getAdminProductImages(activeAdminImageManagerProduct)'));
+  assert.doesNotMatch(managerRenderer, /\.slice\(/);
+  assert.ok(managerRenderer.includes('image.id'));
+  assert.ok(managerRenderer.includes('兼容主图暂不能直接删除'));
+  assert.ok(managerRenderer.includes('至少保留一张图片'));
+  assert.ok(deleteHelper.includes('method: "DELETE"'));
+  assert.ok(deleteHelper.includes('adminFetch(`${API_BASE_URL}/admin/products/${productId}/images/${imageId}`'));
+  assert.ok(mainJs.includes('window.confirm'));
+  assert.ok(mainJs.includes('await deleteAdminProductImageToApi(productId, imageId);'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
+  assert.ok(mainJs.includes('getAdminProductImages(row).slice(0, 4)'));
+  assert.ok(mainJs.includes('formData.append("images", file)'));
+  assert.ok(mainJs.includes('function getProductImages(product)'));
+  assert.ok(styles.includes('.admin-image-manager'));
 });
 
 test('admin authentication source wiring is present', () => {
@@ -1092,7 +1391,7 @@ test('admin auth state clears dashboard data on logout and auth failure', () => 
   const logoutBody = initBody.slice(logoutStart, logoutEnd);
 
   assert.ok(mainJs.includes('function clearAdminDashboardData('));
-  assert.ok(mainJs.includes('ordersBody.innerHTML = `<tr><td colspan="6">'));
+  assert.ok(mainJs.includes('ordersBody.innerHTML = `<tr><td colspan="7">'));
   assert.ok(mainJs.includes('statsSummary.innerHTML = \'\';'));
   assert.ok(mainJs.includes('statsRows.innerHTML = \'\';'));
   assert.ok(mainJs.includes('productList.innerHTML = `<div class="admin-empty">'));
@@ -1122,17 +1421,20 @@ test('admin auth state clears dashboard data on logout and auth failure', () => 
   assert.ok(initBody.includes('syncPanels();'));
 });
 
-test('refund order backend wiring is present in source and sql', () => {
+test('refund request backend wiring is present in source', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
-  const sql = readFileSync('06_add_refund_order.sql', 'utf8');
 
   assert.ok(backend.includes('RefundOrderRequest'));
   assert.ok(backend.includes('@app.post("/orders/refund")'));
-  assert.ok(backend.includes('sp_refund_paid_order'));
-  assert.ok(sql.includes('sp_refund_paid_order'));
-  assert.ok(sql.includes('REFUNDED'));
-  assert.ok(sql.includes('REFUND_RESTORE'));
-  assert.ok(sql.includes('product_sales_stat'));
+  assert.ok(backend.includes('REFUND_REQUESTED'));
+  assert.ok(backend.includes('order_status_log'));
+  assert.ok(backend.includes('payment_record'));
+  assert.ok(backend.includes('product_sales_stat'));
+  assert.ok(backend.includes('REFUND_RESTORE'));
+  assert.ok(backend.includes('@app.post("/admin/orders/refund/approve")'));
+  assert.ok(backend.includes('@app.post("/admin/orders/refund/reject")'));
+  assert.ok(backend.includes('ADMIN_APPROVE_REFUND'));
+  assert.ok(backend.includes('ADMIN_REJECT_REFUND'));
 });
 
 test('cart invalid-item source wiring is present', () => {
@@ -1163,8 +1465,8 @@ test('cart invalid-item source wiring is present', () => {
 test('frontend purchase record refund wiring is present', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
 
-  assert.ok(mainJs.includes('REFUNDED'));
-  assert.ok(mainJs.includes('已退款'));
+  assert.ok(mainJs.includes('REFUND_REQUESTED'));
+  assert.ok(mainJs.includes('退款待处理'));
   assert.ok(mainJs.includes('data-order-refund-id'));
   assert.ok(mainJs.includes('refundOrderFromApi'));
   assert.ok(mainJs.includes('handleRefundOrder'));

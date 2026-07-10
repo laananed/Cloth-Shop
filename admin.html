@@ -79,6 +79,7 @@
               </div>
               <p class="admin-panel__note">这里展示数据库中的真实订单记录。</p>
             </div>
+            <p class="admin-feedback" data-admin-order-feedback aria-live="polite"></p>
             <div class="admin-table-shell" data-admin-orders-table>
               <table class="admin-table">
                 <thead>
@@ -89,6 +90,7 @@
                     <th>金额</th>
                     <th>状态</th>
                     <th>下单时间</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody data-admin-orders-body></tbody>
@@ -173,8 +175,10 @@
               </label>
 
               <label class="admin-field">
-                <span>商品主图</span>
-                <input type="file" name="image" accept="image/*" />
+                <span>商品图片</span>
+                <input type="file" name="image" accept="image/*" multiple />
+                <small>可选择多张图片，第一张将作为主图。</small>
+                <div class="admin-image-preview" data-admin-image-preview hidden aria-live="polite"></div>
               </label>
 
               <label class="admin-field">
@@ -201,6 +205,22 @@
         </section>
       </div>
     </main>
+
+    <section class="admin-image-manager" data-admin-image-manager hidden aria-hidden="true">
+      <button class="admin-image-manager__backdrop" type="button" data-admin-image-manager-close aria-label="关闭图片管理"></button>
+      <div class="admin-image-manager__panel" role="dialog" aria-modal="true" aria-labelledby="admin-image-manager-title">
+        <header class="admin-image-manager__header">
+          <div>
+            <p class="admin-image-manager__eyebrow">商品图片</p>
+            <h2 id="admin-image-manager-title" data-admin-image-manager-title>管理图片</h2>
+          </div>
+          <button class="admin-image-manager__close" type="button" data-admin-image-manager-close aria-label="关闭">×</button>
+        </header>
+        <p class="admin-image-manager__summary" data-admin-image-manager-summary></p>
+        <p class="admin-feedback" data-admin-image-manager-feedback aria-live="polite"></p>
+        <div class="admin-image-manager__list" data-admin-image-manager-list></div>
+      </div>
+    </section>
 
     <script type="module" src="./src/main.js?v=20260709-admin-auth-state"></script>
   </body>

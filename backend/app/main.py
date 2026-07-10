@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Header
+﻿from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Header
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import json
@@ -55,6 +55,91 @@ def build_product_image_filename(original_filename: str) -> str:
 
     import uuid
     return f"{uuid.uuid4().hex}{suffix}"
+
+
+def cleanup_saved_product_images(saved_image_urls: list[str]) -> None:
+    for image_url in saved_image_urls:
+        image_path = PRODUCT_UPLOAD_DIR / Path(image_url).name
+        try:
+            if image_path.exists():
+                image_path.unlink()
+        except OSError:
+            pass
+
+
+async def save_product_uploads(uploaded_images: list[UploadFile]) -> list[str]:
+    saved_images = []
+    max_size = 8 * 1024 * 1024
+
+    try:
+        for uploaded_image in uploaded_images:
+            if not uploaded_image or not uploaded_image.filename:
+                continue
+
+            image_filename = build_product_image_filename(uploaded_image.filename)
+            content = await uploaded_image.read()
+
+            if not content:
+                raise HTTPException(status_code=400, detail="上传的图片文件为空")
+
+            if len(content) > max_size:
+                raise HTTPException(status_code=400, detail="图片不能超过 8MB")
+
+            image_path = PRODUCT_UPLOAD_DIR / image_filename
+            image_path.write_bytes(content)
+            saved_images.append(f"/uploads/products/{image_filename}")
+    except Exception:
+        cleanup_saved_product_images(saved_images)
+        raise
+
+    return saved_images
+
+def query_product_images(conn, product_ids: list[int]) -> dict[int, list[dict]]:
+    ids = sorted({int(product_id) for product_id in product_ids if product_id is not None})
+    if not ids:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(ids))
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT id, product_id, image_url, sort_order, is_main
+            FROM product_image
+            WHERE is_deleted = 0
+              AND product_id IN ({placeholders})
+            ORDER BY product_id, is_main DESC, sort_order ASC, id ASC
+            """,
+            ids
+        )
+        rows = cursor.fetchall()
+
+    image_map = {product_id: [] for product_id in ids}
+    for row in rows:
+        image_map.setdefault(row["product_id"], []).append({
+            "id": row["id"],
+            "image_url": row["image_url"],
+            "sort_order": row["sort_order"],
+            "is_main": row["is_main"],
+        })
+    return image_map
+
+
+def attach_product_images(conn, rows: list[dict]) -> list[dict]:
+    image_map = query_product_images(conn, [row.get("product_id") for row in rows])
+    for row in rows:
+        product_id = row.get("product_id")
+        images = image_map.get(product_id, [])
+        if not images and row.get("image_url"):
+            images = [{
+                "id": None,
+                "image_url": row["image_url"],
+                "sort_order": 0,
+                "is_main": 1,
+                "source": "product.image_url",
+            }]
+        row["images"] = images
+        row["image_count"] = len(images)
+    return rows
 
 
 def create_admin_token(admin_user_id: int) -> str:
@@ -212,7 +297,7 @@ class ProductCreateRequest(BaseModel):
     category_name: str = Field(..., min_length=1, max_length=80, description="商品分类名称")
     product_name: str = Field(..., min_length=1, max_length=120, description="商品名称")
     sku_name: str = Field("默认规格", max_length=100, description="SKU 名称，第一版一个商品只对应一个 SKU")
-    price: float = Field(..., gt=0, description="SKU 售价")
+    price: float = Field(..., gt=0, description="SKU 鍞环")
     available_stock: int = Field(..., ge=0, description="初始可用库存")
 
 class AdminStockUpdateRequest(BaseModel):
@@ -233,6 +318,26 @@ class AdminLoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
 
 
+class AdminShipOrderRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员后台发货", description="发货备注")
+
+
+class AdminUnshipOrderRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员后台取消发货", description="取消发货备注")
+
+
+class AdminApproveRefundRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员同意退款", description="处理备注")
+
+
+class AdminRejectRefundRequest(BaseModel):
+    order_id: int = Field(..., gt=0, description="订单ID")
+    remark: str = Field("管理员拒绝退款", description="处理备注")
+
+
 @app.get("/")
 def root():
     return {
@@ -240,10 +345,167 @@ def root():
     }
 
 
+def query_order_detail(conn, order_id: int):
+    """
+    澶嶇敤璁㈠崟璇︽儏鏌ヨ閫昏緫锛屼緵鐢ㄦ埛绔拰绠＄悊鍛樼鍏卞悓浣跨敤銆?    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                order_id,
+                order_no,
+                user_id,
+                email,
+                status,
+                total_amount,
+                item_kind_count,
+                total_quantity,
+                item_total_amount,
+                created_at,
+                updated_at
+            FROM v_order_summary
+            WHERE order_id = %s
+            """,
+            (order_id,)
+        )
+        order_summary = cursor.fetchone()
+
+    if not order_summary:
+        raise HTTPException(
+            status_code=404,
+            detail="鐠併垹宕熸稉宥呯摠閸?"
+        )
+
+    order_no = order_summary["order_no"]
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                user_id,
+                email,
+                order_id,
+                order_no,
+                order_status,
+                total_amount,
+                order_created_at,
+                order_updated_at,
+                recipient_name,
+                phone,
+                address_detail,
+                order_item_id,
+                product_id,
+                product_name,
+                sku_id,
+                sku_name,
+                quantity,
+                price,
+                item_amount,
+                pay_method,
+                pay_status,
+                pay_amount,
+                pay_created_at
+            FROM v_user_order_detail
+            WHERE order_id = %s
+            ORDER BY order_item_id
+            """,
+            (order_id,)
+        )
+        order_items = cursor.fetchall()
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                order_id,
+                pay_method,
+                pay_status,
+                pay_amount,
+                created_at
+            FROM payment_record
+            WHERE order_id = %s
+            ORDER BY id DESC
+            """,
+            (order_id,)
+        )
+        payment_records = cursor.fetchall()
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                order_id,
+                from_status,
+                to_status,
+                remark,
+                created_at
+            FROM order_status_log
+            WHERE order_id = %s
+            ORDER BY id
+            """,
+            (order_id,)
+        )
+        status_logs = cursor.fetchall()
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                sku_id,
+                change_type,
+                change_qty,
+                ref_no,
+                created_at
+            FROM inventory_log
+            WHERE ref_no = %s
+            ORDER BY id
+            """,
+            (order_no,)
+        )
+        inventory_logs = cursor.fetchall()
+
+    return {
+        "order_summary": order_summary,
+        "order_items": order_items,
+        "payment_records": payment_records,
+        "status_logs": status_logs,
+        "inventory_logs": inventory_logs,
+    }
+
+
+def get_previous_status_before_refund_request(conn, order_id: int) -> str:
+    """
+    获取最近一次退款申请前的订单状态，用于管理员拒绝退款时回退。
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT from_status
+            FROM order_status_log
+            WHERE order_id = %s
+              AND to_status = 'REFUND_REQUESTED'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (order_id,)
+        )
+        row = cursor.fetchone()
+
+    previous_status = str(row.get("from_status") if row else "").strip().upper()
+
+    if previous_status in {"PAID", "SHIPPED"}:
+        return previous_status
+
+    return "PAID"
+
+
 @app.get("/db-test")
 def db_test():
     """
-    测试 FastAPI 是否能成功连接 MySQL。
+    娴嬭瘯 FastAPI 鏄惁鑳芥垚鍔熻繛鎺?MySQL銆?
     """
     try:
         result = test_connection()
@@ -255,15 +517,15 @@ def db_test():
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"数据库连接失败：{str(e)}"
+            detail=f"鏁版嵁搴撹繛鎺ュけ璐ワ細{str(e)}"
         )
 
 
 @app.get("/products")
 def get_products():
     """
-    查询商品列表。
-    优先使用已有视图 v_product_detail。
+    鏌ヨ鍟嗗搧鍒楄〃銆?
+    浼樺厛浣跨敤宸叉湁瑙嗗浘 v_product_detail銆?
     """
     try:
         with get_db() as conn:
@@ -294,6 +556,7 @@ def get_products():
                 """
                 cursor.execute(sql)
                 rows = cursor.fetchall()
+                rows = attach_product_images(conn, rows)
 
         return {
             "success": True,
@@ -311,8 +574,7 @@ def get_products():
 @app.post("/admin/login")
 def admin_login(req: AdminLoginRequest):
     """
-    管理员登录。
-    """
+    绠＄悊鍛樼櫥褰曘€?    """
     try:
         with get_db() as conn:
             with conn.cursor() as cursor:
@@ -351,7 +613,7 @@ def admin_login(req: AdminLoginRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"管理员登录失败：{str(e)}"
+            detail=f"绠＄悊鍛樼櫥褰曞け璐ワ細{str(e)}"
         )
 
 
@@ -362,13 +624,13 @@ def parse_product_skus(
     available_stock: int
 ):
     """
-    解析后台上架商品时传入的 SKU 列表。
-    如果 skus_json 为空，则回退为单 SKU。
+    瑙ｆ瀽鍚庡彴涓婃灦鍟嗗搧鏃朵紶鍏ョ殑 SKU 鍒楄〃銆?
+    濡傛灉 skus_json 涓虹┖锛屽垯鍥為€€涓哄崟 SKU銆?
     """
     if not skus_json or not skus_json.strip():
         return [
             {
-                "sku_name": (sku_name or "默认规格").strip() or "默认规格",
+                "sku_name": (sku_name or "榛樿瑙勬牸").strip() or "榛樿瑙勬牸",
                 "price": float(price),
                 "available_stock": int(available_stock),
             }
@@ -395,7 +657,7 @@ def parse_product_skus(
         if not isinstance(row, dict):
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条 SKU 格式错误"
+                detail=f"第 {index} 行 SKU 格式错误"
             )
 
         current_name = str(row.get("sku_name") or "").strip()
@@ -405,7 +667,7 @@ def parse_product_skus(
         if not current_name:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条 SKU 名称不能为空"
+                detail=f"绗?{index} 鏉?SKU 鍚嶇О涓嶈兘涓虹┖"
             )
 
         if current_name in seen_names:
@@ -419,7 +681,7 @@ def parse_product_skus(
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条 SKU 价格不正确"
+                detail=f"第 {index} 行 SKU 价格不正确"
             )
 
         try:
@@ -427,19 +689,19 @@ def parse_product_skus(
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条 SKU 库存不正确"
+                detail=f"第 {index} 行 SKU 库存不正确"
             )
 
         if current_price <= 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条 SKU 价格必须大于 0"
+                detail=f"绗?{index} 鏉?SKU 浠锋牸蹇呴』澶т簬 0"
             )
 
         if current_stock < 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条 SKU 库存不能小于 0"
+                detail=f"绗?{index} 鏉?SKU 搴撳瓨涓嶈兘灏忎簬 0"
             )
 
         seen_names.add(current_name)
@@ -458,35 +720,36 @@ def parse_product_skus(
 async def create_product(
     category_name: str = Form(...),
     product_name: str = Form(...),
-    sku_name: str = Form("默认规格"),
+    sku_name: str = Form("榛樿瑙勬牸"),
     price: float = Form(...),
     available_stock: int = Form(...),
     skus_json: str | None = Form(None),
     image: UploadFile | None = File(None),
+    images: list[UploadFile] | None = File(None),
     authorization: str | None = Header(None),
 ):
     """
     后台新增商品。
     第一版：一个商品只创建一个 SKU。
-    支持上传一张商品主图，图片保存到 uploads/products，路径写入 product.image_url。
+    支持上传商品主图，图片保存到 uploads/products，路径写入 product.image_url。
     """
     require_admin_user(authorization)
 
     category_name = category_name.strip()
     product_name = product_name.strip()
-    sku_name = sku_name.strip() or "默认规格"
+    sku_name = sku_name.strip() or "榛樿瑙勬牸"
 
     if not category_name:
-        raise HTTPException(status_code=400, detail="商品分类不能为空")
+        raise HTTPException(status_code=400, detail="鍟嗗搧鍒嗙被涓嶈兘涓虹┖")
 
     if not product_name:
-        raise HTTPException(status_code=400, detail="商品名称不能为空")
+        raise HTTPException(status_code=400, detail="鍟嗗搧鍚嶇О涓嶈兘涓虹┖")
 
     if price <= 0:
-        raise HTTPException(status_code=400, detail="商品价格必须大于 0")
+        raise HTTPException(status_code=400, detail="鍟嗗搧浠锋牸蹇呴』澶т簬 0")
 
     if available_stock < 0:
-        raise HTTPException(status_code=400, detail="初始库存不能小于 0")
+        raise HTTPException(status_code=400, detail="鍒濆搴撳瓨涓嶈兘灏忎簬 0")
     sku_rows = parse_product_skus(
         skus_json=skus_json,
         sku_name=sku_name,
@@ -494,29 +757,21 @@ async def create_product(
         available_stock=available_stock
     )
 
-    image_url = None
+    uploaded_images = []
+    if image:
+        uploaded_images.append(image)
+    if images:
+        uploaded_images.extend(images)
 
-    if image and image.filename:
-        image_filename = build_product_image_filename(image.filename)
-        image_path = PRODUCT_UPLOAD_DIR / image_filename
+    saved_images = await save_product_uploads(uploaded_images)
 
-        content = await image.read()
-
-        if not content:
-            raise HTTPException(status_code=400, detail="上传的图片文件为空")
-
-        max_size = 8 * 1024 * 1024
-        if len(content) > max_size:
-            raise HTTPException(status_code=400, detail="图片不能超过 8MB")
-
-        image_path.write_bytes(content)
-        image_url = f"/uploads/products/{image_filename}"
-
+    image_url = saved_images[0] if saved_images else None
+    transaction_committed = False
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 分类不存在则创建，已存在则复用
+                    # 1. 鍒嗙被涓嶅瓨鍦ㄥ垯鍒涘缓锛屽凡瀛樺湪鍒欏鐢?
                     cursor.execute(
                         """
                         INSERT INTO category(name, sort_order, is_deleted)
@@ -529,7 +784,7 @@ async def create_product(
                     )
                     category_id = cursor.lastrowid
 
-                    # 2. 写入 product 表，保存 image_url
+                    # 2. 鍐欏叆 product 琛紝淇濆瓨 image_url
                     cursor.execute(
                         """
                         INSERT INTO product(
@@ -544,8 +799,28 @@ async def create_product(
                         (category_id, product_name, image_url)
                     )
                     product_id = cursor.lastrowid
+                    # 3. 保存商品图片扩展记录，第一张图片兼容为主图。
+                    for sort_order, saved_image_url in enumerate(saved_images):
+                        cursor.execute(
+                            """
+                            INSERT INTO product_image(
+                                product_id,
+                                image_url,
+                                sort_order,
+                                is_main,
+                                is_deleted
+                            )
+                            VALUES(%s, %s, %s, %s, 0)
+                            """,
+                            (
+                                product_id,
+                                saved_image_url,
+                                sort_order,
+                                1 if sort_order == 0 else 0,
+                            )
+                        )
 
-                    # 3. 写入 product_sku 表
+                    # 3. 鍐欏叆 product_sku 琛?
                     sku_ids = []
 
                     for sku_row in sku_rows:
@@ -597,8 +872,9 @@ async def create_product(
                         )
 
                 conn.commit()
+                transaction_committed = True
 
-                # 6. 新增成功后，从 v_product_detail 查回完整商品信息
+                # 6. 新增成功后，从 v_product_detail 查询完整商品信息
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -627,9 +903,12 @@ async def create_product(
                         (product_id,)
                     )
                     rows = cursor.fetchall()
+                    rows = attach_product_images(conn, rows)
 
             except Exception:
                 conn.rollback()
+                if not transaction_committed:
+                    cleanup_saved_product_images(saved_images)
                 raise
 
         return {
@@ -643,9 +922,13 @@ async def create_product(
         }
 
     except HTTPException:
+        if not transaction_committed:
+            cleanup_saved_product_images(saved_images)
         raise
 
     except MySQLError as e:
+        if not transaction_committed:
+            cleanup_saved_product_images(saved_images)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
@@ -653,10 +936,266 @@ async def create_product(
         )
 
     except Exception as e:
+        if not transaction_committed:
+            cleanup_saved_product_images(saved_images)
         raise HTTPException(
             status_code=500,
             detail=f"服务器错误：{str(e)}"
         )
+
+
+@app.post("/admin/products/{product_id}/images")
+async def append_admin_product_images(
+    product_id: int,
+    images: list[UploadFile] | None = File(None),
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+
+    uploaded_images = [image for image in (images or []) if image and image.filename]
+    if not uploaded_images:
+        raise HTTPException(status_code=400, detail="请至少选择一张商品图片")
+
+    saved_images = []
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, image_url
+                        FROM product
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    product = cursor.fetchone()
+
+                    if not product:
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+
+                    cursor.execute(
+                        """
+                        SELECT MAX(sort_order) AS max_sort_order
+                        FROM product_image
+                        WHERE product_id = %s
+                          AND is_deleted = 0
+                        """,
+                        (product_id,)
+                    )
+                    sort_row = cursor.fetchone() or {}
+                    max_sort_order = sort_row.get("max_sort_order")
+                    product_image_url = str(product.get("image_url") or "").strip()
+
+                    if max_sort_order is None and product_image_url:
+                        cursor.execute(
+                            """
+                            INSERT INTO product_image(
+                                product_id, image_url, sort_order, is_main, is_deleted
+                            )
+                            VALUES(%s, %s, 0, 1, 0)
+                            """,
+                            (product_id, product_image_url)
+                        )
+                        next_sort_order = 1
+                    else:
+                        next_sort_order = int(max_sort_order) + 1 if max_sort_order is not None else 0
+
+                    saved_images = await save_product_uploads(uploaded_images)
+                    first_upload_becomes_main = max_sort_order is None and not product_image_url
+
+                    for index, saved_image_url in enumerate(saved_images):
+                        cursor.execute(
+                            """
+                            INSERT INTO product_image(
+                                product_id, image_url, sort_order, is_main, is_deleted
+                            )
+                            VALUES(%s, %s, %s, %s, 0)
+                            """,
+                            (
+                                product_id,
+                                saved_image_url,
+                                next_sort_order + index,
+                                1 if first_upload_becomes_main and index == 0 else 0,
+                            )
+                        )
+
+                    if first_upload_becomes_main:
+                        product_image_url = saved_images[0]
+                        cursor.execute(
+                            """
+                            UPDATE product
+                            SET image_url = %s
+                            WHERE id = %s
+                            """,
+                            (product_image_url, product_id)
+                        )
+
+                    image_map = query_product_images(conn, [product_id])
+                    product_images = image_map.get(product_id, [])
+
+                conn.commit()
+
+            except Exception:
+                conn.rollback()
+                cleanup_saved_product_images(saved_images)
+                raise
+
+        return {
+            "success": True,
+            "message": "商品图片追加成功",
+            "product_id": product_id,
+            "image_url": product_image_url,
+            "images": jsonable_encoder(product_images),
+            "image_count": len(product_images),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"商品图片追加失败：{str(e)}")
+
+
+@app.delete("/admin/products/{product_id}/images/{image_id}")
+def delete_admin_product_image(
+    product_id: int,
+    image_id: int,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, image_url
+                        FROM product
+                        WHERE id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    product = cursor.fetchone()
+
+                    if not product:
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+
+                    cursor.execute(
+                        """
+                        SELECT id, product_id, image_url, sort_order, is_main
+                        FROM product_image
+                        WHERE id = %s
+                          AND product_id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (image_id, product_id)
+                    )
+                    image = cursor.fetchone()
+
+                    if not image:
+                        raise HTTPException(status_code=404, detail="商品图片不存在、已删除或不属于该商品")
+
+                    cursor.execute(
+                        """
+                        SELECT id, image_url, sort_order, is_main
+                        FROM product_image
+                        WHERE product_id = %s
+                          AND is_deleted = 0
+                        ORDER BY sort_order ASC, id ASC
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    active_images = cursor.fetchall()
+
+                    if len(active_images) <= 1:
+                        raise HTTPException(status_code=400, detail="商品至少需要保留一张图片")
+
+                    cursor.execute(
+                        """
+                        UPDATE product_image
+                        SET is_deleted = 1,
+                            is_main = 0
+                        WHERE id = %s
+                          AND product_id = %s
+                          AND is_deleted = 0
+                        """,
+                        (image_id, product_id)
+                    )
+
+                    current_image_url = str(product.get("image_url") or "").strip()
+
+                    if int(image.get("is_main") or 0) == 1:
+                        remaining_images = [item for item in active_images if int(item["id"]) != image_id]
+                        new_main_image = remaining_images[0]
+
+                        cursor.execute(
+                            """
+                            UPDATE product_image
+                            SET is_main = 0
+                            WHERE product_id = %s
+                              AND is_deleted = 0
+                            """,
+                            (product_id,)
+                        )
+                        cursor.execute(
+                            """
+                            UPDATE product_image
+                            SET is_main = 1
+                            WHERE id = %s
+                              AND product_id = %s
+                              AND is_deleted = 0
+                            """,
+                            (new_main_image["id"], product_id)
+                        )
+
+                        current_image_url = new_main_image["image_url"]
+                        cursor.execute(
+                            """
+                            UPDATE product
+                            SET image_url = %s
+                            WHERE id = %s
+                              AND is_deleted = 0
+                            """,
+                            (current_image_url, product_id)
+                        )
+
+                    image_map = query_product_images(conn, [product_id])
+                    product_images = image_map.get(product_id, [])
+
+                conn.commit()
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "商品图片删除成功",
+            "product_id": product_id,
+            "deleted_image_id": image_id,
+            "image_url": current_image_url,
+            "images": jsonable_encoder(product_images),
+            "image_count": len(product_images),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"商品图片删除失败：{str(e)}")
 
 
 def query_user_addresses(conn, user_id: int):
@@ -730,7 +1269,7 @@ def query_cart_rows(conn, user_id: int):
 @app.get("/addresses/user/{user_id}")
 def get_user_addresses(user_id: int):
     """
-    查询用户收货地址列表。
+    鏌ヨ鐢ㄦ埛鏀惰揣鍦板潃鍒楄〃銆?
     """
     try:
         with get_db() as conn:
@@ -772,7 +1311,7 @@ def get_user_addresses(user_id: int):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"服务器错误：{str(e)}"
+            detail=f"鏈嶅姟鍣ㄩ敊璇細{str(e)}"
         )
 
 @app.post("/addresses/add")
@@ -894,7 +1433,7 @@ def add_user_address(req: AddressAddRequest):
 @app.post("/addresses/set-default")
 def set_default_address(req: AddressSetDefaultRequest):
     """
-    设置默认收货地址。
+    璁剧疆榛樿鏀惰揣鍦板潃銆?
     """
     try:
         with get_db() as conn:
@@ -941,8 +1480,8 @@ def set_default_address(req: AddressSetDefaultRequest):
 @app.post("/addresses/delete")
 def delete_user_address(req: AddressDeleteRequest):
     """
-    删除收货地址。
-    当前采用软删除：is_deleted = 1。
+    鍒犻櫎鏀惰揣鍦板潃銆?
+    褰撳墠閲囩敤杞垹闄わ細is_deleted = 1銆?
     """
     try:
         with get_db() as conn:
@@ -990,8 +1529,8 @@ def delete_user_address(req: AddressDeleteRequest):
 @app.get("/cart/{user_id}")
 def get_cart(user_id: int):
     """
-    查询指定用户的购物车。
-    优先使用已有视图 v_user_cart_detail。
+    鏌ヨ鎸囧畾鐢ㄦ埛鐨勮喘鐗╄溅銆?
+    浼樺厛浣跨敤宸叉湁瑙嗗浘 v_user_cart_detail銆?
     """
     try:
         with get_db() as conn:
@@ -1017,8 +1556,8 @@ def get_cart(user_id: int):
 @app.post("/cart/add")
 def add_to_cart(req: CartAddRequest):
     """
-    加入购物车。
-    调用已有存储过程 sp_add_to_cart。
+    鍔犲叆璐墿杞︺€?
+    璋冪敤宸叉湁瀛樺偍杩囩▼ sp_add_to_cart銆?
     """
     try:
         with get_db() as conn:
@@ -1050,7 +1589,7 @@ def add_to_cart(req: CartAddRequest):
         }
 
     except MySQLError as e:
-        # MySQL 存储过程 SIGNAL 抛出的错误，通常在 e.args[1]
+        # MySQL 瀛樺偍杩囩▼ SIGNAL 鎶涘嚭鐨勯敊璇紝閫氬父鍦?e.args[1]
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
@@ -1067,8 +1606,8 @@ def add_to_cart(req: CartAddRequest):
 @app.post("/cart/update-quantity")
 def update_cart_quantity(req: CartUpdateQuantityRequest):
     """
-    修改购物车商品数量。
-    调用存储过程 sp_update_cart_item_quantity。
+    淇敼璐墿杞﹀晢鍝佹暟閲忋€?
+    璋冪敤瀛樺偍杩囩▼ sp_update_cart_item_quantity銆?
     """
     try:
         with get_db() as conn:
@@ -1117,8 +1656,8 @@ def update_cart_quantity(req: CartUpdateQuantityRequest):
 @app.post("/cart/delete-item")
 def delete_cart_item(req: CartDeleteItemRequest):
     """
-    删除购物车中的单个商品。
-    调用存储过程 sp_delete_cart_item。
+    鍒犻櫎璐墿杞︿腑鐨勫崟涓晢鍝併€?
+    璋冪敤瀛樺偍杩囩▼ sp_delete_cart_item銆?
     """
     try:
         with get_db() as conn:
@@ -1167,14 +1706,14 @@ def delete_cart_item(req: CartDeleteItemRequest):
 @app.post("/orders/from-cart")
 def create_order_from_cart(req: OrderFromCartRequest):
     """
-    从购物车创建订单。
-    调用已有存储过程 sp_create_order_from_cart。
+    浠庤喘鐗╄溅鍒涘缓璁㈠崟銆?
+    璋冪敤宸叉湁瀛樺偍杩囩▼ sp_create_order_from_cart銆?
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 调用存储过程，使用 MySQL 用户变量接收 OUT 参数
+                    # 1. 璋冪敤瀛樺偍杩囩▼锛屼娇鐢?MySQL 鐢ㄦ埛鍙橀噺鎺ユ敹 OUT 鍙傛暟
                     cursor.execute(
                         """
                         CALL sp_create_order_from_cart(
@@ -1187,11 +1726,11 @@ def create_order_from_cart(req: OrderFromCartRequest):
                         (req.user_id, req.address_id)
                     )
 
-                    # 2. 清理可能存在的结果集，避免后续 SELECT 出错
+                    # 2. 娓呯悊鍙兘瀛樺湪鐨勭粨鏋滈泦锛岄伩鍏嶅悗缁?SELECT 鍑洪敊
                     while cursor.nextset():
                         pass
 
-                    # 3. 读取存储过程 OUT 参数
+                    # 3. 璇诲彇瀛樺偍杩囩▼ OUT 鍙傛暟
                     cursor.execute(
                         """
                         SELECT
@@ -1206,7 +1745,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
                 order_id = order_result["order_id"]
                 order_no = order_result["order_no"]
 
-                # 4. 查询订单汇总信息
+                # 4. 鏌ヨ璁㈠崟姹囨€讳俊鎭?
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1229,7 +1768,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
                     )
                     order_summary = cursor.fetchone()
 
-                # 5. 查询订单明细信息
+                # 5. 鏌ヨ璁㈠崟鏄庣粏淇℃伅
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1294,7 +1833,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
 def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
     """
     从购物车中选中的商品创建订单。
-    调用新增存储过程 sp_create_order_from_selected_cart_items。
+    调用存储过程 sp_create_order_from_selected_cart_items。
     """
     try:
         with get_db() as conn:
@@ -1439,14 +1978,14 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
 @app.post("/orders/pay")
 def pay_order(req: PayOrderRequest):
     """
-    支付订单。
-    先校验用户、订单归属和支付密码，校验通过后调用 sp_pay_order。
+    鏀粯璁㈠崟銆?
+    鍏堟牎楠岀敤鎴枫€佽鍗曞綊灞炲拰鏀粯瀵嗙爜锛屾牎楠岄€氳繃鍚庤皟鐢?sp_pay_order銆?
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 校验支付密码
+                    # 1. 鏍￠獙鏀粯瀵嗙爜
                     cursor.execute(
                         """
                         SELECT COUNT(*) AS cnt
@@ -1465,7 +2004,7 @@ def pay_order(req: PayOrderRequest):
                             detail="支付密码错误"
                         )
 
-                    # 2. 校验订单是否属于当前用户
+                    # 2. 鏍￠獙璁㈠崟鏄惁灞炰簬褰撳墠鐢ㄦ埛
                     cursor.execute(
                         """
                         SELECT COUNT(*) AS cnt
@@ -1483,7 +2022,7 @@ def pay_order(req: PayOrderRequest):
                             detail="订单不存在或不属于当前用户"
                         )
 
-                    # 3. 调用原有支付存储过程
+                    # 3. 璋冪敤鍘熸湁鏀粯瀛樺偍杩囩▼
                     cursor.execute(
                         "CALL sp_pay_order(%s, %s)",
                         (req.order_id, req.pay_method)
@@ -1494,7 +2033,7 @@ def pay_order(req: PayOrderRequest):
 
                 conn.commit()
 
-                # 4. 查询支付后的订单概要
+                # 4. 鏌ヨ鏀粯鍚庣殑璁㈠崟姒傝
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1570,14 +2109,14 @@ def pay_order(req: PayOrderRequest):
 @app.post("/orders/direct")
 def create_direct_order(req: DirectOrderRequest):
     """
-    直接下单 / 立即购买。
-    调用已有存储过程 sp_create_direct_order。
+    鐩存帴涓嬪崟 / 绔嬪嵆璐拱銆?
+    璋冪敤宸叉湁瀛樺偍杩囩▼ sp_create_direct_order銆?
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 调用直接下单存储过程，用 MySQL 用户变量接收 OUT 参数
+                    # 1. 璋冪敤鐩存帴涓嬪崟瀛樺偍杩囩▼锛岀敤 MySQL 鐢ㄦ埛鍙橀噺鎺ユ敹 OUT 鍙傛暟
                     cursor.execute(
                         """
                         CALL sp_create_direct_order(
@@ -1597,11 +2136,11 @@ def create_direct_order(req: DirectOrderRequest):
                         )
                     )
 
-                    # 2. 清理可能存在的结果集
+                    # 2. 娓呯悊鍙兘瀛樺湪鐨勭粨鏋滈泦
                     while cursor.nextset():
                         pass
 
-                    # 3. 读取 OUT 参数
+                    # 3. 璇诲彇 OUT 鍙傛暟
                     cursor.execute(
                         """
                         SELECT
@@ -1616,7 +2155,7 @@ def create_direct_order(req: DirectOrderRequest):
                 order_id = order_result["order_id"]
                 order_no = order_result["order_no"]
 
-                # 4. 查询订单汇总
+                # 4. 鏌ヨ璁㈠崟姹囨€?
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1639,7 +2178,7 @@ def create_direct_order(req: DirectOrderRequest):
                     )
                     order_summary = cursor.fetchone()
 
-                # 5. 查询订单明细
+                # 5. 鏌ヨ璁㈠崟鏄庣粏
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1674,7 +2213,7 @@ def create_direct_order(req: DirectOrderRequest):
                     )
                     order_items = cursor.fetchall()
 
-                # 6. 查询库存流水，证明库存已经被锁定
+                # 6. 查询库存流水，确认库存已经被锁定
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1723,26 +2262,26 @@ def create_direct_order(req: DirectOrderRequest):
 @app.post("/orders/cancel")
 def cancel_order(req: CancelOrderRequest):
     """
-    取消订单。
-    调用已有存储过程 sp_cancel_order。
+    鍙栨秷璁㈠崟銆?
+    璋冪敤宸叉湁瀛樺偍杩囩▼ sp_cancel_order銆?
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 调用取消订单存储过程
+                    # 1. 璋冪敤鍙栨秷璁㈠崟瀛樺偍杩囩▼
                     cursor.execute(
                         "CALL sp_cancel_order(%s, %s)",
                         (req.order_id, req.remark)
                     )
 
-                    # 2. 清理可能存在的结果集
+                    # 2. 娓呯悊鍙兘瀛樺湪鐨勭粨鏋滈泦
                     while cursor.nextset():
                         pass
 
                 conn.commit()
 
-                # 3. 查询订单汇总
+                # 3. 鏌ヨ璁㈠崟姹囨€?
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1765,7 +2304,7 @@ def cancel_order(req: CancelOrderRequest):
                     )
                     order_summary = cursor.fetchone()
 
-                # 4. 查询订单状态日志
+                # 4. 鏌ヨ璁㈠崟鐘舵€佹棩蹇?
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -1784,7 +2323,7 @@ def cancel_order(req: CancelOrderRequest):
                     )
                     status_logs = cursor.fetchall()
 
-                # 5. 根据订单号查询库存流水
+                # 5. 鏍规嵁璁㈠崟鍙锋煡璇㈠簱瀛樻祦姘?
                 order_no = order_summary["order_no"] if order_summary else None
 
                 inventory_logs = []
@@ -1836,136 +2375,327 @@ def cancel_order(req: CancelOrderRequest):
 @app.post("/orders/refund")
 def refund_order(req: RefundOrderRequest):
     """
-    退款订单。
-    调用已存在存储过程 sp_refund_paid_order。
+    用户申请退款，先将订单流转到退款待处理。
     """
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "CALL sp_refund_paid_order(%s, %s, %s)",
-                        (req.user_id, req.order_id, req.remark)
+                        """
+                        SELECT
+                            id,
+                            order_no,
+                            user_id,
+                            status,
+                            total_amount
+                        FROM order_main
+                        WHERE id = %s
+                          AND user_id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id, req.user_id)
                     )
+                    order_row = cursor.fetchone()
 
-                    while cursor.nextset():
-                        pass
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在或不属于当前用户"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status not in {"PAID", "SHIPPED"}:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有已支付或已发货订单才能申请退款"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = 'REFUND_REQUESTED'
+                        WHERE id = %s
+                        """,
+                        (req.order_id,)
+                    )
 
                 conn.commit()
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            order_id,
-                            order_no,
-                            user_id,
-                            email,
-                            status,
-                            total_amount,
-                            item_kind_count,
-                            total_quantity,
-                            item_total_amount,
-                            created_at,
-                            updated_at
-                        FROM v_order_summary
-                        WHERE order_id = %s
-                        """,
-                        (req.order_id,)
-                    )
-                    order_summary = cursor.fetchone()
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            id,
-                            order_id,
-                            pay_method,
-                            pay_status,
-                            pay_amount,
-                            created_at
-                        FROM payment_record
-                        WHERE order_id = %s
-                        ORDER BY id DESC
-                        """,
-                        (req.order_id,)
-                    )
-                    payment_records = cursor.fetchall()
+                return {
+                    "success": True,
+                    "message": "退款申请已提交，等待商家处理",
+                    "order_id": req.order_id,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
 
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            id,
-                            order_id,
-                            from_status,
-                            to_status,
-                            remark,
-                            created_at
-                        FROM order_status_log
-                        WHERE order_id = %s
-                        ORDER BY id
-                        """,
-                        (req.order_id,)
-                    )
-                    status_logs = cursor.fetchall()
-
-                order_no = order_summary["order_no"] if order_summary else None
-
-                inventory_logs = []
-                if order_no:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            SELECT
-                                id,
-                                sku_id,
-                                change_type,
-                                change_qty,
-                                ref_no,
-                                created_at
-                            FROM inventory_log
-                            WHERE ref_no = %s
-                            ORDER BY id
-                            """,
-                            (order_no,)
-                        )
-                        inventory_logs = cursor.fetchall()
+            except HTTPException:
+                conn.rollback()
+                raise
 
             except Exception:
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "订单退款成功",
-            "order_id": req.order_id,
-            "order_summary": jsonable_encoder(order_summary),
-            "payment_records": jsonable_encoder(payment_records),
-            "status_logs": jsonable_encoder(status_logs),
-            "inventory_logs": jsonable_encoder(inventory_logs)
-        }
-
-    except MySQLError as e:
-        error_message = e.args[1] if len(e.args) > 1 else str(e)
-        raise HTTPException(
-            status_code=400,
-            detail=f"订单退款失败：{error_message}"
-        )
+    except HTTPException:
+        raise
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"服务器错误：{str(e)}"
+            detail=f"订单退款失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/refund/approve")
+def approve_admin_refund(req: AdminApproveRefundRequest, authorization: str | None = Header(None)):
+    """
+    管理员同意退款。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+        action_type = "ADMIN_APPROVE_REFUND"
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            order_no,
+                            status,
+                            total_amount
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "REFUND_REQUESTED":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有退款待处理订单才能同意退款"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE inventory i
+                        JOIN order_item oi ON i.sku_id = oi.sku_id
+                        SET i.available_stock = i.available_stock + oi.quantity
+                        WHERE oi.order_id = %s
+                        """,
+                        (req.order_id,)
+                    )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory_log(
+                            sku_id,
+                            change_type,
+                            change_qty,
+                            ref_no
+                        )
+                        SELECT
+                            oi.sku_id,
+                            'REFUND_RESTORE',
+                            oi.quantity,
+                            %s
+                        FROM order_item oi
+                        WHERE oi.order_id = %s
+                        """,
+                        (order_row["order_no"], req.order_id)
+                    )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO payment_record(
+                            order_id,
+                            pay_method,
+                            pay_status,
+                            pay_amount
+                        )
+                        VALUES(%s, 'REFUND', 'SUCCESS', %s)
+                        """,
+                        (req.order_id, order_row.get("total_amount") or 0)
+                    )
+
+                    cursor.execute(
+                        """
+                        UPDATE product_sales_stat stat
+                        JOIN (
+                            SELECT
+                                sku_id,
+                                SUM(quantity) AS refund_qty,
+                                SUM(quantity * price) AS refund_amount
+                            FROM order_item
+                            WHERE order_id = %s
+                            GROUP BY sku_id
+                        ) refund_items ON stat.sku_id = refund_items.sku_id
+                        SET
+                            stat.total_sold_count = GREATEST(0, stat.total_sold_count - refund_items.refund_qty),
+                            stat.total_sales_amount = GREATEST(0, stat.total_sales_amount - refund_items.refund_amount)
+                        """,
+                        (req.order_id,)
+                    )
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = 'REFUNDED'
+                        WHERE id = %s
+                        """,
+                        (req.order_id,)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "退款已同意",
+                    "admin_user_id": admin_user["id"],
+                    "action_type": action_type,
+                    "order_id": req.order_id,
+                    "status": "REFUNDED",
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"同意退款失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/refund/reject")
+def reject_admin_refund(req: AdminRejectRefundRequest, authorization: str | None = Header(None)):
+    """
+    管理员拒绝退款。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+        action_type = "ADMIN_REJECT_REFUND"
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            order_no,
+                            status
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "REFUND_REQUESTED":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有退款待处理订单才能拒绝退款"
+                        )
+
+                    previous_status = get_previous_status_before_refund_request(conn, req.order_id)
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = %s
+                        WHERE id = %s
+                        """,
+                        (previous_status, req.order_id)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "已拒绝退款申请",
+                    "admin_user_id": admin_user["id"],
+                    "action_type": action_type,
+                    "order_id": req.order_id,
+                    "status": previous_status,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"拒绝退款失败：{str(e)}"
         )
 
 
 @app.get("/orders/user/{user_id}")
 def get_user_orders(user_id: int):
     """
-    查询某个用户的订单列表。
-    使用已有视图 v_order_summary。
+    鏌ヨ鏌愪釜鐢ㄦ埛鐨勮鍗曞垪琛ㄣ€?
+    浣跨敤宸叉湁瑙嗗浘 v_order_summary銆?
     """
     try:
         with get_db() as conn:
@@ -2008,9 +2738,7 @@ def get_user_orders(user_id: int):
 @app.get("/admin/orders")
 def get_admin_orders(authorization: str | None = Header(None)):
     """
-    后台订单列表。
-    第一版暂不做权限校验，直接查询全部订单汇总。
-    """
+    鍚庡彴璁㈠崟鍒楄〃銆?    绗竴鐗堟殏涓嶅仛鏉冮檺鏍￠獙锛岀洿鎺ユ煡璇㈠叏閮ㄨ鍗曟眹鎬汇€?    """
     try:
         require_admin_user(authorization)
 
@@ -2050,6 +2778,195 @@ def get_admin_orders(authorization: str | None = Header(None)):
         )
 
 
+@app.get("/admin/orders/{order_id}")
+def get_admin_order_detail(order_id: int, authorization: str | None = Header(None)):
+    """
+    后台订单详情。
+    """
+    try:
+        require_admin_user(authorization)
+
+        with get_db() as conn:
+            detail = query_order_detail(conn, order_id)
+
+        return {
+            "success": True,
+            "order_id": order_id,
+            "order_summary": jsonable_encoder(detail["order_summary"]),
+            "order_items": jsonable_encoder(detail["order_items"]),
+            "payment_records": jsonable_encoder(detail["payment_records"]),
+            "status_logs": jsonable_encoder(detail["status_logs"]),
+            "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询后台订单详情失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/ship")
+def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Header(None)):
+    """
+    管理员发货。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, status
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "PAID":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有已支付订单才能发货"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE order_main
+                        SET status = 'SHIPPED'
+                        WHERE id = %s
+                        """,
+                        (req.order_id,)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "订单发货成功",
+                    "admin_user_id": admin_user["id"],
+                    "order_id": req.order_id,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"后台发货失败：{str(e)}"
+        )
+
+
+@app.post("/admin/orders/unship")
+def unship_admin_order(req: AdminUnshipOrderRequest, authorization: str | None = Header(None)):
+    """
+    管理员取消发货。
+    """
+    try:
+        admin_user = require_admin_user(authorization)
+        action_type = "ADMIN_UNSHIP_ORDER"
+
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, status
+                        FROM order_main
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (req.order_id,)
+                    )
+                    order_row = cursor.fetchone()
+
+                    if not order_row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="订单不存在"
+                        )
+
+                    current_status = str(order_row.get("status") or "").strip().upper()
+
+                    if current_status != "SHIPPED":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="只有已发货订单才能取消发货"
+                        )
+
+                    cursor.execute(
+                        "UPDATE order_main SET status = 'PAID' WHERE id = %s",
+                        (req.order_id,)
+                    )
+
+                conn.commit()
+
+                with get_db() as detail_conn:
+                    detail = query_order_detail(detail_conn, req.order_id)
+
+                return {
+                    "success": True,
+                    "message": "取消发货成功",
+                    "admin_user_id": admin_user["id"],
+                    "action_type": action_type,
+                    "order_id": req.order_id,
+                    "order_summary": jsonable_encoder(detail["order_summary"]),
+                    "order_items": jsonable_encoder(detail["order_items"]),
+                    "payment_records": jsonable_encoder(detail["payment_records"]),
+                    "status_logs": jsonable_encoder(detail["status_logs"]),
+                    "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
+                }
+
+            except HTTPException:
+                conn.rollback()
+                raise
+
+            except Exception:
+                conn.rollback()
+                raise
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"后台取消发货失败：{str(e)}"
+        )
+
+
 @app.get("/admin/stats")
 def get_admin_stats(authorization: str | None = Header(None)):
     """
@@ -2061,22 +2978,22 @@ def get_admin_stats(authorization: str | None = Header(None)):
 
         with get_db() as conn:
             with conn.cursor() as cursor:
-                # 1. 订单与销售额汇总
+                # 1. 璁㈠崟涓庨攢鍞姹囨€?
                 cursor.execute(
                     """
                     SELECT
                         COUNT(*) AS total_order_count,
-                        SUM(CASE WHEN status = 'PAID' THEN 1 ELSE 0 END) AS paid_order_count,
+                        SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED') THEN 1 ELSE 0 END) AS paid_order_count,
                         SUM(CASE WHEN status = 'PENDING_PAYMENT' THEN 1 ELSE 0 END) AS pending_order_count,
                         SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_order_count,
-                        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_amount ELSE 0 END), 0.00) AS total_revenue,
-                        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_quantity ELSE 0 END), 0) AS total_units_sold
+                        COALESCE(SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED') THEN total_amount ELSE 0 END), 0.00) AS total_revenue,
+                        COALESCE(SUM(CASE WHEN status IN ('PAID', 'SHIPPED', 'COMPLETED', 'REFUND_REQUESTED') THEN total_quantity ELSE 0 END), 0) AS total_units_sold
                     FROM v_order_summary
                     """
                 )
                 summary = cursor.fetchone()
 
-                # 2. 商品总数
+                # 2. 鍟嗗搧鎬绘暟
                 cursor.execute(
                     """
                     SELECT COUNT(*) AS total_product_count
@@ -2163,6 +3080,7 @@ def get_admin_inventory(authorization: str | None = Header(None)):
                     """
                 )
                 rows = cursor.fetchall()
+                rows = attach_product_images(conn, rows)
 
         return {
             "success": True,
@@ -2188,7 +3106,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 确认 SKU 存在且未被逻辑删除
+                    # 1. 纭 SKU 瀛樺湪涓旀湭琚€昏緫鍒犻櫎
                     cursor.execute(
                         """
                         SELECT id
@@ -2243,7 +3161,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
 
                 conn.commit()
 
-                # 4. 返回修改后的库存详情
+                # 4. 杩斿洖淇敼鍚庣殑搴撳瓨璇︽儏
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -2271,6 +3189,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                         (req.sku_id,)
                     )
                     row = cursor.fetchone()
+                    attach_product_images(conn, [row])
 
             except HTTPException:
                 conn.rollback()
@@ -2282,7 +3201,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
 
         return {
             "success": True,
-            "message": "库存修改成功",
+            "message": "搴撳瓨淇敼鎴愬姛",
             "data": jsonable_encoder(row)
         }
 
@@ -2299,8 +3218,8 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
 @app.post("/admin/products/update-status")
 def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorization: str | None = Header(None)):
     """
-    后台修改商品上下架状态。
-    第一版：商品和该商品下全部 SKU 状态保持一致。
+    鍚庡彴淇敼鍟嗗搧涓婁笅鏋剁姸鎬併€?
+    绗竴鐗堬細鍟嗗搧鍜岃鍟嗗搧涓嬪叏閮?SKU 鐘舵€佷繚鎸佷竴鑷淬€?
     """
     require_admin_user(authorization)
 
@@ -2309,14 +3228,14 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
     if new_status not in {"ON_SALE", "OFF_SALE"}:
         raise HTTPException(
             status_code=400,
-            detail="商品状态只能是 ON_SALE 或 OFF_SALE"
+            detail="鍟嗗搧鐘舵€佸彧鑳芥槸 ON_SALE 鎴?OFF_SALE"
         )
 
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 确认商品存在且未删除
+                    # 1. 纭鍟嗗搧瀛樺湪涓旀湭鍒犻櫎
                     cursor.execute(
                         """
                         SELECT id
@@ -2334,7 +3253,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                             detail="商品不存在或已删除"
                         )
 
-                    # 2. 修改商品主表状态
+                    # 2. 淇敼鍟嗗搧涓昏〃鐘舵€?
                     cursor.execute(
                         """
                         UPDATE product
@@ -2344,7 +3263,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                         (new_status, req.product_id)
                     )
 
-                    # 3. 第一版同步修改该商品下面全部 SKU 状态
+                    # 3. 绗竴鐗堝悓姝ヤ慨鏀硅鍟嗗搧涓嬮潰鍏ㄩ儴 SKU 鐘舵€?
                     cursor.execute(
                         """
                         UPDATE product_sku
@@ -2357,7 +3276,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
 
                 conn.commit()
 
-                # 4. 返回修改后的商品详情
+                # 4. 杩斿洖淇敼鍚庣殑鍟嗗搧璇︽儏
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -2386,6 +3305,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                         (req.product_id,)
                     )
                     rows = cursor.fetchall()
+                    rows = attach_product_images(conn, rows)
 
             except HTTPException:
                 conn.rollback()
@@ -2409,16 +3329,14 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"商品状态修改失败：{str(e)}"
+            detail=f"鍟嗗搧鐘舵€佷慨鏀瑰け璐ワ細{str(e)}"
         )
 
 
 @app.post("/admin/products/delete")
 def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | None = Header(None)):
     """
-    后台商品逻辑删除。
-    不删除库中的记录，仅标记 product、product_sku 为已删除。
-    """
+    鍚庡彴鍟嗗搧閫昏緫鍒犻櫎銆?    涓嶅垹闄ゅ簱涓殑璁板綍锛屼粎鏍囪 product銆乸roduct_sku 涓哄凡鍒犻櫎銆?    """
     try:
         require_admin_user(authorization)
 
@@ -2466,7 +3384,7 @@ def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | No
 
                 return {
                     "success": True,
-                    "message": "商品已逻辑删除",
+                    "message": "鍟嗗搧宸查€昏緫鍒犻櫎",
                     "product_id": req.product_id,
                 }
 
@@ -2484,19 +3402,19 @@ def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | No
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"商品逻辑删除失败：{str(e)}"
+            detail=f"商品删除失败：{str(e)}"
         )
 
 
 @app.get("/orders/{order_id}")
 def get_order_detail(order_id: int):
     """
-    查询订单详情。
-    使用 v_order_summary、v_user_order_detail，并补充支付记录、状态日志、库存流水。
+    鏌ヨ璁㈠崟璇︽儏銆?
+    浣跨敤 v_order_summary銆乿_user_order_detail锛屽苟琛ュ厖鏀粯璁板綍銆佺姸鎬佹棩蹇椼€佸簱瀛樻祦姘淬€?
     """
     try:
         with get_db() as conn:
-            # 1. 查询订单汇总
+            # 1. 鏌ヨ璁㈠崟姹囨€?
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2527,7 +3445,7 @@ def get_order_detail(order_id: int):
 
             order_no = order_summary["order_no"]
 
-            # 2. 查询订单商品明细
+            # 2. 鏌ヨ璁㈠崟鍟嗗搧鏄庣粏
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2563,7 +3481,7 @@ def get_order_detail(order_id: int):
                 )
                 order_items = cursor.fetchall()
 
-            # 3. 查询支付记录
+            # 3. 鏌ヨ鏀粯璁板綍
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2582,7 +3500,7 @@ def get_order_detail(order_id: int):
                 )
                 payment_records = cursor.fetchall()
 
-            # 4. 查询订单状态日志
+            # 4. 鏌ヨ璁㈠崟鐘舵€佹棩蹇?
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2601,7 +3519,7 @@ def get_order_detail(order_id: int):
                 )
                 status_logs = cursor.fetchall()
 
-            # 5. 查询库存流水
+            # 5. 鏌ヨ搴撳瓨娴佹按
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2638,3 +3556,4 @@ def get_order_detail(order_id: int):
             status_code=500,
             detail=f"查询订单详情失败：{str(e)}"
         )
+

@@ -82,6 +82,12 @@ const purchasePrice = document.querySelector('[data-purchase-price]');
 const purchaseSales = document.querySelector('[data-purchase-sales]');
 const purchaseImage = document.querySelector('[data-purchase-image]');
 const purchaseGallery = document.querySelector('[data-purchase-gallery]');
+const imageLightbox = document.querySelector('[data-image-lightbox]');
+const imageLightboxImage = document.querySelector('[data-image-lightbox-image]');
+const imageLightboxCounter = document.querySelector('[data-image-lightbox-counter]');
+const imageLightboxPrev = document.querySelector('[data-image-lightbox-prev]');
+const imageLightboxNext = document.querySelector('[data-image-lightbox-next]');
+const imageLightboxCloseButtons = document.querySelectorAll('[data-image-lightbox-close]');
 const purchaseAddressList = document.querySelector('[data-purchase-address-list]');
 const purchaseQuantityValue = document.querySelector('[data-purchase-quantity-value]');
 const purchaseQuantityDecrease = document.querySelector('[data-purchase-quantity-decrease]');
@@ -131,6 +137,9 @@ const pageRoot = document.documentElement;
 const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
 let activePurchaseImageUrl = '';
+let imageLightboxOpen = false;
+let imageLightboxImages = [];
+let imageLightboxIndex = 0;
 let activePurchaseSkuId = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
@@ -2771,10 +2780,82 @@ function closePurchaseModal() {
     return;
   }
 
+  closeImageLightbox();
   purchaseModal.classList.remove('is-open');
   purchaseModal.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('has-modal');
   activePurchaseAction = 'buy';
+}
+
+function renderImageLightbox() {
+  if (!imageLightbox) {
+    return;
+  }
+
+  if (!imageLightboxOpen || !imageLightboxImages.length) {
+    imageLightbox.hidden = true;
+    imageLightbox.classList.remove('is-open');
+    imageLightbox.setAttribute('aria-hidden', 'true');
+    return;
+  }
+
+  const currentImage = imageLightboxImages[imageLightboxIndex];
+  const singleImage = imageLightboxImages.length <= 1;
+
+  imageLightbox.hidden = false;
+  imageLightbox.classList.add('is-open');
+  imageLightbox.setAttribute('aria-hidden', 'false');
+
+  if (imageLightboxImage) {
+    imageLightboxImage.src = currentImage.image_url;
+    imageLightboxImage.alt = `${activePurchaseProduct?.name || '商品'} 大图 ${imageLightboxIndex + 1}`;
+  }
+
+  if (imageLightboxCounter) {
+    imageLightboxCounter.textContent = `${imageLightboxIndex + 1} / ${imageLightboxImages.length}`;
+  }
+
+  [imageLightboxPrev, imageLightboxNext].forEach((button) => {
+    if (button) {
+      button.hidden = singleImage;
+      button.disabled = singleImage;
+    }
+  });
+}
+
+function openImageLightbox() {
+  if (!activePurchaseProduct || !activePurchaseImageUrl) {
+    return;
+  }
+
+  const productImages = getProductImages(activePurchaseProduct);
+  if (!productImages.length) {
+    return;
+  }
+
+  const selectedIndex = productImages.findIndex((image) => image.image_url === activePurchaseImageUrl);
+  imageLightboxImages = productImages;
+  imageLightboxIndex = selectedIndex >= 0 ? selectedIndex : 0;
+  imageLightboxOpen = true;
+  renderImageLightbox();
+}
+
+function closeImageLightbox() {
+  imageLightboxOpen = false;
+  imageLightboxImages = [];
+  imageLightboxIndex = 0;
+  renderImageLightbox();
+}
+
+function showImageLightboxStep(step) {
+  if (!imageLightboxOpen || imageLightboxImages.length <= 1) {
+    return;
+  }
+
+  imageLightboxIndex = (imageLightboxIndex + step + imageLightboxImages.length) % imageLightboxImages.length;
+  activePurchaseImageUrl = imageLightboxImages[imageLightboxIndex].image_url;
+  renderImageLightbox();
+  renderPurchaseModal();
 }
 
 function setPurchaseQuantity(nextQuantity) {
@@ -5719,6 +5800,30 @@ purchaseCloseButtons.forEach((button) => {
   button.addEventListener('click', () => closePurchaseModal());
 });
 
+if (purchaseImage) {
+  purchaseImage.addEventListener('click', openImageLightbox);
+}
+
+imageLightboxCloseButtons.forEach((button) => {
+  button.addEventListener('click', closeImageLightbox);
+});
+
+if (imageLightboxPrev) {
+  imageLightboxPrev.addEventListener('click', () => showImageLightboxStep(-1));
+}
+
+if (imageLightboxNext) {
+  imageLightboxNext.addEventListener('click', () => showImageLightboxStep(1));
+}
+
+if (imageLightbox) {
+  imageLightbox.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeImageLightbox();
+    }
+  });
+}
+
 if (purchaseModal) {
   purchaseModal.addEventListener('click', (event) => {
     const galleryButton = event.target.closest('[data-purchase-gallery-image]');
@@ -5937,6 +6042,26 @@ if (secondaryCta) {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (imageLightboxOpen) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeImageLightbox();
+      return;
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      showImageLightboxStep(-1);
+      return;
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      showImageLightboxStep(1);
+      return;
+    }
+  }
+
   if (event.key === 'Escape') {
     closeAuthModal();
     closeSidebar();

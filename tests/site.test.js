@@ -221,6 +221,63 @@ test('purchase modal supports product image galleries without changing purchase 
   assert.ok(styles.includes('.purchase-modal__gallery'));
   assert.ok(styles.includes('.purchase-modal__gallery-button.is-active'));
 });
+
+test('purchase image lightbox exposes one accessible fullscreen shell with responsive contain styling', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(html, /<div(?=[^>]*data-image-lightbox)(?=[^>]*hidden)(?=[^>]*aria-hidden="true")[^>]*>/);
+  assert.ok(html.includes('data-image-lightbox-backdrop'));
+  assert.match(html, /data-image-lightbox-image[^>]+alt=""/);
+  assert.match(html, /data-image-lightbox-close[^>]+aria-label=/);
+  assert.match(html, /data-image-lightbox-prev[^>]+aria-label=/);
+  assert.match(html, /data-image-lightbox-next[^>]+aria-label=/);
+  assert.ok(html.includes('data-image-lightbox-counter'));
+  assert.ok(html.includes('data-image-lightbox-hint'));
+  assert.ok(html.includes('← → 切换图片 · Esc 退出预览'));
+  assert.equal((html.match(/data-image-lightbox(?:\s|=)/g) || []).length, 1);
+  assert.match(styles, /\.image-lightbox\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;[\s\S]*?z-index:\s*(?:[6-9]\d|\d{3,});/);
+  assert.match(styles, /\.image-lightbox__image\s*\{[\s\S]*?max-width:\s*90vw;[\s\S]*?max-height:\s*82vh;[\s\S]*?object-fit:\s*contain;/);
+  assert.match(styles, /\.purchase-modal__image\s*\{[\s\S]*?cursor:\s*zoom-in;/);
+});
+
+test('purchase image lightbox reuses product images and preserves purchase state while cycling', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const lightboxLogic = sliceBetween(
+    mainJs,
+    'function renderImageLightbox()',
+    'function setPurchaseQuantity(nextQuantity)',
+  );
+  const keydownLogic = sliceBetween(
+    mainJs,
+    "window.addEventListener('keydown', (event) => {",
+    "if ('scrollRestoration' in window.history)",
+  );
+  const closePurchaseLogic = sliceBetween(
+    mainJs,
+    'function closePurchaseModal()',
+    'function renderImageLightbox()',
+  );
+
+  assert.ok(lightboxLogic.includes('getProductImages(activePurchaseProduct)'));
+  assert.ok(lightboxLogic.includes('activePurchaseImageUrl'));
+  assert.ok(lightboxLogic.includes('findIndex'));
+  assert.ok(lightboxLogic.includes('(imageLightboxIndex + step + imageLightboxImages.length) % imageLightboxImages.length'));
+  assert.ok(lightboxLogic.includes('activePurchaseImageUrl = imageLightboxImages[imageLightboxIndex].image_url'));
+  assert.ok(lightboxLogic.includes('renderPurchaseModal();'));
+  assert.ok(lightboxLogic.includes('imageLightboxImages.length <= 1'));
+  assert.ok(closePurchaseLogic.includes('closeImageLightbox();'));
+  assert.ok(mainJs.includes("purchaseImage.addEventListener('click', openImageLightbox)"));
+  assert.ok(mainJs.includes('event.target === event.currentTarget'));
+  assert.ok(keydownLogic.includes('imageLightboxOpen'));
+  assert.ok(keydownLogic.includes("event.key === 'Escape'"));
+  assert.ok(keydownLogic.includes("event.key === 'ArrowLeft'"));
+  assert.ok(keydownLogic.includes("event.key === 'ArrowRight'"));
+  assert.equal((mainJs.match(/window\.addEventListener\('keydown'/g) || []).length, 1);
+  assert.doesNotMatch(lightboxLogic, /openPurchaseModal\(|activePurchaseSkuId\s*=|activePurchaseQuantity\s*=|activePurchaseAddressId\s*=|activePurchasePaymentMethod\s*=/);
+  assert.doesNotMatch(lightboxLogic, /window\.open\(/);
+  assert.equal((mainJs.match(/function getProductImages\(/g) || []).length, 1);
+});
 test('purchase modal routes actions through the shared selection flow', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");

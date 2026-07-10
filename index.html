@@ -140,6 +140,28 @@
       </section>
     </div>
 
+    <div
+      class="image-lightbox"
+      data-image-lightbox
+      data-image-lightbox-backdrop
+      role="dialog"
+      aria-modal="true"
+      aria-hidden="true"
+      aria-label="商品大图预览"
+      hidden
+    >
+      <div class="image-lightbox__panel">
+        <button class="image-lightbox__close" type="button" data-image-lightbox-close aria-label="关闭大图预览">×</button>
+        <button class="image-lightbox__nav image-lightbox__nav--prev" type="button" data-image-lightbox-prev aria-label="上一张图片">←</button>
+        <img class="image-lightbox__image" data-image-lightbox-image alt="" />
+        <button class="image-lightbox__nav image-lightbox__nav--next" type="button" data-image-lightbox-next aria-label="下一张图片">→</button>
+        <div class="image-lightbox__footer">
+          <strong data-image-lightbox-counter>1 / 1</strong>
+          <span data-image-lightbox-hint>← → 切换图片 · Esc 退出预览</span>
+        </div>
+      </div>
+    </div>
+
     <aside class="sidebar" data-sidebar aria-hidden="true">
       <div class="sidebar__scrim" data-menu-close></div>
       <section class="sidebar__panel" aria-labelledby="sidebar-title">

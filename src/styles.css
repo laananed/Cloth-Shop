@@ -280,6 +280,45 @@ body.has-modal {
   background: linear-gradient(135deg, rgba(223, 243, 255, 0.9), rgba(255, 238, 245, 0.9));
 }
 
+.purchase-modal__visuals {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.purchase-modal__gallery {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+}
+
+.purchase-modal__gallery-button {
+  flex: 0 0 58px;
+  width: 58px;
+  height: 72px;
+  padding: 2px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.purchase-modal__gallery-button.is-active {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px rgba(75, 143, 223, 0.14);
+}
+
+.purchase-modal__gallery-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  object-fit: cover;
+  object-position: center top;
+}
 .purchase-modal__meta {
   display: grid;
   gap: 10px;

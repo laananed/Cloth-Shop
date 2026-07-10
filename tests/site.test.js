@@ -202,6 +202,25 @@ test('purchase modal source keeps product selection before derived state', () =>
   assert.ok(selectedSkuIndex < selectedSkuOnSaleIndex);
 });
 
+test('purchase modal supports product image galleries without changing purchase actions', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.ok(html.includes('data-purchase-modal'));
+  assert.ok(html.includes('data-purchase-image'));
+  assert.ok(html.includes('data-purchase-gallery'));
+  assert.ok(mainJs.includes('function getProductImages('));
+  assert.ok(mainJs.includes('product.images'));
+  assert.ok(mainJs.includes('product.product_images'));
+  assert.ok(mainJs.includes('data-purchase-gallery'));
+  assert.ok(mainJs.includes('data-purchase-gallery-image'));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(styles.includes('.purchase-modal__gallery'));
+  assert.ok(styles.includes('.purchase-modal__gallery-button.is-active'));
+});
 test('purchase modal routes actions through the shared selection flow', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
@@ -1146,6 +1165,18 @@ test('admin product management supports multi-image upload and previews', () => 
   assert.ok(styles.includes('.admin-image-preview'));
   assert.ok(styles.includes('.admin-product-thumbnails'));
 });
+
+test('admin product image counts use the admin helper without changing the storefront image helper', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(mainJs.includes('function getAdminProductImageCount(product)'));
+  assert.match(mainJs, /imageCount:\s*getAdminProductImageCount\(row\)/);
+  assert.match(mainJs, /imageCount:\s*getAdminProductImageCount\(product\)/);
+  assert.match(mainJs, /const imageCount = getAdminProductImageCount\(row\)/);
+  assert.doesNotMatch(mainJs, /\bgetProductImageCount\s*\(/);
+  assert.ok(mainJs.includes('function getProductImages(product)'));
+});
+
 test('admin authentication source wiring is present', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const html = readFileSync('admin.html', 'utf8');

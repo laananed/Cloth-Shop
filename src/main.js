@@ -81,6 +81,7 @@ const purchaseBadge = document.querySelector('[data-purchase-badge]');
 const purchasePrice = document.querySelector('[data-purchase-price]');
 const purchaseSales = document.querySelector('[data-purchase-sales]');
 const purchaseImage = document.querySelector('[data-purchase-image]');
+const purchaseGallery = document.querySelector('[data-purchase-gallery]');
 const purchaseAddressList = document.querySelector('[data-purchase-address-list]');
 const purchaseQuantityValue = document.querySelector('[data-purchase-quantity-value]');
 const purchaseQuantityDecrease = document.querySelector('[data-purchase-quantity-decrease]');
@@ -129,6 +130,7 @@ const storage = window.localStorage;
 const pageRoot = document.documentElement;
 const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
+let activePurchaseImageUrl = '';
 let activePurchaseSkuId = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
@@ -520,6 +522,43 @@ function getProductDisplayState(product) {
   };
 }
 
+function getProductImages(product) {
+  const sourceImages = Array.isArray(product?.images)
+    ? product.images
+    : Array.isArray(product?.product_images)
+      ? product.product_images
+      : [];
+  const fallbackImage = String(product?.image_url || product?.image || '').trim();
+  const candidates = sourceImages.length > 0
+    ? sourceImages
+    : fallbackImage
+      ? [{ image_url: fallbackImage, is_main: 1, sort_order: 0 }]
+      : [];
+  const seen = new Set();
+
+  return candidates
+    .map((image, index) => {
+      const rawUrl = String(image?.image_url || '').trim();
+      if (!rawUrl) return null;
+      const imageUrl = rawUrl.startsWith('/') ? `${API_BASE_URL}${rawUrl}` : rawUrl;
+      if (seen.has(imageUrl)) return null;
+      seen.add(imageUrl);
+      return {
+        id: image?.id ?? null,
+        image_url: imageUrl,
+        is_main: Number(image?.is_main || 0),
+        sort_order: Number(image?.sort_order ?? index),
+        originalIndex: index,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.is_main - a.is_main || a.sort_order - b.sort_order || a.originalIndex - b.originalIndex)
+    .map(({ originalIndex, ...image }) => image);
+}
+
+function getProductMainImage(product) {
+  return getProductImages(product)[0]?.image_url || String(product?.image || '').trim();
+}
 function convertApiProducts(apiRows) {
   const productMap = new Map();
 
@@ -575,6 +614,7 @@ function convertApiProducts(apiRows) {
 
         // 优先使用数据库图片；没有 image_url 时才复用原来的静态图片
         image: productImage,
+        images: getProductImages(row),
         imageFit: dbImageUrl ? "cover" : imageSource.imageFit,
         imageFocus: dbImageUrl ? "center top" : imageSource.imageFocus,
         imageZoom: dbImageUrl ? 1 : imageSource.imageZoom,
@@ -2557,11 +2597,34 @@ function renderPurchaseModal() {
       : '请选择商品规格后继续';
   }
 
+  const productImages = getProductImages(product);
+  const selectedImage = productImages.find((image) => image.image_url === activePurchaseImageUrl) || productImages[0] || null;
+  activePurchaseImageUrl = selectedImage?.image_url || '';
+
   if (purchaseImage) {
-    if (product) {
-      purchaseImage.src = product.image;
-      purchaseImage.alt = `${product.name} 预览`;
+    if (selectedImage) {
+      purchaseImage.src = selectedImage.image_url;
+      purchaseImage.alt = `${product?.name || '商品'} 预览`;
+    } else {
+      purchaseImage.removeAttribute('src');
+      purchaseImage.alt = product?.name ? `${product.name} 预览` : '';
     }
+  }
+
+  if (purchaseGallery) {
+    purchaseGallery.hidden = productImages.length < 2;
+    purchaseGallery.innerHTML = productImages.length < 2
+      ? ''
+      : productImages.map((image) => `
+          <button
+            type="button"
+            class="purchase-modal__gallery-button${image.image_url === activePurchaseImageUrl ? ' is-active' : ''}"
+            data-purchase-gallery-image="${escapeHtml(image.image_url)}"
+            aria-label="切换到商品图片"
+          >
+            <img class="purchase-modal__gallery-thumb" src="${escapeHtml(image.image_url)}" alt="" loading="lazy" decoding="async" />
+          </button>
+        `).join('');
   }
 
   if (purchaseQuantityValue) {
@@ -2672,6 +2735,7 @@ function renderPurchaseModal() {
 
 async function openPurchaseModal(product, action = 'buy') {
   activePurchaseProduct = product;
+  activePurchaseImageUrl = getProductMainImage(product);
   activePurchaseAction = getPurchaseActionConfig(action).key;
   activePurchaseSkuId = null;
   activePurchaseQuantity = 1;
@@ -4086,7 +4150,7 @@ async function refreshAdminStatsFromApi() {
   }
 }
 
-function getProductImages(product) {
+function getAdminProductImages(product) {
   const sourceImages = Array.isArray(product?.images)
     ? product.images
     : Array.isArray(product?.product_images)
@@ -4110,9 +4174,9 @@ function getProductImages(product) {
     : [];
 }
 
-function getProductImageCount(product) {
+function getAdminProductImageCount(product) {
   const count = Number(product?.image_count);
-  return Number.isFinite(count) && count >= 0 ? count : getProductImages(product).length;
+  return Number.isFinite(count) && count >= 0 ? count : getAdminProductImages(product).length;
 }
 function convertApiRowsToAdminProducts(apiRows) {
   const productMap = new Map();
@@ -4141,8 +4205,8 @@ function convertApiRowsToAdminProducts(apiRows) {
         badge: "数据库商品",
         status: row.product_status || "UNKNOWN",
         image: imageUrl,
-        images: getProductImages(row),
-        imageCount: getProductImageCount(row),
+        images: getAdminProductImages(row),
+        imageCount: getAdminProductImageCount(row),
         imageLabel: imageUrl ? imageUrl.split("/").pop() : "暂无图片",
         createdAt: row.product_created_at || "",
         skuCount: 0,
@@ -4198,8 +4262,8 @@ function renderAdminInventoryProductsView(adminProducts) {
       status: normalizeStatus(product.status || "UNKNOWN"),
       image: product.image || "",
       imageLabel: product.imageLabel || "暂无图片",
-      images: getProductImages(product),
-      imageCount: getProductImageCount(product),
+      images: getAdminProductImages(product),
+      imageCount: getAdminProductImageCount(product),
       createdAt: product.createdAt || "",
 
       skuCount: product.skuCount || 0,
@@ -4358,9 +4422,9 @@ async function refreshAdminProductsFromApi() {
 
     productList.innerHTML = filteredRows
       .map((row) => {
-        const imageItems = getProductImages(row).slice(0, 4);
+        const imageItems = getAdminProductImages(row).slice(0, 4);
         const imageSrc = getAdminImageSrc(imageItems[0]?.image_url || row.image);
-        const imageCount = getProductImageCount(row);
+        const imageCount = getAdminProductImageCount(row);
         const isOnSaleProduct = getAdminProductSaleState(row).key === "ON_SALE";
         const statusLabel = getAdminProductSaleState(row).label;
         const nextStatus = isOnSaleProduct ? "OFF_SALE" : "ON_SALE";
@@ -5346,6 +5410,7 @@ purchaseCloseButtons.forEach((button) => {
 
 if (purchaseModal) {
   purchaseModal.addEventListener('click', (event) => {
+    const galleryButton = event.target.closest('[data-purchase-gallery-image]');
     const quantityDecrease = event.target.closest('[data-purchase-quantity-decrease]');
     const quantityIncrease = event.target.closest('[data-purchase-quantity-increase]');
     const addressButton = event.target.closest('[data-purchase-address-id]');
@@ -5354,6 +5419,11 @@ if (purchaseModal) {
     const manageAddressButton = event.target.closest('[data-purchase-manage-address]');
     const submitButton = event.target.closest('[data-purchase-submit]');
 
+    if (galleryButton) {
+      activePurchaseImageUrl = galleryButton.dataset.purchaseGalleryImage || '';
+      renderPurchaseModal();
+      return;
+    }
     if (quantityDecrease) {
       setPurchaseQuantity(activePurchaseQuantity - 1);
       return;

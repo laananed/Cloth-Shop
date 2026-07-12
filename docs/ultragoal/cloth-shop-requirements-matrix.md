@@ -7,9 +7,9 @@
 | R3 | New SKU default stock | omitted stock 50; explicit 0 preserved | Phase02 contract test | live DB blocked | pending | PARTIAL |
 | R4 | Product-level favorites | DB API sync plus one-time legacy product migration | migration/backend/storefront tests | live DB blocked | UI automation blocked | PARTIAL |
 | R5 | SKU-level cart | existing DB SKU-row cart retained with shared SKU selection | storefront and legacy cart tests | live DB blocked | UI automation blocked | PARTIAL |
-| R6 | Checkout confirmation | order creation retained with buyer remark persistence | Phase02 and legacy order tests | live DB blocked | pending | PARTIAL |
-| R7 | Decoupled payment | payment locks state and returns idempotently for paid orders | Phase02 contract test | live DB blocked | pending | PARTIAL |
-| R8 | Buyer remark | adds `order_main.buyer_remark` without rewriting orders | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
+| R6 | Checkout confirmation | direct/cart first stage creates unpaid order and shows order number | checkout and legacy order tests | live DB blocked | UI automation blocked | PARTIAL |
+| R7 | Decoupled payment | embedded second-stage payment, guards, row lock, paid idempotency | checkout/backend tests | live DB blocked | UI automation blocked | PARTIAL |
+| R8 | Buyer remark | trimmed 0-200 UI/API/backend persistence contract | migration/backend/checkout tests | live DB blocked | UI automation blocked | PARTIAL |
 | R9 | Availability state | pending | baseline availability tests pass | pending | pending | PENDING |
 | R10 | Shared product details | pending | pending | pending | pending | PENDING |
 | R11 | Responsive close controls | pending | pending | pending | pending | PENDING |

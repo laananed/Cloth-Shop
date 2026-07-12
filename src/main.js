@@ -91,6 +91,10 @@ const purchaseSkuOptions = document.querySelector('[data-purchase-sku-options]')
 const purchaseTotal = document.querySelector('[data-purchase-total]');
 const purchaseSubmit = document.querySelector('[data-purchase-submit]');
 const purchaseFeedback = document.querySelector('[data-purchase-feedback]');
+const purchaseBuyerRemark = document.querySelector('[data-purchase-buyer-remark]');
+const purchaseOrderNumber = document.querySelector('[data-purchase-order-number]');
+const purchasePayPassword = document.querySelector('[data-purchase-pay-password]');
+const purchasePaymentPasswordWrap = document.querySelector('[data-purchase-payment-password-wrap]');
 const purchaseEyebrow = document.querySelector('.purchase-modal__eyebrow');
 const purchaseAddressSection = purchaseAddressList?.closest('.purchase-modal__section') || null;
 const purchaseQuantitySection = purchaseQuantityValue?.closest('.purchase-modal__section') || null;
@@ -136,10 +140,14 @@ let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = CURRENT_ADDRESS_ID;
 let activePurchaseAction = 'buy';
+let pendingPurchaseOrderId = null;
+let pendingPurchaseOrderNo = '';
 let activeCartAddressId = CURRENT_ADDRESS_ID;
 let activeCartPaymentMethod = 'alipay';
 let dbAddressList = [];
 let isCartCheckoutSubmitting = false;
+let pendingCartOrderId = null;
+let pendingCartOrderNo = '';
 let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
 const refundingOrderIds = new Set();
@@ -1352,7 +1360,7 @@ function promptPaymentMethod(defaultMethod = "alipay") {
   return defaultMethod || "alipay";
 }
 
-async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {
+async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null, buyerRemark = '') {
   const skuList = getProductSkuList(product);
   const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;
 
@@ -1372,6 +1380,7 @@ async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = 
       address_id: getActivePurchaseAddressId(),
       sku_id: skuId,
       quantity: Math.max(1, Number(quantity) || 1),
+      buyer_remark: String(buyerRemark || '').trim().slice(0, 200),
     }),
   });
 
@@ -1409,7 +1418,7 @@ async function createOrderFromCartFromApi() {
   return orderResult;
 }
 
-async function createOrderFromSelectedCartFromApi(cartItemIds) {
+async function createOrderFromSelectedCartFromApi(cartItemIds, buyerRemark = '') {
   const response = await fetch(`${API_BASE_URL}/orders/from-cart-selected`, {
     method: "POST",
     headers: {
@@ -1419,6 +1428,7 @@ async function createOrderFromSelectedCartFromApi(cartItemIds) {
       user_id: CURRENT_USER_ID,
       address_id: getActiveCartAddressId(),
       cart_item_ids: cartItemIds,
+      buyer_remark: String(buyerRemark || '').trim().slice(0, 200),
     }),
   });
 
@@ -1442,6 +1452,19 @@ function getSelectedCartItemIds(cart, selectedIds) {
 
 async function submitCartCheckout() {
   if (isCartCheckoutSubmitting) {
+    return;
+  }
+
+  if (pendingCartOrderId) {
+    const payPassword = String(cartSummary?.querySelector('[data-cart-pay-password]')?.value || '').trim();
+    if (!/^\d{6}$/.test(payPassword)) { setFeedback(sidebarCartFeedback, '支付密码必须是 6 位数字。', true); return; }
+    isCartCheckoutSubmitting = true;
+    try {
+      await payOrderFromApi(pendingCartOrderId, activeCartPaymentMethod, payPassword);
+      setFeedback(sidebarCartFeedback, `订单 ${pendingCartOrderNo} 支付成功。`);
+      pendingCartOrderId = null; pendingCartOrderNo = '';
+      await Promise.all([syncCartFromApi(CURRENT_USER_ID), refreshOrdersFromApi(), loadProductsFromApi()]);
+    } finally { isCartCheckoutSubmitting = false; renderSidebar(); }
     return;
   }
 
@@ -1474,9 +1497,11 @@ async function submitCartCheckout() {
 
     setFeedback(sidebarCartFeedback, "正在从数据库购物车中创建待支付订单，请稍候...");
 
-    const orderResult = await createOrderFromSelectedCartFromApi(selectedCartItemIds);
+    const orderResult = await createOrderFromSelectedCartFromApi(selectedCartItemIds, cartSummary?.querySelector('[data-cart-buyer-remark]')?.value || '');
 
     const orderNo = orderResult.order_no || "未知订单号";
+    pendingCartOrderId = Number(orderResult.order_id);
+    pendingCartOrderNo = orderNo;
 
     console.log("购物车选中商品提交订单成功：", orderResult);
 
@@ -1489,6 +1514,7 @@ async function submitCartCheckout() {
     saveStoredCartSelections(storage, []);
     renderSidebar();
 
+    return;
     const payResult = await payOrderWithPasswordPrompt(
       orderResult.order_id,
       activeCartPaymentMethod,
@@ -2860,21 +2886,42 @@ async function submitPurchaseOrder() {
     }
 
     if (actionConfig.key === 'buy') {
+      if (pendingPurchaseOrderId) {
+        const payPassword = String(purchasePayPassword?.value || '').trim();
+        if (!/^\d{6}$/.test(payPassword)) {
+          setFeedback(purchaseFeedback, '支付密码必须是 6 位数字。', true);
+          return;
+        }
+        await payOrderFromApi(pendingPurchaseOrderId, activePurchasePaymentMethod, payPassword);
+        setFeedback(purchaseFeedback, `支付成功！订单号：${pendingPurchaseOrderNo}。`);
+        pendingPurchaseOrderId = null;
+        pendingPurchaseOrderNo = '';
+        if (purchasePaymentPasswordWrap) purchasePaymentPasswordWrap.hidden = true;
+        await Promise.all([loadProductsFromApi(), refreshOrdersFromApi()]);
+        return;
+      }
       setFeedback(purchaseFeedback, "正在创建待支付订单，请稍候...");
 
       const orderResult = await createDirectOrderFromApi(
         activePurchaseProduct,
         quantity,
-        selectedSku?.skuId
+        selectedSku?.skuId,
+        String(purchaseBuyerRemark?.value || '').trim().slice(0, 200)
       );
 
       const orderNo = orderResult.order_no || "未知订单号";
+      pendingPurchaseOrderId = Number(orderResult.order_id);
+      pendingPurchaseOrderNo = orderNo;
+      if (purchaseOrderNumber) { purchaseOrderNumber.hidden = false; purchaseOrderNumber.textContent = `订单号：${orderNo}`; }
+      if (purchasePaymentPasswordWrap) purchasePaymentPasswordWrap.hidden = false;
+      if (purchaseSubmit) { purchaseSubmit.disabled = false; purchaseSubmit.textContent = '确认支付'; }
 
       setFeedback(
         purchaseFeedback,
         `订单已提交，订单号：${orderNo}，金额：${formatPrice(total)}，当前状态：待支付。`
       );
 
+      return;
       const payResult = await payOrderWithPasswordPrompt(
         orderResult.order_id,
         activePurchasePaymentMethod,
@@ -3433,17 +3480,21 @@ function renderCartSummary(cart, selectedIds) {
             .join('')}
         </div>
       </div>
+      <textarea data-cart-buyer-remark maxlength="200" rows="2" placeholder="买家备注（最多 200 字）"></textarea>
 
+      ${pendingCartOrderId ? `<div class="cart-summary__payment-password"><strong>订单号：${escapeHtml(pendingCartOrderNo)}</strong><input type="password" inputmode="numeric" maxlength="6" data-cart-pay-password placeholder="6 位支付密码" /></div>` : ''}
       <button
         class="cart-summary__checkout"
         type="button"
         data-cart-checkout
-        ${hasSelectedItems && !isCartCheckoutSubmitting ? '' : 'disabled'}
+        ${(pendingCartOrderId || hasSelectedItems) && !isCartCheckoutSubmitting ? '' : 'disabled'}
       >
         ${
           isCartCheckoutSubmitting
             ? '结算中...'
-            : hasSelectedItems
+            : pendingCartOrderId
+              ? '确认支付'
+              : hasSelectedItems
               ? `使用${paymentLabel}提交已选商品订单`
               : '请先勾选商品'
         }

@@ -305,13 +305,13 @@ class CartDeleteItemRequest(BaseModel):
 class OrderFromCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
-    buyer_remark: str | None = Field(None, max_length=500)
+    buyer_remark: str | None = Field(None, max_length=200)
 
 class OrderFromSelectedCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
     cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
-    buyer_remark: str | None = Field(None, max_length=500)
+    buyer_remark: str | None = Field(None, max_length=200)
 
 class PayOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
@@ -340,7 +340,7 @@ class DirectOrderRequest(BaseModel):
     address_id: int = Field(..., gt=0, description="收货地址ID")
     sku_id: int = Field(..., gt=0, description="SKU ID")
     quantity: int = Field(..., gt=0, description="购买数量")
-    buyer_remark: str | None = Field(None, max_length=500)
+    buyer_remark: str | None = Field(None, max_length=200)
 
 class CancelOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")

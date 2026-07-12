@@ -7,7 +7,7 @@
 | 02 Backend | COMPLETE_WITH_LIMITATION | Backend contract tests 6/6; full suite 90/90; Python compile passed; live DB/API blocked by `ERROR 1045` | pending | pending |
 | 03 Admin | COMPLETE_WITH_LIMITATION | Admin catalog contract 6/6; full suite and syntax verification; live DB/UI blocked by credentials | pending | pending |
 | 04 Favorites and cart | COMPLETE_WITH_LIMITATION | DB favorite sync/migration and SKU-cart badges contract; live DB blocked | pending | pending |
-| 05 Checkout and payment | PENDING | Not started | pending | pending |
+| 05 Checkout and payment | COMPLETE_WITH_LIMITATION | Direct and selected-cart two-stage checkout tests; full suite 106/106; live DB blocked | pending | pending |
 | 06 Product gallery | PENDING | Not started | pending | pending |
 | 07 Copy and responsive cleanup | PENDING | Not started | pending | pending |
 | 08 Operation logging | PENDING | Not started | pending | pending |

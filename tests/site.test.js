@@ -226,7 +226,7 @@ test('purchase modal routes actions through the shared selection flow', () => {
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
   const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {', 'function normalizePayMethod(method) {');
   const favoriteBody = sliceBetween(mainJs, 'async function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = false } = {}) {', 'function legacyUpsertFavorite');
-  const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {', 'function openSidebar(section = \'account\') {');
+  const directOrderBody = sliceBetween(mainJs, "async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null, buyerRemark = '') {", 'function openSidebar(section = \'account\') {');
   const buyBranchStart = mainJs.indexOf("if (actionButton.dataset.purchaseLaunch === 'buy') {");
   const buyBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {", buyBranchStart);
   const buyBranchBody = mainJs.slice(buyBranchStart, buyBranchEnd);
@@ -250,7 +250,7 @@ test('purchase modal routes actions through the shared selection flow', () => {
   assert.ok(mainJs.includes('upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false })'));
   assert.match(
     mainJs,
-    /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId)\s*\)/,
+    /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId),/,
   );
   assert.ok(mainJs.includes('请先选择商品规格。'));
 

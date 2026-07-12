@@ -130,7 +130,7 @@
           <div class="purchase-payment-options" data-purchase-payment-options></div>
         </section>
 
-        <div class="purchase-modal__total">
+          <div class="purchase-modal__total">
           <span>合计</span>
           <strong data-purchase-total>￥0</strong>
         </div>
@@ -149,6 +149,9 @@
             <h2 id="sidebar-title" data-sidebar-title>账号信息</h2>
             <p class="sidebar__subtitle" data-sidebar-subtitle>登录后这里会显示你的账号资料。</p>
           </div>
+          <label class="form-field"><span>买家备注（最多 200 字）</span><textarea data-purchase-buyer-remark maxlength="200" rows="2"></textarea></label>
+          <p data-purchase-order-number hidden></p>
+          <label class="form-field" data-purchase-payment-password-wrap hidden><span>6 位支付密码</span><input data-purchase-pay-password type="password" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" /></label>
           <button class="sidebar__close" type="button" data-menu-close aria-label="关闭侧边栏">×</button>
         </header>
 

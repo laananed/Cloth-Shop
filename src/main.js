@@ -30,6 +30,15 @@ import {
   validateAddress,
   validateRegistration,
 } from './account-store.js?v=20260705a';
+import {
+  buildSkuMatrix,
+  getDimensionOptions,
+  getInitialSkuSelection,
+  getMissingSkuCombinations,
+  isStructuredProduct,
+  normalizeDimensionValues,
+  selectSkuDimension,
+} from './sku-utils.js?v=20260710a';
 
 const API_BASE_URL = "http://127.0.0.1:8050";
 
@@ -141,6 +150,8 @@ let imageLightboxOpen = false;
 let imageLightboxImages = [];
 let imageLightboxIndex = 0;
 let activePurchaseSkuId = null;
+let activePurchaseColor = null;
+let activePurchaseSize = null;
 let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = CURRENT_ADDRESS_ID;
@@ -610,10 +621,14 @@ function convertApiProducts(apiRows) {
         skuList: [
           {
             skuId,
+            skuCode: row.sku_code,
+            color: row.color,
+            size: row.size,
             skuName: row.sku_name,
             price: Number(row.price || 0),
             availableStock: Number(row.available_stock || 0),
             lockedStock: Number(row.locked_stock || 0),
+            skuIsDeleted: Number(row.sku_is_deleted || 0),
             inventoryUpdatedAt: row.inventory_updated_at || "",
             skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
           },
@@ -639,10 +654,14 @@ function convertApiProducts(apiRows) {
 
     product.skuList.push({
       skuId,
+      skuCode: row.sku_code,
+      color: row.color,
+      size: row.size,
       skuName: row.sku_name,
       price: Number(row.price || 0),
       availableStock: Number(row.available_stock || 0),
       lockedStock: Number(row.locked_stock || 0),
+      skuIsDeleted: Number(row.sku_is_deleted || 0),
       inventoryUpdatedAt: row.inventory_updated_at || "",
       skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
     });
@@ -2556,6 +2575,12 @@ function renderPurchaseModal() {
 
   const actionConfig = getPurchaseActionConfig(activePurchaseAction);
   const product = activePurchaseProduct;
+  const structuredSkuProduct = isStructuredProduct(product);
+  const structuredSkuSelection = {
+    color: activePurchaseColor,
+    size: activePurchaseSize,
+    skuId: activePurchaseSkuId,
+  };
   const selectedSku = getPurchaseSelectedSku(product);
   const productState = product
     ? getProductDisplayState(product)
@@ -2654,7 +2679,45 @@ function renderPurchaseModal() {
   if (purchaseSkuOptions) {
     const skuList = getProductSkuList(product);
 
-    if (!product || !skuList.length) {
+    if (structuredSkuProduct) {
+      const colorOptions = getDimensionOptions(product, structuredSkuSelection, 'color');
+      const sizeOptions = getDimensionOptions(product, structuredSkuSelection, 'size');
+      purchaseSkuOptions.innerHTML = `
+        <div class='purchase-sku-dimensions'>
+          <div class='purchase-sku-dimension'>
+            <strong>颜色</strong>
+            <div class='purchase-sku-dimension__options'>
+              ${colorOptions.map((option) => `
+                <button
+                  type='button'
+                  class='purchase-dimension-option ${option.value === activePurchaseColor ? 'is-active' : ''} ${option.disabled ? 'is-disabled' : ''}'
+                  data-purchase-color='${escapeHtml(option.value)}'
+                  ${option.disabled ? 'disabled' : ''}
+                >${escapeHtml(option.value)}</button>
+              `).join('')}
+            </div>
+          </div>
+          <div class='purchase-sku-dimension'>
+            <strong>尺码</strong>
+            <div class='purchase-sku-dimension__options'>
+              ${sizeOptions.map((option) => `
+                <button
+                  type='button'
+                  class='purchase-dimension-option ${option.value === activePurchaseSize ? 'is-active' : ''} ${option.disabled ? 'is-disabled' : ''}'
+                  data-purchase-size='${escapeHtml(option.value)}'
+                  ${option.disabled ? 'disabled' : ''}
+                >${escapeHtml(option.value)}</button>
+              `).join('')}
+            </div>
+          </div>
+          <p class='purchase-sku-selection'>
+            ${selectedSku
+              ? `${escapeHtml(selectedSku.skuName || `${activePurchaseColor} / ${activePurchaseSize}`)} · ${formatPrice(selectedSku.price)} · 库存 ${getSkuAvailableStock(selectedSku)} 件`
+              : '请选择完整规格'}
+          </p>
+        </div>
+      `;
+    } else if (!product || !skuList.length) {
       purchaseSkuOptions.innerHTML = '<p class="purchase-empty">暂无可选规格</p>';
     } else {
       purchaseSkuOptions.innerHTML = skuList
@@ -2747,6 +2810,14 @@ async function openPurchaseModal(product, action = 'buy') {
   activePurchaseImageUrl = getProductMainImage(product);
   activePurchaseAction = getPurchaseActionConfig(action).key;
   activePurchaseSkuId = null;
+  activePurchaseColor = null;
+  activePurchaseSize = null;
+  if (isStructuredProduct(product)) {
+    const initialSelection = getInitialSkuSelection(product);
+    activePurchaseColor = initialSelection.color;
+    activePurchaseSize = initialSelection.size;
+    activePurchaseSkuId = initialSelection.skuId;
+  }
   activePurchaseQuantity = 1;
   activePurchasePaymentMethod = 'alipay';
 
@@ -2880,6 +2951,34 @@ function setPurchaseSku(skuId) {
 
   if (activePurchaseProduct) {
     selectedSkuByProductId.set(activePurchaseProduct.id, Number(skuId));
+  }
+
+  renderPurchaseModal();
+  updateView();
+}
+
+function setPurchaseDimension(dimension, value) {
+  const nextSelection = selectSkuDimension(
+    activePurchaseProduct,
+    {
+      color: activePurchaseColor,
+      size: activePurchaseSize,
+      skuId: activePurchaseSkuId,
+    },
+    dimension,
+    value,
+  );
+  activePurchaseColor = nextSelection.color;
+  activePurchaseSize = nextSelection.size;
+  activePurchaseSkuId = nextSelection.skuId;
+
+  const selectedSku = getPurchaseSelectedSku(activePurchaseProduct);
+  if (selectedSku && activePurchaseProduct) {
+    selectedSkuByProductId.set(activePurchaseProduct.id, Number(selectedSku.skuId));
+    activePurchaseQuantity = Math.min(
+      Math.max(1, Number(activePurchaseQuantity) || 1),
+      Math.max(1, getSkuAvailableStock(selectedSku)),
+    );
   }
 
   renderPurchaseModal();
@@ -3720,12 +3819,29 @@ function initAdminPage() {
   const imageSelect = shell.querySelector('[data-admin-image-select]');
   const productImageInput = shell.querySelector('input[type="file"][name="image"]');
   const productImagePreview = shell.querySelector('[data-admin-image-preview]');
+  const productNameInput = shell.querySelector('[data-admin-product-form] [name="name"]');
+  const adminSkuColorsInput = shell.querySelector('[data-admin-sku-colors]');
+  const adminSkuSizesInput = shell.querySelector('[data-admin-sku-sizes]');
+  const adminSkuBasePriceInput = shell.querySelector('[data-admin-sku-base-price]');
+  const adminSkuMatrix = shell.querySelector('[data-admin-sku-matrix]');
   const adminImageManager = document.querySelector('[data-admin-image-manager]');
   const adminImageManagerTitle = document.querySelector('[data-admin-image-manager-title]');
   const adminImageManagerSummary = document.querySelector('[data-admin-image-manager-summary]');
   const adminImageManagerFeedback = document.querySelector('[data-admin-image-manager-feedback]');
   const adminImageManagerList = document.querySelector('[data-admin-image-manager-list]');
   const adminImageManagerCloseButtons = document.querySelectorAll('[data-admin-image-manager-close]');
+  const adminSkuManager = document.querySelector('[data-admin-sku-manager]');
+  const adminSkuManagerTitle = document.querySelector('[data-admin-sku-manager-title]');
+  const adminSkuManagerSummary = document.querySelector('[data-admin-sku-manager-summary]');
+  const adminSkuManagerFeedback = document.querySelector('[data-admin-sku-manager-feedback]');
+  const adminSkuManagerList = document.querySelector('[data-admin-sku-manager-list]');
+  const adminSkuManagerCloseButtons = document.querySelectorAll('[data-admin-sku-manager-close]');
+  const adminSkuAddColors = document.querySelector('[data-admin-sku-add-colors]');
+  const adminSkuAddSizes = document.querySelector('[data-admin-sku-add-sizes]');
+  const adminSkuAddPrice = document.querySelector('[data-admin-sku-add-price]');
+  const adminSkuAddGenerate = document.querySelector('[data-admin-sku-add-generate]');
+  const adminSkuAddDrafts = document.querySelector('[data-admin-sku-add-drafts]');
+  const adminSkuAddSubmit = document.querySelector('[data-admin-sku-add-submit]');
   const dashboardTargets = {
     ordersBody,
     statsSummary,
@@ -3741,6 +3857,11 @@ function initAdminPage() {
   let activeAdminProductImageAppendId = null;
   let adminProductImageAppendPreviewUrls = [];
   let activeAdminImageManagerProduct = null;
+  let adminSkuRows = [];
+  let activeAdminSkuManagerProduct = null;
+  let adminSkuManagerRows = [];
+  let adminSkuManagerDraftRows = [];
+  let skuManagerSubmitting = false;
   let productRows = [];
   let renderedStats = null;
   let renderedProducts = null;
@@ -3753,8 +3874,164 @@ function initAdminPage() {
   let activeAdminProductFilter = 'ALL';
   let activeAdminProductSearchKeyword = "";
 
+  function renderAdminSkuMatrix() {
+    if (!adminSkuMatrix) {
+      return;
+    }
+
+    if (!adminSkuRows.length) {
+      adminSkuMatrix.innerHTML = `
+        <span>SKU 组合</span>
+        <p class="admin-sku-matrix__empty">填写颜色和尺码后自动生成组合。</p>
+      `;
+      return;
+    }
+
+    adminSkuMatrix.innerHTML = `
+      <div class="admin-sku-matrix__header">
+        <span>SKU 组合（${escapeHtml(adminSkuRows.length)} 行）</span>
+        <small>编码、名称、价格、库存和在售状态均可逐行修改。</small>
+      </div>
+      <div class="admin-sku-matrix__table-wrap">
+        <table class="admin-sku-matrix__table">
+          <thead>
+            <tr><th>颜色</th><th>尺码</th><th>SKU 编码</th><th>SKU 名称</th><th>售价</th><th>库存</th><th>在售</th></tr>
+          </thead>
+          <tbody>
+            ${adminSkuRows.map((row, index) => `
+              <tr data-admin-sku-row-index="${index}">
+                <td>${escapeHtml(row.color)}</td>
+                <td>${escapeHtml(row.size)}</td>
+                <td><input type="text" value="${escapeHtml(row.sku_code)}" data-admin-sku-code /></td>
+                <td><input type="text" value="${escapeHtml(row.sku_name)}" data-admin-sku-name /></td>
+                <td><input type="number" min="0.01" step="0.01" value="${escapeHtml(row.price)}" data-admin-sku-price /></td>
+                <td><input type="number" min="0" step="1" value="${escapeHtml(row.stock)}" data-admin-sku-stock /></td>
+                <td>
+                  <select data-admin-sku-on-sale>
+                    <option value="1" ${Number(row.on_sale) === 1 ? 'selected' : ''}>在售</option>
+                    <option value="0" ${Number(row.on_sale) === 0 ? 'selected' : ''}>下架</option>
+                  </select>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function rebuildAdminSkuMatrix() {
+    const colors = normalizeDimensionValues(adminSkuColorsInput?.value || '');
+    const sizes = normalizeDimensionValues(adminSkuSizesInput?.value || '');
+    const defaultPrice = Number(adminSkuBasePriceInput?.value || 0);
+
+    adminSkuRows = buildSkuMatrix(colors, sizes, adminSkuRows, {
+      productName: productNameInput?.value || '',
+      price: Number.isFinite(defaultPrice) && defaultPrice > 0 ? defaultPrice : 0,
+      stock: 0,
+      onSale: 1,
+    });
+    renderAdminSkuMatrix();
+  }
+
+  function updateAdminSkuMatrixValue(event) {
+    const rowElement = event.target.closest('[data-admin-sku-row-index]');
+    const rowIndex = Number(rowElement?.dataset.adminSkuRowIndex);
+    const row = Number.isInteger(rowIndex) ? adminSkuRows[rowIndex] : null;
+
+    if (!row) {
+      return;
+    }
+
+    if (event.target.matches('[data-admin-sku-code]')) row.sku_code = event.target.value;
+    if (event.target.matches('[data-admin-sku-name]')) row.sku_name = event.target.value;
+    if (event.target.matches('[data-admin-sku-price]')) row.price = Number(event.target.value);
+    if (event.target.matches('[data-admin-sku-stock]')) row.stock = Number(event.target.value);
+    if (event.target.matches('[data-admin-sku-on-sale]')) row.on_sale = Number(event.target.value) === 0 ? 0 : 1;
+  }
+
+  function renderAdminSkuManager() {
+    if (!adminSkuManager || !activeAdminSkuManagerProduct) return;
+
+    adminSkuManager.hidden = false;
+    adminSkuManager.classList.add('is-open');
+    adminSkuManager.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('has-modal');
+    if (adminSkuManagerTitle) adminSkuManagerTitle.textContent = `管理规格 · ${activeAdminSkuManagerProduct.name}`;
+    if (adminSkuManagerSummary) adminSkuManagerSummary.textContent = `商品 ID：${activeAdminSkuManagerProduct.productId} · SKU 总数：${adminSkuManagerRows.length}`;
+    if (adminSkuManagerList) {
+      adminSkuManagerList.innerHTML = adminSkuManagerRows.map((sku) => {
+        const deleted = Number(sku.skuIsDeleted) === 1;
+        return `
+          <article class="admin-sku-manager__row ${deleted ? 'is-deleted' : ''}" data-admin-sku-edit-row="${sku.skuId}">
+            <div class="admin-sku-manager__row-heading">
+              <strong>SKU ID：${escapeHtml(sku.skuId)}</strong>
+              <span>${deleted ? '已逻辑删除' : (!sku.color || !sku.size ? '旧规格' : '结构化规格')}</span>
+            </div>
+            <div class="admin-sku-manager__grid">
+              <label><span>颜色</span><input value="${escapeHtml(sku.color)}" data-admin-sku-edit-color ${deleted ? 'disabled' : ''} /></label>
+              <label><span>尺码</span><input value="${escapeHtml(sku.size)}" data-admin-sku-edit-size ${deleted ? 'disabled' : ''} /></label>
+              <label><span>SKU 编码</span><input value="${escapeHtml(sku.skuCode)}" data-admin-sku-edit-code ${deleted ? 'disabled' : ''} /></label>
+              <label><span>SKU 名称</span><input value="${escapeHtml(sku.skuName)}" data-admin-sku-edit-name ${deleted ? 'disabled' : ''} /></label>
+              <label><span>售价</span><input type="number" min="0.01" step="0.01" value="${escapeHtml(sku.price)}" data-admin-sku-edit-price ${deleted ? 'disabled' : ''} /></label>
+              <label><span>库存</span><input type="number" min="0" step="1" value="${escapeHtml(sku.availableStock)}" data-admin-sku-edit-stock ${deleted ? 'disabled' : ''} /></label>
+              <label><span>状态</span><select data-admin-sku-edit-on-sale ${deleted ? 'disabled' : ''}><option value="1" ${sku.onSale === 1 ? 'selected' : ''}>在售</option><option value="0" ${sku.onSale === 0 ? 'selected' : ''}>下架</option></select></label>
+            </div>
+            <div class="admin-sku-manager__actions">
+              <button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-sku-save-id="${sku.skuId}" ${deleted ? 'disabled' : ''}>保存修改</button>
+              <button type="button" class="ghost-button ghost-button--small ghost-button--danger" data-admin-sku-delete-id="${sku.skuId}" ${deleted ? 'disabled' : ''}>逻辑删除</button>
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+    renderAdminSkuDrafts();
+  }
+
+  function renderAdminSkuDrafts() {
+    if (!adminSkuAddDrafts || !adminSkuAddSubmit) return;
+    adminSkuAddSubmit.hidden = adminSkuManagerDraftRows.length === 0;
+    adminSkuAddDrafts.innerHTML = adminSkuManagerDraftRows.map((row, index) => `
+      <div class="admin-sku-manager__draft" data-admin-sku-draft-index="${index}">
+        <strong>${escapeHtml(row.color)} / ${escapeHtml(row.size)}</strong>
+        <input value="${escapeHtml(row.sku_code)}" data-admin-sku-draft-code aria-label="SKU 编码" />
+        <input type="number" min="0.01" step="0.01" value="${escapeHtml(row.price)}" data-admin-sku-draft-price aria-label="售价" />
+        <input type="number" min="0" step="1" value="${escapeHtml(row.stock)}" data-admin-sku-draft-stock aria-label="库存" />
+        <select data-admin-sku-draft-on-sale aria-label="在售状态"><option value="1">在售</option><option value="0">下架</option></select>
+      </div>
+    `).join('');
+  }
+
+  function closeAdminSkuManager() {
+    if (!adminSkuManager) return;
+    adminSkuManager.hidden = true;
+    adminSkuManager.classList.remove('is-open');
+    adminSkuManager.setAttribute('aria-hidden', 'true');
+    activeAdminSkuManagerProduct = null;
+    adminSkuManagerRows = [];
+    adminSkuManagerDraftRows = [];
+    skuManagerSubmitting = false;
+    document.body.classList.remove('has-modal');
+  }
+
+  async function openAdminSkuManager(product) {
+    activeAdminSkuManagerProduct = product;
+    adminSkuManagerRows = [];
+    adminSkuManagerDraftRows = [];
+    renderAdminSkuManager();
+    setFeedback(adminSkuManagerFeedback, '正在加载全部 SKU...');
+    try {
+      adminSkuManagerRows = await loadAdminProductSkusToApi(product.productId);
+      renderAdminSkuManager();
+      setFeedback(adminSkuManagerFeedback, 'SKU 已全部加载。');
+    } catch (error) {
+      setFeedback(adminSkuManagerFeedback, error.message, true);
+    }
+  }
+
   function resetAdminDashboardState() {
     closeAdminProductImageManager();
+    closeAdminSkuManager();
     products = [];
     orders = [];
     summary = null;
@@ -4318,12 +4595,17 @@ function convertApiRowsToAdminProducts(apiRows) {
 
     product.skuList.push({
       skuId,
+      skuCode: row.sku_code || "",
       skuName: row.sku_name || "默认规格",
+      color: row.color || row.color_name || "",
+      size: row.size || row.size_name || "",
       price: Number(row.price || 0),
       availableStock: Number(row.available_stock || 0),
       lockedStock: Number(row.locked_stock || 0),
       sales: Number(row.total_sold_count || 0),
       skuStatus: normalizeStatus(row.sku_status || "ON_SALE"),
+      onSale: Number(row.on_sale) === 1 ? 1 : 0,
+      skuIsDeleted: Number(row.sku_is_deleted || 0),
     });
   });
 
@@ -4586,6 +4868,13 @@ async function refreshAdminProductsFromApi() {
                 <div class="admin-product-row__actions">
                   <button
                     type="button"
+                    class="ghost-button ghost-button--small ghost-button--solid"
+                    data-admin-product-sku-manage="${row.productId}"
+                  >
+                    管理规格
+                  </button>
+                  <button
+                    type="button"
                     class="ghost-button ghost-button--small"
                     data-admin-product-image-manage="${row.productId}"
                   >
@@ -4730,59 +5019,114 @@ async function deleteAdminProductToApi(productId) {
 
   return result;
 }
-  
-function parseAdminSkuRows(values) {
-  const rawText = String(values.skuRows || "").trim();
 
-  if (!rawText) {
-    throw new Error("请填写多 SKU 设置，至少填写一行：SKU名称|价格|库存");
+function normalizeAdminSkuApiRow(row) {
+  return {
+    skuId: Number(row.sku_id),
+    productId: Number(row.product_id),
+    productName: row.product_name || "未命名商品",
+    skuCode: row.sku_code || "",
+    skuName: row.sku_name || "默认规格",
+    color: row.color || row.color_name || "",
+    size: row.size || row.size_name || "",
+    price: Number(row.price || 0),
+    availableStock: Number(row.stock ?? row.available_stock ?? 0),
+    lockedStock: Number(row.locked_stock || 0),
+    onSale: Number(row.on_sale) === 1 ? 1 : 0,
+    skuStatus: normalizeStatus(row.sku_status || (Number(row.on_sale) === 1 ? "ON_SALE" : "OFF_SALE")),
+    skuIsDeleted: Number(row.sku_is_deleted || 0),
+  };
+}
+
+async function loadAdminProductSkusToApi(productId) {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/skus`);
+  if (!result.success || !Array.isArray(result.data)) {
+    throw new Error(result.detail || "加载商品 SKU 失败");
+  }
+  return result.data.map(normalizeAdminSkuApiRow);
+}
+
+async function createAdminProductSkusToApi(productId, skus) {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/skus`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ skus }),
+  });
+  if (!result.success) throw new Error(result.detail || "新增 SKU 失败");
+  return result;
+}
+
+async function updateAdminProductSkuToApi(productId, skuId, sku) {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/skus/${skuId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sku),
+  });
+  if (!result.success) throw new Error(result.detail || "修改 SKU 失败");
+  return result;
+}
+
+async function deleteAdminProductSkuToApi(productId, skuId) {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/skus/${skuId}`, {
+    method: "DELETE",
+  });
+  if (!result.success) throw new Error(result.detail || result.message || "删除 SKU 失败");
+  return result;
+}
+
+function parseAdminSkuRows(values) {
+  const sourceRows = Array.isArray(values?.skuRows) ? values.skuRows : [];
+
+  if (!sourceRows.length) {
+    throw new Error("请先填写颜色和尺码，至少生成一个 SKU 组合。");
   }
 
-  const rows = rawText
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => {
-      const parts = line.split("|").map((part) => part.trim());
+  const codeSet = new Set();
+  const dimensionSet = new Set();
 
-      if (parts.length !== 3) {
-        throw new Error(`第 ${index + 1} 行格式错误，请使用：SKU名称|价格|库存`);
-      }
+  return sourceRows.map((sourceRow, index) => {
+    const skuCode = String(sourceRow.sku_code || "").trim();
+    const color = String(sourceRow.color || "").trim();
+    const size = String(sourceRow.size || "").trim();
+    const skuName = String(sourceRow.sku_name || "").trim() || `${color} / ${size}`;
+    const price = Number(sourceRow.price);
+    const stock = Number(sourceRow.stock);
+    const onSale = Number(sourceRow.on_sale) === 0 ? 0 : 1;
 
-      const skuName = parts[0];
-      const price = Number(parts[1]);
-      const availableStock = Number(parts[2]);
-
-      if (!skuName) {
-        throw new Error(`第 ${index + 1} 行 SKU 名称不能为空`);
-      }
-
-      if (!Number.isFinite(price) || price <= 0) {
-        throw new Error(`第 ${index + 1} 行价格必须大于 0`);
-      }
-
-      if (!Number.isInteger(availableStock) || availableStock < 0) {
-        throw new Error(`第 ${index + 1} 行库存必须是大于等于 0 的整数`);
-      }
-
-      return {
-        sku_name: skuName,
-        price,
-        available_stock: availableStock,
-      };
-    });
-
-  const nameSet = new Set();
-
-  rows.forEach((row) => {
-    if (nameSet.has(row.sku_name)) {
-      throw new Error(`SKU 名称重复：${row.sku_name}`);
+    if (!color || !size) {
+      throw new Error(`第 ${index + 1} 行颜色和尺码不能为空`);
+    }
+    if (!skuCode) {
+      throw new Error(`第 ${index + 1} 行 SKU 编码不能为空`);
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error(`第 ${index + 1} 行价格必须大于 0`);
+    }
+    if (!Number.isInteger(stock) || stock < 0) {
+      throw new Error(`第 ${index + 1} 行库存必须是大于等于 0 的整数`);
     }
 
-    nameSet.add(row.sku_name);
-  });
+    const codeKey = skuCode.toLocaleLowerCase();
+    const dimensionKey = `${color.toLocaleLowerCase()}\u0000${size.toLocaleLowerCase()}`;
+    if (codeSet.has(codeKey)) {
+      throw new Error(`SKU 编码重复：${skuCode}`);
+    }
+    if (dimensionSet.has(dimensionKey)) {
+      throw new Error(`颜色和尺码组合重复：${color} / ${size}`);
+    }
+    codeSet.add(codeKey);
+    dimensionSet.add(dimensionKey);
 
-  return rows;
+    return {
+      sku_code: skuCode,
+      sku_name: skuName,
+      color,
+      size,
+      price,
+      stock,
+      on_sale: onSale,
+    };
+  });
 }
 
 
@@ -4799,7 +5143,7 @@ async function createAdminProductToApi(values, imageFiles = []) {
 
   formData.append("sku_name", firstSku.sku_name);
   formData.append("price", String(firstSku.price));
-  formData.append("available_stock", String(firstSku.available_stock));
+  formData.append("available_stock", String(firstSku.stock));
 
   formData.append("skus_json", JSON.stringify(skuRows));
 
@@ -5038,8 +5382,116 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     productImageInput.addEventListener("change", renderProductImagePreview);
   }
 
+  [adminSkuColorsInput, adminSkuSizesInput].forEach((input) => {
+    input?.addEventListener('input', rebuildAdminSkuMatrix);
+  });
+  adminSkuBasePriceInput?.addEventListener('change', rebuildAdminSkuMatrix);
+  adminSkuMatrix?.addEventListener('input', updateAdminSkuMatrixValue);
+  adminSkuMatrix?.addEventListener('change', updateAdminSkuMatrixValue);
+
   adminImageManagerCloseButtons.forEach((button) => {
     button.addEventListener("click", closeAdminProductImageManager);
+  });
+
+  adminSkuManagerCloseButtons.forEach((button) => {
+    button.addEventListener('click', closeAdminSkuManager);
+  });
+
+  adminSkuAddGenerate?.addEventListener('click', () => {
+    if (!activeAdminSkuManagerProduct) return;
+    adminSkuManagerDraftRows = getMissingSkuCombinations(
+      adminSkuManagerRows.filter((row) => Number(row.skuIsDeleted) !== 1),
+      adminSkuAddColors?.value || '',
+      adminSkuAddSizes?.value || '',
+      {
+        productName: activeAdminSkuManagerProduct.name,
+        price: Number(adminSkuAddPrice?.value || activeAdminSkuManagerProduct.price || 0),
+        stock: 0,
+        onSale: 1,
+      },
+    );
+    renderAdminSkuDrafts();
+    setFeedback(
+      adminSkuManagerFeedback,
+      adminSkuManagerDraftRows.length ? `已生成 ${adminSkuManagerDraftRows.length} 个缺失组合。` : '没有需要新增的组合。',
+    );
+  });
+
+  function updateAdminSkuDraft(event) {
+    const draftElement = event.target.closest('[data-admin-sku-draft-index]');
+    const index = Number(draftElement?.dataset.adminSkuDraftIndex);
+    const row = Number.isInteger(index) ? adminSkuManagerDraftRows[index] : null;
+    if (!row) return;
+    if (event.target.matches('[data-admin-sku-draft-code]')) row.sku_code = event.target.value;
+    if (event.target.matches('[data-admin-sku-draft-price]')) row.price = Number(event.target.value);
+    if (event.target.matches('[data-admin-sku-draft-stock]')) row.stock = Number(event.target.value);
+    if (event.target.matches('[data-admin-sku-draft-on-sale]')) row.on_sale = Number(event.target.value) === 0 ? 0 : 1;
+  }
+  adminSkuAddDrafts?.addEventListener('input', updateAdminSkuDraft);
+  adminSkuAddDrafts?.addEventListener('change', updateAdminSkuDraft);
+
+  adminSkuAddSubmit?.addEventListener('click', async () => {
+    if (!activeAdminSkuManagerProduct || skuManagerSubmitting) return;
+    try {
+      const skus = parseAdminSkuRows({ skuRows: adminSkuManagerDraftRows });
+      skuManagerSubmitting = true;
+      adminSkuAddSubmit.disabled = true;
+      await createAdminProductSkusToApi(activeAdminSkuManagerProduct.productId, skus);
+      adminSkuManagerRows = await loadAdminProductSkusToApi(activeAdminSkuManagerProduct.productId);
+      adminSkuManagerDraftRows = [];
+      renderAdminSkuManager();
+      await refreshAdminProductsFromApi();
+      setFeedback(adminSkuManagerFeedback, '新增 SKU 组合成功。');
+    } catch (error) {
+      setFeedback(adminSkuManagerFeedback, error.message, true);
+    } finally {
+      skuManagerSubmitting = false;
+      if (adminSkuAddSubmit) adminSkuAddSubmit.disabled = false;
+    }
+  });
+
+  adminSkuManagerList?.addEventListener('click', async (event) => {
+    const saveButton = event.target.closest('[data-admin-sku-save-id]');
+    const deleteButton = event.target.closest('[data-admin-sku-delete-id]');
+    if ((!saveButton && !deleteButton) || !activeAdminSkuManagerProduct || skuManagerSubmitting) return;
+
+    const skuId = Number((saveButton || deleteButton).dataset.adminSkuSaveId || (saveButton || deleteButton).dataset.adminSkuDeleteId);
+    const rowElement = adminSkuManagerList.querySelector(`[data-admin-sku-edit-row="${skuId}"]`);
+    if (!rowElement || !Number.isInteger(skuId) || skuId <= 0) return;
+
+    try {
+      skuManagerSubmitting = true;
+      if (saveButton) {
+        saveButton.disabled = true;
+        const [sku] = parseAdminSkuRows({ skuRows: [{
+          sku_code: rowElement.querySelector('[data-admin-sku-edit-code]')?.value,
+          sku_name: rowElement.querySelector('[data-admin-sku-edit-name]')?.value,
+          color: rowElement.querySelector('[data-admin-sku-edit-color]')?.value,
+          size: rowElement.querySelector('[data-admin-sku-edit-size]')?.value,
+          price: Number(rowElement.querySelector('[data-admin-sku-edit-price]')?.value),
+          stock: Number(rowElement.querySelector('[data-admin-sku-edit-stock]')?.value),
+          on_sale: Number(rowElement.querySelector('[data-admin-sku-edit-on-sale]')?.value),
+        }] });
+        await updateAdminProductSkuToApi(activeAdminSkuManagerProduct.productId, skuId, sku);
+        setFeedback(adminSkuManagerFeedback, `SKU ${skuId} 修改成功。`);
+      } else {
+        const confirmed = window.confirm(`确定逻辑删除 SKU ${skuId} 吗？历史订单不会被删除。`);
+        if (!confirmed) return;
+        deleteButton.disabled = true;
+        await deleteAdminProductSkuToApi(activeAdminSkuManagerProduct.productId, skuId);
+        setFeedback(adminSkuManagerFeedback, `SKU ${skuId} 已逻辑删除。`);
+      }
+
+      adminSkuManagerRows = await loadAdminProductSkusToApi(activeAdminSkuManagerProduct.productId);
+      renderAdminSkuManager();
+      await refreshAdminProductsFromApi();
+    } catch (error) {
+      setFeedback(adminSkuManagerFeedback, error.message, true);
+    } finally {
+      skuManagerSubmitting = false;
+      if (saveButton) saveButton.disabled = false;
+      if (deleteButton) deleteButton.disabled = false;
+    }
   });
 
   if (adminImageManagerList) {
@@ -5107,12 +5559,12 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       const imageFiles = Array.from(productImageInput?.files || []);
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
-      const skuName = String(values.skuName || "默认规格").trim() || "默认规格";
 
       let skuRows = [];
 
       try {
-        skuRows = parseAdminSkuRows(values);
+        rebuildAdminSkuMatrix();
+        skuRows = parseAdminSkuRows({ skuRows: adminSkuRows });
       } catch (error) {
         setFeedback(productFeedback, error.message, true);
         return;
@@ -5142,6 +5594,8 @@ async function deleteAdminProductImageToApi(productId, imageId) {
         );
 
         productForm.reset();
+        adminSkuRows = [];
+        renderAdminSkuMatrix();
         renderProductImagePreview();
 
         if (imageSelect?.options.length) {
@@ -5410,6 +5864,18 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     const appendSubmitButton = event.target.closest("[data-admin-product-image-append-submit]");
     const appendCancelButton = event.target.closest("[data-admin-product-image-append-cancel]");
     const manageImagesButton = event.target.closest("[data-admin-product-image-manage]");
+    const manageSkusButton = event.target.closest("[data-admin-product-sku-manage]");
+
+    if (manageSkusButton) {
+      const productId = Number(manageSkusButton.dataset.adminProductSkuManage);
+      const product = products.find((item) => item.productId === productId);
+      if (!product) {
+        setFeedback(productManageFeedback || productFeedback, "商品数据不存在，无法管理规格。", true);
+        return;
+      }
+      await openAdminSkuManager(product);
+      return;
+    }
 
     if (manageImagesButton) {
       const productId = Number(manageImagesButton.dataset.adminProductImageManage);
@@ -5830,6 +6296,8 @@ if (purchaseModal) {
     const quantityDecrease = event.target.closest('[data-purchase-quantity-decrease]');
     const quantityIncrease = event.target.closest('[data-purchase-quantity-increase]');
     const addressButton = event.target.closest('[data-purchase-address-id]');
+    const colorButton = event.target.closest('[data-purchase-color]');
+    const sizeButton = event.target.closest('[data-purchase-size]');
     const skuButton = event.target.closest('[data-purchase-sku-id]');
     const paymentButton = event.target.closest('[data-purchase-payment-method]');
     const manageAddressButton = event.target.closest('[data-purchase-manage-address]');
@@ -5847,6 +6315,16 @@ if (purchaseModal) {
 
     if (quantityIncrease) {
       setPurchaseQuantity(activePurchaseQuantity + 1);
+      return;
+    }
+
+    if (colorButton && !colorButton.disabled) {
+      setPurchaseDimension('color', colorButton.dataset.purchaseColor);
+      return;
+    }
+
+    if (sizeButton && !sizeButton.disabled) {
+      setPurchaseDimension('size', sizeButton.dataset.purchaseSize);
       return;
     }
 

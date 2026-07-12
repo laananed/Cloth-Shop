@@ -145,7 +145,7 @@
                 <p class="admin-panel__eyebrow">新增商品</p>
                 <h2>上架新品</h2>
               </div>
-              <p class="admin-panel__note">填写商品基础信息，支持一行或多行 SKU 设置，并上传本地商品主图。</p>
+              <p class="admin-panel__note">填写颜色和尺码后自动生成全部 SKU 组合，并上传本地商品图片。</p>
             </div>
 
             <form class="admin-form admin-form--product-create" data-admin-product-form>
@@ -159,15 +159,38 @@
                 <input type="text" name="category" placeholder="例如：连衣裙" />
               </label>
 
-              <label class="admin-field admin-field--wide">
-                <span>多 SKU 设置（SKU 名称 | 价格 | 库存）</span>
+              <label class="admin-field">
+                <span>颜色</span>
                 <textarea
-                  name="skuRows"
-                  rows="6"
-                  placeholder="一行一个 SKU：SKU名称|价格|库存&#10;例如：默认规格|399|20&#10;白色S码|399|10&#10;白色M码|399|8&#10;灰色L码|429|5"
+                  name="colors"
+                  rows="4"
+                  data-admin-sku-colors
+                  placeholder="白色、黑色（支持逗号或换行）"
                 ></textarea>
-                <small>支持只填写一行。每一行代表一个 SKU，格式固定为：SKU名称|价格|库存。</small>
+                <small>自动去空值和重复项，删除颜色后会重新计算组合。</small>
               </label>
+
+              <label class="admin-field">
+                <span>尺码</span>
+                <textarea
+                  name="sizes"
+                  rows="4"
+                  data-admin-sku-sizes
+                  placeholder="S、M、L（支持逗号或换行）"
+                ></textarea>
+                <small>颜色和尺码至少各填写一项。</small>
+              </label>
+
+              <label class="admin-field">
+                <span>SKU 默认售价</span>
+                <input type="number" name="basePrice" min="0.01" step="0.01" value="199" data-admin-sku-base-price />
+                <small>新生成组合使用该价格，表格中仍可逐行修改。</small>
+              </label>
+
+              <div class="admin-field admin-field--wide admin-sku-matrix" data-admin-sku-matrix>
+                <span>SKU 组合</span>
+                <p class="admin-sku-matrix__empty">填写颜色和尺码后自动生成组合。</p>
+              </div>
 
               <label class="admin-field">
                 <span>标签</span>
@@ -219,6 +242,33 @@
         <p class="admin-image-manager__summary" data-admin-image-manager-summary></p>
         <p class="admin-feedback" data-admin-image-manager-feedback aria-live="polite"></p>
         <div class="admin-image-manager__list" data-admin-image-manager-list></div>
+      </div>
+    </section>
+
+    <section class="admin-sku-manager" data-admin-sku-manager hidden aria-hidden="true">
+      <button class="admin-sku-manager__backdrop" type="button" data-admin-sku-manager-close aria-label="关闭规格管理"></button>
+      <div class="admin-sku-manager__panel" role="dialog" aria-modal="true" aria-labelledby="admin-sku-manager-title">
+        <header class="admin-sku-manager__header">
+          <div>
+            <p class="admin-panel__eyebrow">商品规格</p>
+            <h2 id="admin-sku-manager-title" data-admin-sku-manager-title>管理规格</h2>
+          </div>
+          <button class="admin-sku-manager__close" type="button" data-admin-sku-manager-close aria-label="关闭">×</button>
+        </header>
+        <p class="admin-sku-manager__summary" data-admin-sku-manager-summary></p>
+        <p class="admin-feedback" data-admin-sku-manager-feedback aria-live="polite"></p>
+        <div class="admin-sku-manager__list" data-admin-sku-manager-list></div>
+        <section class="admin-sku-manager__add">
+          <h3>新增缺失组合</h3>
+          <div class="admin-sku-manager__add-fields">
+            <label><span>颜色</span><input type="text" data-admin-sku-add-colors placeholder="黑色、灰色" /></label>
+            <label><span>尺码</span><input type="text" data-admin-sku-add-sizes placeholder="S、M、XL" /></label>
+            <label><span>默认售价</span><input type="number" min="0.01" step="0.01" value="199" data-admin-sku-add-price /></label>
+          </div>
+          <button type="button" class="ghost-button ghost-button--small" data-admin-sku-add-generate>生成缺失组合</button>
+          <div class="admin-sku-manager__drafts" data-admin-sku-add-drafts></div>
+          <button type="button" class="admin-submit" data-admin-sku-add-submit hidden>保存新增组合</button>
+        </section>
       </div>
     </section>
 

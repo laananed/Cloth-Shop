@@ -4215,3 +4215,212 @@ button.sku-option--disabled {
 .admin-form--product-create .admin-field--wide {
   grid-column: 1 / -1;
 }
+
+.admin-sku-matrix {
+  min-width: 0;
+}
+
+.admin-sku-matrix__empty {
+  margin: 0;
+  padding: 18px;
+  border: 1px dashed rgba(71, 107, 138, 0.35);
+  border-radius: 14px;
+  color: var(--text-soft);
+  text-align: center;
+}
+
+.admin-sku-matrix__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-sku-matrix__table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(71, 107, 138, 0.2);
+  border-radius: 14px;
+}
+
+.admin-sku-matrix__table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+}
+
+.admin-sku-matrix__table th,
+.admin-sku-matrix__table td {
+  padding: 10px;
+  border-bottom: 1px solid rgba(71, 107, 138, 0.14);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.admin-sku-matrix__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.admin-sku-matrix__table input,
+.admin-sku-matrix__table select {
+  min-width: 92px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(71, 107, 138, 0.25);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-main);
+}
+
+.purchase-sku-dimensions {
+  display: grid;
+  gap: 16px;
+}
+
+.purchase-sku-dimension {
+  display: grid;
+  gap: 8px;
+}
+
+.purchase-sku-dimension__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.purchase-dimension-option {
+  min-width: 54px;
+  padding: 9px 14px;
+  border: 1px solid rgba(71, 107, 138, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.purchase-dimension-option.is-active {
+  border-color: #557c9f;
+  background: #557c9f;
+  color: #fff;
+}
+
+.purchase-dimension-option.is-disabled,
+.purchase-dimension-option:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.purchase-sku-selection {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.admin-sku-manager {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.admin-sku-manager__backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(18, 35, 50, 0.55);
+}
+
+.admin-sku-manager__panel {
+  position: relative;
+  width: min(1180px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  padding: 24px;
+  border-radius: 22px;
+  background: #f7fbff;
+  box-shadow: 0 28px 80px rgba(17, 42, 62, 0.28);
+}
+
+.admin-sku-manager__header,
+.admin-sku-manager__row-heading,
+.admin-sku-manager__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-sku-manager__close {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(71, 107, 138, 0.12);
+  cursor: pointer;
+}
+
+.admin-sku-manager__list,
+.admin-sku-manager__add,
+.admin-sku-manager__drafts {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-sku-manager__row,
+.admin-sku-manager__add {
+  padding: 16px;
+  border: 1px solid rgba(71, 107, 138, 0.18);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.admin-sku-manager__row.is-deleted {
+  opacity: 0.58;
+}
+
+.admin-sku-manager__grid,
+.admin-sku-manager__add-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.admin-sku-manager__grid label,
+.admin-sku-manager__add-fields label {
+  display: grid;
+  gap: 5px;
+}
+
+.admin-sku-manager__grid input,
+.admin-sku-manager__grid select,
+.admin-sku-manager__add-fields input,
+.admin-sku-manager__draft input,
+.admin-sku-manager__draft select {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(71, 107, 138, 0.24);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.admin-sku-manager__draft {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr 1fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 760px) {
+  .admin-sku-manager {
+    padding: 8px;
+  }
+
+  .admin-sku-manager__panel {
+    padding: 16px;
+  }
+
+  .admin-sku-manager__draft {
+    grid-template-columns: 1fr;
+  }
+}

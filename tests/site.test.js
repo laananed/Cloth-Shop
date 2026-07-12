@@ -1538,6 +1538,382 @@ test('front page exposes a visible admin entry point', () => {
   assert.ok(html.includes('管理后台'));
 });
 
+test('[SKU-1] product sku schema supports color and size dimensions', () => {
+  const migrationPath = '11_add_product_sku_dimensions.sql';
+
+  assert.equal(existsSync(migrationPath), true, `${migrationPath} should exist`);
+
+  const migration = readFileSync(migrationPath, 'utf8');
+
+  assert.match(migration, /ALTER\s+TABLE\s+product_sku/i);
+  assert.match(migration, /sku_code\s+VARCHAR\s*\(100\)\s+NULL/i);
+  assert.match(migration, /color_name\s+VARCHAR\s*\(50\)\s+NULL/i);
+  assert.match(migration, /size_name\s+VARCHAR\s*\(30\)\s+NULL/i);
+  assert.match(migration, /product_id\s*,\s*color_name\s*,\s*size_name\s*,\s*is_deleted/i);
+  assert.doesNotMatch(migration, /DROP\s+(COLUMN\s+)?sku_name/i);
+  assert.doesNotMatch(migration, /CREATE\s+TABLE\s+(attribute|attribute_value|sku_attribute|sku_attribute_value)/i);
+  assert.doesNotMatch(migration, /UPDATE\s+(product_sku|inventory|cart_item|order_item)\s+SET\s+(id|sku_id)/i);
+});
+
+test('[SKU-1] product detail view keeps dimensions inventory timestamps and image attachment', () => {
+  const migrationPath = '11_add_product_sku_dimensions.sql';
+
+  assert.equal(existsSync(migrationPath), true, `${migrationPath} should exist`);
+
+  const migration = readFileSync(migrationPath, 'utf8');
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.match(migration, /CREATE\s+OR\s+REPLACE\s+VIEW\s+v_product_detail/i);
+  assert.match(migration, /s\.sku_name\s+AS\s+sku_name/i);
+  assert.match(migration, /s\.sku_code\s+AS\s+sku_code/i);
+  assert.match(migration, /s\.color_name\s+AS\s+color_name/i);
+  assert.match(migration, /s\.size_name\s+AS\s+size_name/i);
+  assert.match(migration, /i\.updated_at\s+AS\s+inventory_updated_at/i);
+  assert.ok(backend.includes('rows = attach_product_images(conn, rows)'));
+  assert.ok(backend.includes('row["images"] = images'));
+  assert.ok(backend.includes('row["image_count"] = len(images)'));
+});
+
+test('[SKU-1] legacy skus retain sku names and a compatibility path', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const migration = readFileSync('11_add_product_sku_dimensions.sql', 'utf8');
+
+  assert.ok(backend.includes('if not skus_json or not skus_json.strip():'));
+  assert.ok(backend.includes('"sku_name"'));
+  assert.ok(backend.includes('FROM v_product_detail'));
+  assert.ok(migration.includes('s.is_deleted = 0'));
+  assert.doesNotMatch(backend, /split\([^)]*sku_name|sku_name[^\n]*\.split\(/i);
+});
+
+test('[SKU-2] backend returns structured sku dimensions', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(backend.includes('def serialize_sku_rows('));
+  assert.ok(backend.includes('"sku_code"'));
+  assert.ok(backend.includes('"color"'));
+  assert.ok(backend.includes('"size"'));
+  assert.ok(backend.includes('"stock"'));
+  assert.ok(backend.includes('"on_sale"'));
+  assert.ok(backend.includes('sku_is_deleted'));
+  assert.ok(backend.includes('inventory_updated_at'));
+  assert.ok(backend.includes('rows = attach_product_images(conn, rows)'));
+});
+
+test('[SKU-2] product creation accepts structured sku combinations', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const parserBody = sliceBetween(backend, 'def normalize_structured_sku_rows(', '@app.post("/products")');
+  const createBody = sliceBetween(backend, '@app.post("/products")', '@app.post("/admin/products/{product_id}/images")');
+
+  assert.ok(parserBody.includes('row.get("sku_code")'));
+  assert.ok(parserBody.includes('row.get("color")'));
+  assert.ok(parserBody.includes('row.get("size")'));
+  assert.ok(parserBody.includes('row.get("stock", row.get("available_stock"))'));
+  assert.ok(parserBody.includes('row.get("on_sale", 1)'));
+  assert.ok(parserBody.includes('seen_codes'));
+  assert.ok(parserBody.includes('seen_dimensions'));
+  assert.ok(createBody.includes('sku_code'));
+  assert.ok(createBody.includes('color_name'));
+  assert.ok(createBody.includes('size_name'));
+  assert.ok(createBody.includes('INSERT INTO inventory'));
+  assert.ok(createBody.includes('conn.commit()'));
+  assert.ok(createBody.includes('conn.rollback()'));
+  assert.ok(createBody.includes('cleanup_saved_product_images(saved_images)'));
+});
+
+test('[SKU-2] admin sku endpoints validate ownership and duplicates', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(backend.includes('@app.get("/admin/products/{product_id}/skus")'));
+  assert.ok(backend.includes('@app.post("/admin/products/{product_id}/skus")'));
+  assert.ok(backend.includes('@app.patch("/admin/products/{product_id}/skus/{sku_id}")'));
+  assert.ok(backend.includes('@app.delete("/admin/products/{product_id}/skus/{sku_id}")'));
+  assert.ok(backend.includes('def ensure_admin_sku_unique('));
+  assert.ok(backend.includes('product_id = %s'));
+  assert.ok(backend.includes('id <> %s'));
+  assert.ok(backend.includes('FOR UPDATE'));
+  assert.ok(backend.includes('SKU 编码已存在'));
+  assert.ok(backend.includes('颜色和尺码组合已存在'));
+
+  const skuRoutes = sliceBetween(
+    backend,
+    '@app.get("/admin/products/{product_id}/skus")',
+    '@app.get("/admin/inventory")',
+  );
+  assert.ok(skuRoutes.includes('require_admin_user(authorization)'));
+});
+
+test('[SKU-2] checkout validates selected sku sale and stock state', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+
+  assert.ok(backend.includes('def validate_sku_for_purchase('));
+  assert.ok(backend.includes("s.status = 'ON_SALE'"));
+  assert.ok(backend.includes('s.is_deleted = 0'));
+  assert.ok(backend.includes("p.status = 'ON_SALE'"));
+  assert.ok(backend.includes('p.is_deleted = 0'));
+  assert.ok(backend.includes('available_stock'));
+  assert.ok(backend.includes('validate_sku_for_purchase(conn, req.sku_id, req.quantity)'));
+  assert.ok(backend.includes('CALL sp_create_order_from_cart'));
+  assert.ok(backend.includes('CALL sp_create_order_from_selected_cart_items'));
+});
+
+test('[SKU-2] sku logical deletion preserves historical references', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const deleteRoute = sliceBetween(
+    backend,
+    '@app.delete("/admin/products/{product_id}/skus/{sku_id}")',
+    '@app.get("/admin/inventory")',
+  );
+
+  assert.ok(deleteRoute.includes('SET is_deleted = 1'));
+  assert.ok(deleteRoute.includes("status = 'OFF_SALE'"));
+  assert.ok(deleteRoute.includes('最后一个未删除 SKU'));
+  assert.doesNotMatch(deleteRoute, /DELETE\s+FROM\s+product_sku/i);
+  assert.doesNotMatch(deleteRoute, /DELETE\s+FROM\s+order_item/i);
+  assert.ok(backend.includes('JOIN order_item oi'));
+});
+
+test('[SKU-3] admin product form builds color size cartesian combinations', async () => {
+  const modulePath = 'src/sku-utils.js';
+
+  assert.equal(existsSync(modulePath), true, `${modulePath} should exist`);
+
+  const { buildSkuMatrix, normalizeDimensionValues } = await import('../src/sku-utils.js');
+  assert.deepEqual(normalizeDimensionValues(' 白色，黑色, 白色\n'), ['白色', '黑色']);
+  assert.deepEqual(normalizeDimensionValues(' S\nM,L,M '), ['S', 'M', 'L']);
+
+  const rows = buildSkuMatrix(['白色', '黑色'], ['S', 'M', 'L'], [], {
+    productName: '复杂SKU验收测试商品',
+    price: 199,
+    stock: 0,
+    onSale: 1,
+  });
+
+  assert.equal(rows.length, 6);
+  assert.deepEqual(rows.map((row) => `${row.color} / ${row.size}`), [
+    '白色 / S', '白色 / M', '白色 / L',
+    '黑色 / S', '黑色 / M', '黑色 / L',
+  ]);
+  assert.ok(rows.every((row) => row.sku_name === `${row.color} / ${row.size}`));
+  assert.equal(new Set(rows.map((row) => row.sku_code)).size, 6);
+  assert.ok(rows.every((row) => row.price === 199 && row.stock === 0 && row.on_sale === 1));
+});
+
+test('[SKU-3] admin sku matrix preserves edited values while dimensions change', async () => {
+  const modulePath = 'src/sku-utils.js';
+
+  assert.equal(existsSync(modulePath), true, `${modulePath} should exist`);
+
+  const { buildSkuMatrix } = await import('../src/sku-utils.js');
+  const initialRows = buildSkuMatrix(['白色'], ['S', 'M'], [], { price: 199 });
+  const editedRows = initialRows.map((row) => row.size === 'S'
+    ? { ...row, sku_code: 'WHITE-S-CUSTOM', price: 209, stock: 10, on_sale: 0 }
+    : row);
+  const regenerated = buildSkuMatrix(['白色', '黑色'], ['S', 'M'], editedRows, { price: 199 });
+  const preserved = regenerated.find((row) => row.color === '白色' && row.size === 'S');
+
+  assert.equal(regenerated.length, 4);
+  assert.deepEqual(
+    { code: preserved.sku_code, price: preserved.price, stock: preserved.stock, onSale: preserved.on_sale },
+    { code: 'WHITE-S-CUSTOM', price: 209, stock: 10, onSale: 0 },
+  );
+  assert.equal(regenerated.filter((row) => row.color === '黑色').length, 2);
+});
+
+test('[SKU-3] admin submits structured sku json with multi-image form data', () => {
+  const adminHtml = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const createApiBody = sliceBetween(mainJs, 'async function createAdminProductToApi(', 'async function appendAdminProductImagesToApi(');
+  const submitBody = sliceBetween(mainJs, "productForm.addEventListener('submit'", "if (productFilterBar)");
+
+  assert.ok(adminHtml.includes('data-admin-sku-colors'));
+  assert.ok(adminHtml.includes('data-admin-sku-sizes'));
+  assert.ok(adminHtml.includes('data-admin-sku-matrix'));
+  assert.ok(mainJs.includes("from './sku-utils.js"));
+  assert.ok(mainJs.includes('buildSkuMatrix('));
+  assert.ok(mainJs.includes('data-admin-sku-code'));
+  assert.ok(mainJs.includes('data-admin-sku-price'));
+  assert.ok(mainJs.includes('data-admin-sku-stock'));
+  assert.ok(mainJs.includes('data-admin-sku-on-sale'));
+  assert.ok(createApiBody.includes('formData.append("skus_json", JSON.stringify(skuRows))'));
+  assert.ok(createApiBody.includes('formData.append("images", file)'));
+  assert.doesNotMatch(createApiBody, /formData\.append\(["']image["']/);
+  assert.ok(submitBody.includes('await createAdminProductToApi('));
+  assert.ok(submitBody.indexOf('productForm.reset()') > submitBody.indexOf('await createAdminProductToApi('));
+  assert.ok(submitBody.includes('await refreshAdminProductsFromApi()'));
+});
+
+test('[SKU-4] storefront keeps structured sku dimensions while merging products', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const convertBody = sliceBetween(mainJs, 'function convertApiProducts(apiRows)', 'async function loadProductsFromApi()');
+
+  assert.ok(convertBody.includes('skuCode: row.sku_code'));
+  assert.ok(convertBody.includes('color: row.color'));
+  assert.ok(convertBody.includes('size: row.size'));
+  assert.ok(convertBody.includes('skuIsDeleted:'));
+  assert.equal((convertBody.match(/color:\s*row\.color/g) || []).length, 2);
+  assert.equal((convertBody.match(/size:\s*row\.size/g) || []).length, 2);
+  assert.ok(convertBody.includes('images: getProductImages(row)'));
+  assert.ok(convertBody.includes('inventoryUpdatedAt: row.inventory_updated_at'));
+});
+
+test('[SKU-4] purchase modal selects color and size independently', async () => {
+  const { getInitialSkuSelection, selectSkuDimension } = await import('../src/sku-utils.js');
+  const product = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuId: 101, color: '白色', size: 'S', skuStatus: 'ON_SALE', availableStock: 10 },
+      { skuId: 102, color: '白色', size: 'M', skuStatus: 'ON_SALE', availableStock: 8 },
+      { skuId: 103, color: '黑色', size: 'S', skuStatus: 'ON_SALE', availableStock: 6 },
+      { skuId: 104, color: '黑色', size: 'M', skuStatus: 'ON_SALE', availableStock: 4 },
+    ],
+  };
+
+  const colorFirst = selectSkuDimension(product, {}, 'color', '黑色');
+  assert.deepEqual(selectSkuDimension(product, colorFirst, 'size', 'M'), { color: '黑色', size: 'M', skuId: 104 });
+
+  const sizeFirst = selectSkuDimension(product, {}, 'size', 'S');
+  assert.deepEqual(selectSkuDimension(product, sizeFirst, 'color', '白色'), { color: '白色', size: 'S', skuId: 101 });
+
+  const singleValue = getInitialSkuSelection({
+    ...product,
+    skuList: product.skuList.filter((sku) => sku.color === '白色' && sku.size === 'S'),
+  });
+  assert.deepEqual(singleValue, { color: '白色', size: 'S', skuId: 101 });
+});
+
+test('[SKU-4] unavailable color size combinations are disabled', async () => {
+  const { getDimensionOptions, selectSkuDimension } = await import('../src/sku-utils.js');
+  const product = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuId: 201, color: '白色', size: 'S', skuStatus: 'ON_SALE', availableStock: 10 },
+      { skuId: 202, color: '白色', size: 'M', skuStatus: 'ON_SALE', availableStock: 0 },
+      { skuId: 203, color: '黑色', size: 'M', skuStatus: 'ON_SALE', availableStock: 6 },
+      { skuId: 204, color: '黑色', size: 'L', skuStatus: 'OFF_SALE', availableStock: 4 },
+    ],
+  };
+
+  const colorOptions = getDimensionOptions(product, selectSkuDimension(product, {}, 'size', 'M'), 'color');
+  assert.equal(colorOptions.find((item) => item.value === '白色').disabled, true);
+  assert.equal(colorOptions.find((item) => item.value === '黑色').disabled, false);
+
+  const sizeOptions = getDimensionOptions(product, selectSkuDimension(product, {}, 'color', '黑色'), 'size');
+  assert.equal(sizeOptions.find((item) => item.value === 'S').disabled, true);
+  assert.equal(sizeOptions.find((item) => item.value === 'M').disabled, false);
+  assert.equal(sizeOptions.find((item) => item.value === 'L').disabled, true);
+
+  const incompatible = selectSkuDimension(product, { color: '白色', size: 'S', skuId: 201 }, 'color', '黑色');
+  assert.deepEqual(incompatible, { color: '黑色', size: null, skuId: null });
+});
+
+test('[SKU-4] selected sku drives price stock cart and direct purchase', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderBody = sliceBetween(mainJs, 'function renderPurchaseModal()', 'async function openPurchaseModal(');
+  const selectionBody = sliceBetween(mainJs, 'function setPurchaseDimension(', 'function setPurchasePaymentMethod(');
+
+  assert.ok(renderBody.includes('data-purchase-color'));
+  assert.ok(renderBody.includes('data-purchase-size'));
+  assert.ok(renderBody.includes('selectedSku?.price'));
+  assert.ok(renderBody.includes('getSkuAvailableStock(selectedSku)'));
+  assert.ok(selectionBody.includes('activePurchaseSkuId = nextSelection.skuId'));
+  assert.ok(mainJs.includes('selectedSku?.skuId'));
+  assert.ok(mainJs.includes('addCartToApi(activePurchaseProduct, selectedSku, quantity'));
+});
+
+test('[SKU-4] legacy sku products keep the previous specification flow', async () => {
+  const { isStructuredProduct } = await import('../src/sku-utils.js');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const lightboxBody = sliceBetween(mainJs, 'function openImageLightbox()', 'function closeImageLightbox()');
+
+  assert.equal(isStructuredProduct({
+    skuList: [{ skuId: 301, skuName: '经典均码', color: null, size: null, availableStock: 3 }],
+  }), false);
+  assert.ok(mainJs.includes('data-purchase-sku-id'));
+  assert.ok(mainJs.includes("sku.skuName || '默认规格'"));
+  assert.doesNotMatch(lightboxBody, /activePurchase(Color|Size|SkuId|Quantity|AddressId|PaymentMethod)\s*=/);
+});
+
+test('[SKU-5] admin product cards expose a sku manager', () => {
+  const adminHtml = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.ok(adminHtml.includes('data-admin-sku-manager'));
+  assert.ok(adminHtml.includes('data-admin-sku-manager-list'));
+  assert.ok(adminHtml.includes('data-admin-sku-manager-close'));
+  assert.ok(mainJs.includes('data-admin-product-sku-manage'));
+  assert.ok(mainJs.includes('管理规格'));
+  assert.ok(mainJs.includes('openAdminSkuManager'));
+});
+
+test('[SKU-5] sku manager loads every sku with real ids', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const loaderBody = sliceBetween(mainJs, 'async function loadAdminProductSkusToApi(', 'async function createAdminProductSkusToApi(');
+  const rendererBody = sliceBetween(mainJs, 'function renderAdminSkuManager()', 'function closeAdminSkuManager()');
+
+  assert.ok(loaderBody.includes('/admin/products/${productId}/skus'));
+  assert.ok(loaderBody.includes('adminFetch('));
+  assert.doesNotMatch(loaderBody, /\.slice\(/);
+  assert.ok(rendererBody.includes('sku.skuId'));
+  assert.ok(rendererBody.includes('sku.color'));
+  assert.ok(rendererBody.includes('sku.size'));
+  assert.ok(rendererBody.includes('sku.skuCode'));
+  assert.ok(rendererBody.includes('sku.availableStock'));
+  assert.ok(mainJs.includes('skuIsDeleted'));
+});
+
+test('[SKU-5] sku manager edits dimensions price sale state and inventory', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const updateBody = sliceBetween(mainJs, 'async function updateAdminProductSkuToApi(', 'async function deleteAdminProductSkuToApi(');
+
+  assert.ok(updateBody.includes('method: "PATCH"'));
+  assert.ok(updateBody.includes('/admin/products/${productId}/skus/${skuId}'));
+  assert.ok(updateBody.includes('adminFetch('));
+  assert.ok(mainJs.includes('data-admin-sku-edit-color'));
+  assert.ok(mainJs.includes('data-admin-sku-edit-size'));
+  assert.ok(mainJs.includes('data-admin-sku-edit-code'));
+  assert.ok(mainJs.includes('data-admin-sku-edit-price'));
+  assert.ok(mainJs.includes('data-admin-sku-edit-stock'));
+  assert.ok(mainJs.includes('data-admin-sku-edit-on-sale'));
+  assert.ok(mainJs.includes('skuManagerSubmitting'));
+  assert.ok(mainJs.includes('await refreshAdminProductsFromApi()'));
+});
+
+test('[SKU-5] sku manager adds only missing color size combinations', async () => {
+  const { getMissingSkuCombinations } = await import('../src/sku-utils.js');
+  const existing = [
+    { color: '白色', size: 'S' },
+    { color: '白色', size: 'M' },
+  ];
+  const missing = getMissingSkuCombinations(existing, ['白色', '黑色'], ['S', 'M'], {
+    productName: '测试商品',
+    price: 199,
+  });
+
+  assert.deepEqual(missing.map((row) => `${row.color} / ${row.size}`), ['黑色 / S', '黑色 / M']);
+
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const createBody = sliceBetween(mainJs, 'async function createAdminProductSkusToApi(', 'async function updateAdminProductSkuToApi(');
+  assert.ok(createBody.includes('method: "POST"'));
+  assert.ok(createBody.includes('JSON.stringify({ skus })'));
+  assert.ok(mainJs.includes('data-admin-sku-add-colors'));
+  assert.ok(mainJs.includes('data-admin-sku-add-sizes'));
+});
+
+test('[SKU-5] sku manager logically deletes skus with final sku protection', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const deleteBody = sliceBetween(mainJs, 'async function deleteAdminProductSkuToApi(', 'function parseAdminSkuRows(');
+
+  assert.ok(deleteBody.includes('method: "DELETE"'));
+  assert.ok(deleteBody.includes('/admin/products/${productId}/skus/${skuId}'));
+  assert.ok(mainJs.includes('window.confirm'));
+  assert.ok(mainJs.includes('data-admin-sku-delete-id'));
+  assert.ok(backend.includes('不允许删除最后一个未删除 SKU'));
+  assert.ok(backend.includes('SET is_deleted = 1'));
+  assert.ok(backend.includes("status = 'OFF_SALE'"));
+  assert.doesNotMatch(backend, /DELETE\s+FROM\s+product_sku/i);
+});
+
 function createMemoryStorage() {
   const data = new Map();
 

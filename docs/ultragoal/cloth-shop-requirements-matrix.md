@@ -3,12 +3,12 @@
 | ID | Requirement | Implementation | Automated evidence | DB/API evidence | UI evidence | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | R1 | Product description | `11_catalog_metadata_favorites_tags.sql` adds `product.description` and exposes it through the view | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
-| R2 | Product image management | pending | baseline image tests pass | pending | pending | PENDING |
-| R3 | New SKU default stock | pending | pending | pending | pending | PENDING |
+| R2 | Product image management | sorted return and transactional main/sort synchronization | Phase02 and legacy image tests | live DB blocked | pending | PARTIAL |
+| R3 | New SKU default stock | omitted stock 50; explicit 0 preserved | Phase02 contract test | live DB blocked | pending | PARTIAL |
 | R4 | Product-level favorites | `product_favorite` with unique user/product key | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
 | R5 | SKU-level cart | pending | baseline cart tests pass | pending | pending | PENDING |
-| R6 | Checkout confirmation | pending | pending | pending | pending | PENDING |
-| R7 | Decoupled payment | pending | pending | pending | pending | PENDING |
+| R6 | Checkout confirmation | order creation retained with buyer remark persistence | Phase02 and legacy order tests | live DB blocked | pending | PARTIAL |
+| R7 | Decoupled payment | payment locks state and returns idempotently for paid orders | Phase02 contract test | live DB blocked | pending | PARTIAL |
 | R8 | Buyer remark | adds `order_main.buyer_remark` without rewriting orders | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
 | R9 | Availability state | pending | baseline availability tests pass | pending | pending | PENDING |
 | R10 | Shared product details | pending | pending | pending | pending | PENDING |

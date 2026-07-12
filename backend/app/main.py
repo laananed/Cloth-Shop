@@ -142,6 +142,62 @@ def attach_product_images(conn, rows: list[dict]) -> list[dict]:
     return rows
 
 
+def query_product_tags(conn, product_ids: list[int]) -> dict[int, list[dict]]:
+    ids = sorted({int(product_id) for product_id in product_ids if product_id is not None})
+    if not ids:
+        return {}
+    placeholders = ", ".join(["%s"] * len(ids))
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT ptr.product_id, t.id, t.name
+            FROM product_tag_relation ptr
+            JOIN product_tag t ON t.id = ptr.tag_id
+            WHERE t.is_deleted = 0 AND ptr.product_id IN ({placeholders})
+            ORDER BY ptr.product_id, t.name, t.id
+            """,
+            ids
+        )
+        rows = cursor.fetchall()
+    tag_map = {product_id: [] for product_id in ids}
+    for row in rows:
+        tag_map.setdefault(row["product_id"], []).append({"id": row["id"], "name": row["name"]})
+    return tag_map
+
+
+def attach_product_metadata(conn, rows: list[dict]) -> list[dict]:
+    attach_product_images(conn, rows)
+    tag_map = query_product_tags(conn, [row.get("product_id") for row in rows])
+    for row in rows:
+        row["tags"] = tag_map.get(row.get("product_id"), [])
+    return rows
+
+
+def write_operation_log(**values) -> None:
+    """Best-effort audit logging. A log failure never rolls back successful business work."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO operation_log(
+                        operator_type, operator_id, module, action, target_type,
+                        target_id, request_method, request_path, result, summary
+                    ) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        values.get("operator_type", "SYSTEM"), values.get("operator_id"),
+                        values.get("module", "SYSTEM"), values.get("action", "UNKNOWN"),
+                        values.get("target_type"), values.get("target_id"),
+                        values.get("request_method"), values.get("request_path"),
+                        values.get("result", "SUCCESS"), str(values.get("summary") or "")[:500],
+                    )
+                )
+            conn.commit()
+    except Exception as log_error:
+        print(f"operation log write failed: {log_error}")
+
+
 def create_admin_token(admin_user_id: int) -> str:
     expires_at = int(time.time()) + ADMIN_TOKEN_TTL_SECONDS
     payload = f"{admin_user_id}:{expires_at}"
@@ -249,11 +305,13 @@ class CartDeleteItemRequest(BaseModel):
 class OrderFromCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
+    buyer_remark: str | None = Field(None, max_length=500)
 
 class OrderFromSelectedCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
     cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
+    buyer_remark: str | None = Field(None, max_length=500)
 
 class PayOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
@@ -282,6 +340,7 @@ class DirectOrderRequest(BaseModel):
     address_id: int = Field(..., gt=0, description="收货地址ID")
     sku_id: int = Field(..., gt=0, description="SKU ID")
     quantity: int = Field(..., gt=0, description="购买数量")
+    buyer_remark: str | None = Field(None, max_length=500)
 
 class CancelOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
@@ -336,6 +395,45 @@ class AdminApproveRefundRequest(BaseModel):
 class AdminRejectRefundRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
     remark: str = Field("管理员拒绝退款", description="处理备注")
+
+
+class FavoriteRequest(BaseModel):
+    user_id: int = Field(..., gt=0)
+    product_id: int = Field(..., gt=0)
+
+
+class ProductMetadataRequest(BaseModel):
+    description: str | None = Field(None, max_length=5000)
+    category_id: int | None = Field(None, gt=0)
+    tag_ids: list[int] = Field(default_factory=list)
+
+
+class CategoryRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class CategoryDeleteRequest(BaseModel):
+    replacement_category_id: int = Field(..., gt=0)
+
+
+class TagRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class BulkTagRequest(BaseModel):
+    product_ids: list[int] = Field(..., min_length=1)
+    tag_ids: list[int] = Field(default_factory=list)
+    mode: str = Field(..., pattern="^(add|remove|replace)$")
+
+
+class ImageOrderItem(BaseModel):
+    image_id: int = Field(..., gt=0)
+    sort_order: int = Field(..., ge=0)
+    is_main: bool = False
+
+
+class ImageReorderRequest(BaseModel):
+    images: list[ImageOrderItem] = Field(..., min_length=1)
 
 
 @app.get("/")
@@ -502,6 +600,18 @@ def get_previous_status_before_refund_request(conn, order_id: int) -> str:
     return "PAID"
 
 
+def persist_buyer_remark(conn, order_id: int, buyer_remark: str | None) -> None:
+    remark = (buyer_remark or "").strip()
+    if remark:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE order_main
+                SET buyer_remark = %s
+                WHERE id = %s""",
+                (remark[:500], order_id)
+            )
+
+
 @app.get("/db-test")
 def db_test():
     """
@@ -536,6 +646,7 @@ def get_products():
                         category_name,
                         product_id,
                         product_name,
+                        description,
                         product_id,
                         product_name,
                         image_url,
@@ -556,7 +667,7 @@ def get_products():
                 """
                 cursor.execute(sql)
                 rows = cursor.fetchall()
-                rows = attach_product_images(conn, rows)
+                rows = attach_product_metadata(conn, rows)
 
         return {
             "success": True,
@@ -662,7 +773,9 @@ def parse_product_skus(
 
         current_name = str(row.get("sku_name") or "").strip()
         current_price = row.get("price")
-        current_stock = row.get("available_stock")
+        current_stock = row.get("available_stock", 50)
+        if current_stock is None:
+            current_stock = 50
 
         if not current_name:
             raise HTTPException(
@@ -722,7 +835,7 @@ async def create_product(
     product_name: str = Form(...),
     sku_name: str = Form("榛樿瑙勬牸"),
     price: float = Form(...),
-    available_stock: int = Form(...),
+    available_stock: int | None = Form(None),
     skus_json: str | None = Form(None),
     image: UploadFile | None = File(None),
     images: list[UploadFile] | None = File(None),
@@ -748,13 +861,14 @@ async def create_product(
     if price <= 0:
         raise HTTPException(status_code=400, detail="鍟嗗搧浠锋牸蹇呴』澶т簬 0")
 
-    if available_stock < 0:
+    effective_stock = available_stock if available_stock is not None else 50
+    if effective_stock < 0:
         raise HTTPException(status_code=400, detail="鍒濆搴撳瓨涓嶈兘灏忎簬 0")
     sku_rows = parse_product_skus(
         skus_json=skus_json,
         sku_name=sku_name,
         price=price,
-        available_stock=available_stock
+        available_stock=effective_stock
     )
 
     uploaded_images = []
@@ -1740,10 +1854,10 @@ def create_order_from_cart(req: OrderFromCartRequest):
                     )
                     order_result = cursor.fetchone()
 
-                conn.commit()
-
                 order_id = order_result["order_id"]
                 order_no = order_result["order_no"]
+                persist_buyer_remark(conn, order_id, req.buyer_remark)
+                conn.commit()
 
                 # 4. 鏌ヨ璁㈠崟姹囨€讳俊鎭?
                 with conn.cursor() as cursor:
@@ -1868,10 +1982,10 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
                     )
                     order_result = cursor.fetchone()
 
-                conn.commit()
-
                 order_id = order_result["order_id"]
                 order_no = order_result["order_no"]
+                persist_buyer_remark(conn, order_id, req.buyer_remark)
+                conn.commit()
 
                 with conn.cursor() as cursor:
                     cursor.execute(
@@ -1985,6 +2099,20 @@ def pay_order(req: PayOrderRequest):
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
+                    cursor.execute(
+                        """SELECT status
+                        FROM order_main
+                        WHERE id = %s AND user_id = %s
+                        FOR UPDATE""",
+                        (req.order_id, req.user_id)
+                    )
+                    order_state = cursor.fetchone()
+                    if not order_state:
+                        raise HTTPException(status_code=400, detail="订单不存在或不属于当前用户")
+                    if order_state["status"] == "PAID":
+                        conn.rollback()
+                        return {"success": True, "idempotent": True, "order_id": req.order_id, "message": "订单已支付"}
+
                     # 1. 鏍￠獙鏀粯瀵嗙爜
                     cursor.execute(
                         """
@@ -2150,10 +2278,10 @@ def create_direct_order(req: DirectOrderRequest):
                     )
                     order_result = cursor.fetchone()
 
-                conn.commit()
-
                 order_id = order_result["order_id"]
                 order_no = order_result["order_no"]
+                persist_buyer_remark(conn, order_id, req.buyer_remark)
+                conn.commit()
 
                 # 4. 鏌ヨ璁㈠崟姹囨€?
                 with conn.cursor() as cursor:
@@ -3556,4 +3684,225 @@ def get_order_detail(order_id: int):
             status_code=500,
             detail=f"查询订单详情失败：{str(e)}"
         )
+
+
+@app.get("/favorites/user/{user_id}")
+def get_favorites(user_id: int):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT pf.product_id, p.name AS product_name, p.description, p.image_url, pf.created_at
+                FROM product_favorite pf
+                JOIN product p ON p.id = pf.product_id AND p.is_deleted = 0
+                WHERE pf.user_id = %s ORDER BY pf.created_at DESC
+                """, (user_id,)
+            )
+            rows = cursor.fetchall()
+        attach_product_metadata(conn, rows)
+    return {"success": True, "count": len(rows), "data": jsonable_encoder(rows)}
+
+
+@app.post("/favorites")
+def add_favorite(req: FavoriteRequest):
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id FROM product WHERE id = %s AND is_deleted = 0", (req.product_id,))
+                if not cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="商品不存在或已删除")
+                cursor.execute(
+                    """INSERT INTO product_favorite(user_id, product_id) VALUES(%s, %s)
+                    ON DUPLICATE KEY UPDATE product_id = VALUES(product_id)""",
+                    (req.user_id, req.product_id)
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    write_operation_log(operator_type="USER", operator_id=req.user_id, module="FAVORITE", action="ADD", target_type="PRODUCT", target_id=req.product_id, request_method="POST", request_path="/favorites")
+    return {"success": True, "product_id": req.product_id}
+
+
+@app.delete("/favorites/{product_id}")
+def delete_favorite(product_id: int, user_id: int):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM product_favorite WHERE user_id = %s AND product_id = %s", (user_id, product_id))
+            changed = cursor.rowcount
+        conn.commit()
+    write_operation_log(operator_type="USER", operator_id=user_id, module="FAVORITE", action="REMOVE", target_type="PRODUCT", target_id=product_id, request_method="DELETE", request_path=f"/favorites/{product_id}")
+    return {"success": True, "removed": changed > 0}
+
+
+@app.get("/admin/categories")
+def get_admin_categories(authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""SELECT c.id, c.name, c.sort_order, c.is_protected, COUNT(p.id) AS product_count
+                FROM category c LEFT JOIN product p ON p.category_id = c.id AND p.is_deleted = 0
+                WHERE c.is_deleted = 0 GROUP BY c.id, c.name, c.sort_order, c.is_protected ORDER BY c.sort_order, c.id""")
+            rows = cursor.fetchall()
+    return {"success": True, "data": jsonable_encoder(rows)}
+
+
+@app.post("/admin/categories")
+def create_admin_category(req: CategoryRequest, authorization: str | None = Header(None)):
+    admin = require_admin_user(authorization)
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""INSERT INTO category(name, sort_order, is_deleted, is_protected) VALUES(%s, 100, 0, 0)
+                    ON DUPLICATE KEY UPDATE is_deleted = 0""", (req.name.strip(),))
+                category_id = cursor.lastrowid
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    write_operation_log(operator_type="ADMIN", operator_id=admin["id"], module="CATEGORY", action="CREATE", target_type="CATEGORY", target_id=category_id)
+    return {"success": True, "category_id": category_id}
+
+
+@app.delete("/admin/categories/{category_id}")
+def delete_admin_category(category_id: int, req: CategoryDeleteRequest, authorization: str | None = Header(None)):
+    admin = require_admin_user(authorization)
+    if category_id == req.replacement_category_id:
+        raise HTTPException(status_code=400, detail="替代分类不能是当前分类")
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT is_protected FROM category WHERE id = %s AND is_deleted = 0 FOR UPDATE", (category_id,))
+                category = cursor.fetchone()
+                if not category: raise HTTPException(status_code=404, detail="分类不存在")
+                if category["is_protected"]: raise HTTPException(status_code=400, detail="受保护分类不可删除")
+                cursor.execute("SELECT id FROM category WHERE id = %s AND is_deleted = 0", (req.replacement_category_id,))
+                if not cursor.fetchone(): raise HTTPException(status_code=400, detail="替代分类不存在")
+                cursor.execute("UPDATE product SET category_id = %s WHERE category_id = %s", (req.replacement_category_id, category_id))
+                moved = cursor.rowcount
+                cursor.execute("UPDATE category SET is_deleted = 1 WHERE id = %s", (category_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    write_operation_log(operator_type="ADMIN", operator_id=admin["id"], module="CATEGORY", action="DELETE_MIGRATE", target_type="CATEGORY", target_id=category_id, summary=f"moved={moved}")
+    return {"success": True, "moved_product_count": moved}
+
+
+@app.get("/admin/tags")
+def get_admin_tags(authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""SELECT t.id, t.name, COUNT(ptr.product_id) AS product_count FROM product_tag t
+                LEFT JOIN product_tag_relation ptr ON ptr.tag_id = t.id WHERE t.is_deleted = 0
+                GROUP BY t.id, t.name ORDER BY t.name""")
+            rows = cursor.fetchall()
+    return {"success": True, "data": jsonable_encoder(rows)}
+
+
+@app.post("/admin/tags")
+def create_admin_tag(req: TagRequest, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""INSERT INTO product_tag(name, is_deleted) VALUES(%s, 0)
+                ON DUPLICATE KEY UPDATE is_deleted = 0, id = LAST_INSERT_ID(id)""", (req.name.strip(),))
+            tag_id = cursor.lastrowid
+        conn.commit()
+    return {"success": True, "tag_id": tag_id}
+
+
+@app.delete("/admin/tags/{tag_id}")
+def delete_admin_tag(tag_id: int, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM product_tag_relation WHERE tag_id = %s", (tag_id,))
+                removed = cursor.rowcount
+                cursor.execute("UPDATE product_tag SET is_deleted = 1 WHERE id = %s", (tag_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    return {"success": True, "removed_relation_count": removed}
+
+
+@app.post("/admin/tags/bulk")
+def bulk_admin_tags(req: BulkTagRequest, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    changed = 0
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                for product_id in sorted(set(req.product_ids)):
+                    if req.mode == "replace":
+                        cursor.execute("DELETE FROM product_tag_relation WHERE product_id = %s", (product_id,)); changed += cursor.rowcount
+                    for tag_id in sorted(set(req.tag_ids)):
+                        if req.mode == "remove":
+                            cursor.execute("DELETE FROM product_tag_relation WHERE product_id = %s AND tag_id = %s", (product_id, tag_id))
+                        else:
+                            cursor.execute("INSERT IGNORE INTO product_tag_relation(product_id, tag_id) VALUES(%s, %s)", (product_id, tag_id))
+                        changed += cursor.rowcount
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    return {"success": True, "changed_count": changed}
+
+
+@app.put("/admin/products/{product_id}/metadata")
+def update_product_metadata(product_id: int, req: ProductMetadataRequest, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id FROM product WHERE id = %s AND is_deleted = 0 FOR UPDATE", (product_id,))
+                if not cursor.fetchone(): raise HTTPException(status_code=404, detail="商品不存在")
+                if req.category_id is None:
+                    cursor.execute("UPDATE product SET description = %s WHERE id = %s", (req.description, product_id))
+                else:
+                    cursor.execute("UPDATE product SET description = %s, category_id = %s WHERE id = %s", (req.description, req.category_id, product_id))
+                cursor.execute("DELETE FROM product_tag_relation WHERE product_id = %s", (product_id,))
+                for tag_id in sorted(set(req.tag_ids)):
+                    cursor.execute("INSERT INTO product_tag_relation(product_id, tag_id) VALUES(%s, %s)", (product_id, tag_id))
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    return {"success": True, "product_id": product_id}
+
+
+@app.put("/admin/products/{product_id}/images/reorder")
+def reorder_product_images(product_id: int, req: ImageReorderRequest, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    mains = [item for item in req.images if item.is_main]
+    if len(mains) != 1: raise HTTPException(status_code=400, detail="必须且只能设置一张主图")
+    with get_db() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE product_image SET is_main = 0 WHERE product_id = %s AND is_deleted = 0", (product_id,))
+                for item in req.images:
+                    cursor.execute("UPDATE product_image SET sort_order = %s, is_main = %s WHERE id = %s AND product_id = %s AND is_deleted = 0", (item.sort_order, int(item.is_main), item.image_id, product_id))
+                cursor.execute("SELECT image_url FROM product_image WHERE id = %s AND product_id = %s", (mains[0].image_id, product_id))
+                main_image = cursor.fetchone()
+                if not main_image: raise HTTPException(status_code=400, detail="主图不存在")
+                cursor.execute("UPDATE product SET image_url = %s WHERE id = %s", (main_image["image_url"], product_id))
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    return {"success": True, "product_id": product_id}
+
+
+@app.get("/admin/operation-logs")
+def get_operation_logs(authorization: str | None = Header(None), module: str | None = None, action: str | None = None, result: str | None = None, page: int = 1, page_size: int = 20):
+    require_admin_user(authorization)
+    page, page_size = max(page, 1), min(max(page_size, 1), 100)
+    clauses, params = ["1 = 1"], []
+    for column, value in (("module", module), ("action", action), ("result", result)):
+        if value: clauses.append(f"{column} = %s"); params.append(value)
+    params.extend([page_size, (page - 1) * page_size])
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"""SELECT id, operator_type, operator_id, module, action, target_type, target_id,
+                request_method, request_path, result, summary, created_at FROM operation_log
+                WHERE {' AND '.join(clauses)} ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s""", params)
+            rows = cursor.fetchall()
+    return {"success": True, "page": page, "page_size": page_size, "data": jsonable_encoder(rows)}
 

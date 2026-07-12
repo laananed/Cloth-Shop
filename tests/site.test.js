@@ -225,7 +225,7 @@ test('purchase modal routes actions through the shared selection flow', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
   const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {', 'function normalizePayMethod(method) {');
-  const favoriteBody = sliceBetween(mainJs, 'function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {', 'function upsertCartItem(product) {');
+  const favoriteBody = sliceBetween(mainJs, 'async function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = false } = {}) {', 'function legacyUpsertFavorite');
   const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {', 'function openSidebar(section = \'account\') {');
   const buyBranchStart = mainJs.indexOf("if (actionButton.dataset.purchaseLaunch === 'buy') {");
   const buyBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {", buyBranchStart);
@@ -265,11 +265,9 @@ test('purchase modal routes actions through the shared selection flow', () => {
   assert.ok(addCartBody.includes('openSidebarAfterSuccess'));
   assert.ok(!addCartBody.includes('getPurchaseSelectedSku(product)'));
 
-  assert.ok(favoriteBody.includes('const actualSelectedSku = selectedSku || null;'));
-  assert.ok(favoriteBody.includes('const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;'));
-  assert.ok(favoriteBody.includes('skuId: actualSelectedSku.skuId'));
-  assert.ok(favoriteBody.includes('skuName: actualSelectedSku.skuName || \'默认规格\''));
-  assert.ok(!favoriteBody.includes('favorites.some((item) => item.id === product.id)'));
+  assert.ok(favoriteBody.includes('product_id: Number(product.productId)'));
+  assert.ok(favoriteBody.includes('await syncFavoritesFromApi()'));
+  assert.ok(!favoriteBody.includes('-sku-'));
 
   assert.ok(directOrderBody.includes('const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;'));
   assert.ok(directOrderBody.includes('const skuId = selectedSku?.skuId;'));

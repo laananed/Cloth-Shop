@@ -143,6 +143,7 @@ let isCartCheckoutSubmitting = false;
 let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
 const refundingOrderIds = new Set();
+const FAVORITES_MIGRATION_KEY = 'cloth_shop_favorites_api_migrated_v1';
 
 function getStoredAdminSession() {
   try {
@@ -2913,7 +2914,7 @@ async function submitPurchaseOrder() {
     } else if (actionConfig.key === 'favorites') {
       setFeedback(purchaseFeedback, "正在加入收藏，请稍候...");
 
-      const result = upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false });
+      const result = await upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false });
 
       if (!result) {
         throw new Error("加入收藏失败");
@@ -2988,7 +2989,32 @@ function getStoredProductById(productId) {
   return products.find((product) => product.id === productId) || null;
 }
 
-function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {
+async function syncFavoritesFromApi() {
+  const response = await fetch(`${API_BASE_URL}/favorites/user/${CURRENT_USER_ID}`);
+  const result = await response.json();
+  if (!response.ok || !result.success) throw new Error(result.detail || '同步收藏失败');
+  const favorites = (result.data || []).map((row) => ({ id: `product-${row.product_id}`, productId: `product-${row.product_id}`, dbProductId: Number(row.product_id), name: row.product_name, price: Number(row.price || 0), badge: '已收藏', category: row.category_name || '商品', image: row.image_url || '' }));
+  saveStoredFavorites(storage, favorites);
+  return favorites;
+}
+
+async function migrateLegacyFavoritesToApi() {
+  if (storage.getItem(FAVORITES_MIGRATION_KEY)) return;
+  const ids = [...new Set(getStoredFavorites(storage).map((item) => Number(item.dbProductId || String(item.productId || item.id).replace(/\D+/g, ''))).filter(Boolean))];
+  for (const productId of ids) await fetch(`${API_BASE_URL}/favorites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: CURRENT_USER_ID, product_id: productId }) });
+  storage.setItem(FAVORITES_MIGRATION_KEY, '1');
+}
+
+async function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = false } = {}) {
+  const response = await fetch(`${API_BASE_URL}/favorites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: CURRENT_USER_ID, product_id: Number(product.productId) }) });
+  const result = await response.json();
+  if (!response.ok || !result.success) throw new Error(result.detail || '收藏失败');
+  const favorites = await syncFavoritesFromApi();
+  if (openSidebarAfterSuccess) openSidebar('favorites');
+  return favorites;
+}
+
+function legacyUpsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {
   const actualSelectedSku = selectedSku || null;
 
   if (!actualSelectedSku?.skuId) {
@@ -3000,9 +3026,9 @@ function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess =
   }
 
   const favorites = getStoredFavorites(storage);
-  const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;
+  const legacyFavoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;
 
-  if (favorites.some((item) => item.id === favoriteId)) {
+  if (favorites.some((item) => item.id === legacyFavoriteId)) {
     if (openSidebarAfterSuccess) {
       openSidebar("favorites");
     }
@@ -3012,7 +3038,7 @@ function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess =
   const nextFavorites = [
     ...favorites,
     {
-      id: favoriteId,
+      id: legacyFavoriteId,
       productId: product.id,
       skuId: actualSelectedSku.skuId,
       skuName: actualSelectedSku.skuName || '默认规格',
@@ -3477,6 +3503,7 @@ function renderSidebar() {
 
   renderCartShelf(cartList, cart, '暂无购物车', validSelectedIds);
   renderCartSummary(cart, validSelectedIds);
+  renderSidebarBadges();
 }
 
 function updateHeroParallax() {
@@ -4669,6 +4696,16 @@ async function deleteAdminProductToApi(productId) {
   }
 
   return result;
+}
+
+function formatSidebarBadgeCount(count) { return count > 99 ? '99+' : String(count); }
+function renderSidebarBadges() {
+  const favorites = getStoredFavorites(storage);
+  const cart = getStoredCart(storage);
+  const counts = { favorites: new Set(favorites.map((item) => item.dbProductId || item.productId || item.id)).size, cart: cart.length };
+  document.querySelectorAll('[data-sidebar-badge]').forEach((badge) => { const count = counts[badge.dataset.sidebarBadge] || 0; badge.hidden = count === 0; badge.textContent = formatSidebarBadgeCount(count); });
+  document.body.classList.toggle('is-product-favorite', counts.favorites > 0); // favorite red state
+  document.body.classList.toggle('is-product-in-cart', counts.cart > 0); // cart yellow state
 }
 
 async function loadAdminCategoriesToApi() {
@@ -6038,6 +6075,7 @@ if ('scrollRestoration' in window.history) {
 renderHero();
 updateView();
 renderSidebar();
+migrateLegacyFavoritesToApi().then(syncFavoritesFromApi).then(renderSidebar).catch((error) => console.warn('收藏同步暂不可用：', error));
 updateHeroParallax();
 updateHeroScrollState();
 // testLoadProductsFromApi(); 测试函数，通过以后就可以不再使用。

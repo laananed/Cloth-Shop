@@ -5,8 +5,8 @@
 | R1 | Product description | `11_catalog_metadata_favorites_tags.sql` adds `product.description` and exposes it through the view | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
 | R2 | Product image management | sorted return and transactional main/sort synchronization | Phase02 and legacy image tests | live DB blocked | pending | PARTIAL |
 | R3 | New SKU default stock | omitted stock 50; explicit 0 preserved | Phase02 contract test | live DB blocked | pending | PARTIAL |
-| R4 | Product-level favorites | `product_favorite` with unique user/product key | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
-| R5 | SKU-level cart | pending | baseline cart tests pass | pending | pending | PENDING |
+| R4 | Product-level favorites | DB API sync plus one-time legacy product migration | migration/backend/storefront tests | live DB blocked | UI automation blocked | PARTIAL |
+| R5 | SKU-level cart | existing DB SKU-row cart retained with shared SKU selection | storefront and legacy cart tests | live DB blocked | UI automation blocked | PARTIAL |
 | R6 | Checkout confirmation | order creation retained with buyer remark persistence | Phase02 and legacy order tests | live DB blocked | pending | PARTIAL |
 | R7 | Decoupled payment | payment locks state and returns idempotently for paid orders | Phase02 contract test | live DB blocked | pending | PARTIAL |
 | R8 | Buyer remark | adds `order_main.buyer_remark` without rewriting orders | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
@@ -14,7 +14,7 @@
 | R10 | Shared product details | pending | pending | pending | pending | PENDING |
 | R11 | Responsive close controls | pending | pending | pending | pending | PENDING |
 | R12 | Favorite/cart visual state | pending | pending | pending | pending | PENDING |
-| R13 | Favorite/cart badges | pending | pending | pending | pending | PENDING |
+| R13 | Favorite/cart badges | distinct product/SKU-row badges, zero hidden, `99+` cap | storefront contract test | state derived from DB cache | UI automation blocked | PARTIAL |
 | R14 | Multi-image lightbox | pending | baseline gallery tests pass | pending | pending | PENDING |
 | R15 | Operation log | creates or safely extends non-sensitive operation metadata | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
 | R16 | Simplified footer | pending | pending | pending | pending | PENDING |

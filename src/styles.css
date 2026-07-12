@@ -4055,3 +4055,11 @@ button.sku-option--disabled {
 .admin-form--product-create .admin-field--wide {
   grid-column: 1 / -1;
 }
+body.has-lightbox { overflow: hidden; }
+[data-product-detail-modal], [data-product-lightbox] { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 1rem; background: rgba(10, 31, 48, .72); overflow: auto; }
+[data-product-detail-modal][hidden], [data-product-lightbox][hidden] { display: none; }
+[data-product-detail-modal] article, [data-product-lightbox] > div { width: min(920px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border-radius: 24px; background: #f5fbff; padding: 1rem; }
+[data-product-detail-main-image], [data-lightbox-image] { display: block; max-width: 100%; max-height: 72vh; object-fit: contain; margin: auto; }
+[data-product-detail-thumbnails] { display: flex; gap: .5rem; overflow-x: auto; }
+[data-product-detail-thumbnails] img { width: 72px; height: 72px; object-fit: cover; }
+@media (max-width: 640px) { [data-product-detail-modal], [data-product-lightbox] { padding: .5rem; } [data-product-detail-modal] article, [data-product-lightbox] > div { max-width: 100%; border-radius: 16px; } }

@@ -95,6 +95,10 @@ const purchaseBuyerRemark = document.querySelector('[data-purchase-buyer-remark]
 const purchaseOrderNumber = document.querySelector('[data-purchase-order-number]');
 const purchasePayPassword = document.querySelector('[data-purchase-pay-password]');
 const purchasePaymentPasswordWrap = document.querySelector('[data-purchase-payment-password-wrap]');
+const productDetailModal = document.querySelector('[data-product-detail-modal]');
+const productLightbox = document.querySelector('[data-product-lightbox]');
+let detailProduct = null, lightboxImages = [], lightboxImageIndex = 0, previousLightboxFocus = null;
+const IMAGE_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="800" height="600"%3E%3Crect width="100%25" height="100%25" fill="%23eaf6ff"/%3E%3C/svg%3E';
 const purchaseEyebrow = document.querySelector('.purchase-modal__eyebrow');
 const purchaseAddressSection = purchaseAddressList?.closest('.purchase-modal__section') || null;
 const purchaseQuantitySection = purchaseQuantityValue?.closest('.purchase-modal__section') || null;
@@ -619,7 +623,7 @@ function convertApiProducts(apiRows) {
           },
         ],
 
-        detail: "",
+        detail: row.description || "暂无商品介绍",
 
         // 优先使用数据库图片；没有 image_url 时才复用原来的静态图片
         image: productImage,
@@ -657,7 +661,7 @@ function convertApiProducts(apiRows) {
     .map((product) => {
       const state = getProductDisplayState(product);
 
-      product.detail = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
+      product.detail = product.detail || `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件`;
       product.skuId = product.defaultSkuId;
       product.unavailableAt = getProductUnavailableAt(product);
       product.saleState = state.key;
@@ -2377,6 +2381,7 @@ function renderProducts() {
               当前规格：${escapeHtml(selectedSkuName)}，${escapeHtml(stockLabel)}
             </p>
             <div class="product-card__footer">
+              <button type="button" class="ghost-button ghost-button--small" data-product-detail-launch="${product.id}" ${productState.key !== "OFF_SALE" ? '' : 'disabled'}>查看详情</button>
               <div class="product-card__actions ${isPurchaseUi ? 'product-card__actions--purchase' : ''}">
                 ${
                   isPurchaseUi
@@ -3045,6 +3050,30 @@ async function syncFavoritesFromApi() {
   return favorites;
 }
 
+function renderLightbox() {
+  const image = lightboxImages[lightboxImageIndex];
+  const node = productLightbox?.querySelector('[data-lightbox-image]');
+  if (node) { node.src = image?.image_url || IMAGE_PLACEHOLDER; node.onerror = () => { node.src = IMAGE_PLACEHOLDER; }; }
+  const counter = productLightbox?.querySelector('[data-lightbox-counter]'); if (counter) counter.textContent = `${lightboxImageIndex + 1} / ${lightboxImages.length}`;
+  productLightbox?.querySelectorAll('[data-lightbox-prev],[data-lightbox-next]').forEach((button) => { button.hidden = lightboxImages.length <= 1; });
+}
+function openLightbox(product, index = 0) {
+  lightboxImages = getProductImages(product); lightboxImageIndex = Math.max(0, Math.min(index, lightboxImages.length - 1)); previousLightboxFocus = document.activeElement;
+  if (!lightboxImages.length) lightboxImages = [{ image_url: IMAGE_PLACEHOLDER }];
+  productLightbox.hidden = false; productLightbox.setAttribute('aria-hidden', 'false'); document.body.classList.add('has-lightbox'); renderLightbox();
+}
+function closeLightbox() { if (!productLightbox) return; productLightbox.hidden = true; productLightbox.setAttribute('aria-hidden', 'true'); document.body.classList.remove('has-lightbox'); previousLightboxFocus?.focus?.(); }
+function moveLightbox(delta) { lightboxImageIndex = (lightboxImageIndex + delta + lightboxImages.length) % lightboxImages.length; renderLightbox(); }
+function openProductDetailModal(product) {
+  if (!product || getProductDisplayState(product).key === 'OFF_SALE') return;
+  detailProduct = product; const images = getProductImages(product); productDetailModal.hidden = false; productDetailModal.setAttribute('aria-hidden', 'false');
+  productDetailModal.querySelector('[data-product-detail-title]').textContent = product.name;
+  productDetailModal.querySelector('[data-product-detail-description]').textContent = product.detail || '暂无商品介绍';
+  const main = productDetailModal.querySelector('[data-product-detail-main-image]'); main.src = images[0]?.image_url || IMAGE_PLACEHOLDER; main.onerror = () => { main.src = IMAGE_PLACEHOLDER; };
+  productDetailModal.querySelector('[data-product-detail-thumbnails]').innerHTML = images.map((image,index)=>`<button type="button" data-product-detail-thumb="${index}"><img src="${escapeHtml(image.image_url)}" alt="" /></button>`).join('');
+}
+function closeProductDetailModal() { if (!productDetailModal) return; productDetailModal.hidden = true; productDetailModal.setAttribute('aria-hidden','true'); }
+
 async function migrateLegacyFavoritesToApi() {
   if (storage.getItem(FAVORITES_MIGRATION_KEY)) return;
   const ids = [...new Set(getStoredFavorites(storage).map((item) => Number(item.dbProductId || String(item.productId || item.id).replace(/\D+/g, ''))).filter(Boolean))];
@@ -3152,6 +3181,7 @@ function renderProductShelf(listElement, items, emptyState, { showQuantity = fal
           </div>
           <p>${item.category}</p>
           <p>${formatPrice(item.price)}${showQuantity ? ` × ${item.quantity}` : ''}</p>
+          ${showQuantity ? '' : `<button type="button" data-product-detail-launch="${escapeHtml(item.productId || item.id)}">查看详情</button>`}
         </article>
       `,
     )
@@ -5748,13 +5778,20 @@ if (ordersList) {
   });
 }
 
-if (cartList) {
+    if (cartList) {
   cartList.addEventListener('click', (event) => {
     const deleteButton = event.target.closest('[data-cart-delete-id]');
     if (deleteButton) {
       deleteCartItemFromApi(deleteButton.dataset.cartDeleteId);
       return;
     }
+
+    favoritesList?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-product-detail-launch]');
+      if (!button) return;
+      const product = getStoredProductById(button.dataset.productDetailLaunch);
+      if (product) openProductDetailModal(product);
+    });
 
     const selectButton = event.target.closest('[data-cart-select-id]');
     if (selectButton) {
@@ -6044,8 +6081,8 @@ if (sidebarAddressList) {
   });
 }
 
-if (productGrid) {
-  productGrid.addEventListener('click', (event) => {
+    if (productGrid) {
+      productGrid.addEventListener('click', (event) => {
     const actionButton = event.target.closest('button');
     if (!actionButton) {
       return;
@@ -6053,11 +6090,12 @@ if (productGrid) {
 
     const productCard = actionButton.closest('[data-product-id]');
     const productId = productCard?.dataset.productId;
-    const product = getStoredProductById(productId);
+        const product = getStoredProductById(productId);
 
-    if (!product) {
-      return;
-    }
+        if (!product) {
+          return;
+        }
+        if (actionButton.dataset.productDetailLaunch) { openProductDetailModal(product); return; }
 
     if (actionButton.dataset.productSkuId) {
       setSelectedSku(product.id, actionButton.dataset.productSkuId);
@@ -6111,13 +6149,30 @@ if (secondaryCta) {
   });
 }
 
-window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
+    window.addEventListener('keydown', (event) => {
+      if (!productLightbox?.hidden) {
+        if (event.key === 'ArrowRight') { moveLightbox(1); return; }
+        if (event.key === 'ArrowLeft') { moveLightbox(-1); return; }
+        if (event.key === 'Escape') { closeLightbox(); return; }
+      }
+      if (event.key === 'Escape') {
     closeAuthModal();
     closeSidebar();
     closePurchaseModal();
   }
-});
+    });
+
+    productDetailModal?.addEventListener('click', (event) => {
+      if (event.target.closest('[data-product-detail-close]')) { closeProductDetailModal(); return; }
+      const thumb = event.target.closest('[data-product-detail-thumb]');
+      if (thumb) { openLightbox(detailProduct, Number(thumb.dataset.productDetailThumb)); return; }
+      if (event.target.closest('[data-product-detail-image]')) openLightbox(detailProduct, 0);
+    });
+    productLightbox?.addEventListener('click', (event) => {
+      if (event.target.closest('[data-lightbox-close]')) closeLightbox();
+      else if (event.target.closest('[data-lightbox-next]')) moveLightbox(1);
+      else if (event.target.closest('[data-lightbox-prev]')) moveLightbox(-1);
+    });
 
 if ('scrollRestoration' in window.history) {
   window.history.scrollRestoration = 'manual';

@@ -11,11 +11,11 @@
 | R7 | Decoupled payment | embedded second-stage payment, guards, row lock, paid idempotency | checkout/backend tests | live DB blocked | UI automation blocked | PARTIAL |
 | R8 | Buyer remark | trimmed 0-200 UI/API/backend persistence contract | migration/backend/checkout tests | live DB blocked | UI automation blocked | PARTIAL |
 | R9 | Availability state | pending | baseline availability tests pass | pending | pending | PENDING |
-| R10 | Shared product details | pending | pending | pending | pending | PENDING |
+| R10 | Shared product details | shared modal from product and favorite cards using DB description | Phase06 contract | live DB blocked | UI automation blocked | PARTIAL |
 | R11 | Responsive close controls | pending | pending | pending | pending | PENDING |
 | R12 | Favorite/cart visual state | pending | pending | pending | pending | PENDING |
 | R13 | Favorite/cart badges | distinct product/SKU-row badges, zero hidden, `99+` cap | storefront contract test | state derived from DB cache | UI automation blocked | PARTIAL |
-| R14 | Multi-image lightbox | pending | baseline gallery tests pass | pending | pending | PENDING |
+| R14 | Multi-image lightbox | sorted thumbnails and shared accessible lightbox | Phase06 and baseline gallery tests | backend image ordering contract | UI automation blocked | PARTIAL |
 | R15 | Operation log | creates or safely extends non-sensitive operation metadata | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
 | R16 | Simplified footer | pending | pending | pending | pending | PENDING |
 | R17 | Simplified products heading | pending | pending | pending | pending | PENDING |

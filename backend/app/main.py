@@ -21,8 +21,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://127.0.0.1:5500",
-        "http://localhost:5500",
+        "http://127.0.0.1:5800",
+        "http://localhost:5800",
         "http://127.0.0.1:8050",
         "http://localhost:8050",
         "https://laananed.github.io",
@@ -139,6 +139,18 @@ def attach_product_images(conn, rows: list[dict]) -> list[dict]:
             }]
         row["images"] = images
         row["image_count"] = len(images)
+    return rows
+
+
+def serialize_sku_rows(rows: list[dict]) -> list[dict]:
+    """为前后台统一补充结构化 SKU 别名，同时保留数据库原字段。"""
+    for row in rows:
+        row["sku_code"] = row.get("sku_code")
+        row["color"] = row.get("color_name")
+        row["size"] = row.get("size_name")
+        row["stock"] = int(row.get("available_stock") or 0)
+        row["on_sale"] = 1 if row.get("sku_status") == "ON_SALE" else 0
+        row["sku_is_deleted"] = int(row.get("sku_is_deleted") or 0)
     return rows
 
 
@@ -303,6 +315,24 @@ class ProductCreateRequest(BaseModel):
 class AdminStockUpdateRequest(BaseModel):
     sku_id: int = Field(..., gt=0, description="要修改库存的 SKU ID")
     available_stock: int = Field(..., ge=0, description="新的可用库存数量")
+
+
+class AdminSkuPayload(BaseModel):
+    sku_code: str = Field(..., min_length=1, max_length=100)
+    sku_name: str | None = Field(None, max_length=100)
+    color: str = Field(..., min_length=1, max_length=50)
+    size: str = Field(..., min_length=1, max_length=30)
+    price: float = Field(..., gt=0)
+    stock: int = Field(..., ge=0)
+    on_sale: int = Field(1, ge=0, le=1)
+
+
+class AdminSkuBatchCreateRequest(BaseModel):
+    skus: list[AdminSkuPayload] = Field(..., min_length=1)
+
+
+class AdminSkuUpdateRequest(AdminSkuPayload):
+    pass
 
 
 class AdminProductStatusUpdateRequest(BaseModel):
@@ -541,9 +571,13 @@ def get_products():
                         image_url,
                         product_status,
                         sku_id,
+                        sku_code,
                         sku_name,
+                        color_name,
+                        size_name,
                         price,
                         sku_status,
+                        sku_is_deleted,
                         available_stock,
                         locked_stock,
                         total_sold_count,
@@ -556,6 +590,7 @@ def get_products():
                 """
                 cursor.execute(sql)
                 rows = cursor.fetchall()
+                rows = serialize_sku_rows(rows)
                 rows = attach_product_images(conn, rows)
 
         return {
@@ -617,22 +652,101 @@ def admin_login(req: AdminLoginRequest):
         )
 
 
+def normalize_sku_status(on_sale, index: int) -> str:
+    if on_sale in (1, True, "1", "ON_SALE", "on_sale"):
+        return "ON_SALE"
+    if on_sale in (0, False, "0", "OFF_SALE", "off_sale"):
+        return "OFF_SALE"
+    raise HTTPException(
+        status_code=400,
+        detail=f"第 {index} 行 SKU 在售状态只能是 0 或 1"
+    )
+
+
+def normalize_structured_sku_rows(sku_rows: list[dict]) -> list[dict]:
+    parsed_rows = []
+    seen_codes = set()
+    seen_dimensions = set()
+
+    for index, row in enumerate(sku_rows, start=1):
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 格式错误")
+
+        sku_code = str(row.get("sku_code") or "").strip()
+        color = str(row.get("color") or "").strip()
+        size = str(row.get("size") or "").strip()
+        sku_name = str(row.get("sku_name") or "").strip() or f"{color} / {size}"
+        price_value = row.get("price")
+        stock_value = row.get("stock", row.get("available_stock"))
+        status = normalize_sku_status(row.get("on_sale", 1), index)
+
+        if not sku_code:
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 编码不能为空")
+        if not color:
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 颜色不能为空")
+        if not size:
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 尺码不能为空")
+        if len(sku_code) > 100 or len(sku_name) > 100 or len(color) > 50 or len(size) > 30:
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 字段长度超出限制")
+
+        try:
+            current_price = float(price_value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 价格不正确")
+
+        try:
+            current_stock = int(stock_value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 库存不正确")
+
+        if current_price <= 0:
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 价格必须大于 0")
+        if isinstance(stock_value, bool) or current_stock < 0 or float(stock_value) != current_stock:
+            raise HTTPException(status_code=400, detail=f"第 {index} 行 SKU 库存必须是大于等于 0 的整数")
+
+        code_key = sku_code.casefold()
+        dimension_key = (color.casefold(), size.casefold())
+        if code_key in seen_codes:
+            raise HTTPException(status_code=400, detail=f"SKU 编码重复：{sku_code}")
+        if dimension_key in seen_dimensions:
+            raise HTTPException(status_code=400, detail=f"颜色和尺码组合重复：{color} / {size}")
+
+        seen_codes.add(code_key)
+        seen_dimensions.add(dimension_key)
+        parsed_rows.append({
+            "sku_code": sku_code,
+            "sku_name": sku_name,
+            "color": color,
+            "size": size,
+            "price": current_price,
+            "stock": current_stock,
+            "available_stock": current_stock,
+            "status": status,
+            "on_sale": 1 if status == "ON_SALE" else 0,
+        })
+
+    return parsed_rows
+
+
 def parse_product_skus(
     skus_json: str | None,
     sku_name: str,
     price: float,
     available_stock: int
 ):
-    """
-    瑙ｆ瀽鍚庡彴涓婃灦鍟嗗搧鏃朵紶鍏ョ殑 SKU 鍒楄〃銆?
-    濡傛灉 skus_json 涓虹┖锛屽垯鍥為€€涓哄崟 SKU銆?
-    """
+    """解析 multipart 中的结构化 SKU JSON，并保留旧单规格兼容入口。"""
     if not skus_json or not skus_json.strip():
         return [
             {
-                "sku_name": (sku_name or "榛樿瑙勬牸").strip() or "榛樿瑙勬牸",
+                "sku_code": None,
+                "sku_name": (sku_name or "默认规格").strip() or "默认规格",
+                "color": None,
+                "size": None,
                 "price": float(price),
+                "stock": int(available_stock),
                 "available_stock": int(available_stock),
+                "status": "ON_SALE",
+                "on_sale": 1,
             }
         ]
 
@@ -650,77 +764,53 @@ def parse_product_skus(
             detail="多 SKU 至少需要填写一条规格"
         )
 
-    parsed_rows = []
-    seen_names = set()
+    return normalize_structured_sku_rows(sku_rows)
 
-    for index, row in enumerate(sku_rows, start=1):
-        if not isinstance(row, dict):
-            raise HTTPException(
-                status_code=400,
-                detail=f"第 {index} 行 SKU 格式错误"
-            )
 
-        current_name = str(row.get("sku_name") or "").strip()
-        current_price = row.get("price")
-        current_stock = row.get("available_stock")
+def ensure_admin_sku_unique(cursor, product_id: int, sku_row: dict, exclude_sku_id: int = 0) -> None:
+    sku_code = sku_row.get("sku_code")
+    color = sku_row.get("color")
+    size = sku_row.get("size")
 
-        if not current_name:
-            raise HTTPException(
-                status_code=400,
-                detail=f"绗?{index} 鏉?SKU 鍚嶇О涓嶈兘涓虹┖"
-            )
-
-        if current_name in seen_names:
-            raise HTTPException(
-                status_code=400,
-                detail=f"SKU 名称重复：{current_name}"
-            )
-
-        try:
-            current_price = float(current_price)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400,
-                detail=f"第 {index} 行 SKU 价格不正确"
-            )
-
-        try:
-            current_stock = int(current_stock)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400,
-                detail=f"第 {index} 行 SKU 库存不正确"
-            )
-
-        if current_price <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"绗?{index} 鏉?SKU 浠锋牸蹇呴』澶т簬 0"
-            )
-
-        if current_stock < 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"绗?{index} 鏉?SKU 搴撳瓨涓嶈兘灏忎簬 0"
-            )
-
-        seen_names.add(current_name)
-
-        parsed_rows.append(
-            {
-                "sku_name": current_name,
-                "price": current_price,
-                "available_stock": current_stock,
-            }
+    if sku_code:
+        cursor.execute(
+            """
+            SELECT id
+            FROM product_sku
+            WHERE sku_code = %s
+              AND id <> %s
+            LIMIT 1
+            """,
+            (sku_code, exclude_sku_id)
         )
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail=f"SKU 编码已存在：{sku_code}")
 
-    return parsed_rows
+    if color and size:
+        cursor.execute(
+            """
+            SELECT id
+            FROM product_sku
+            WHERE product_id = %s
+              AND color_name = %s
+              AND size_name = %s
+              AND is_deleted = 0
+              AND id <> %s
+            LIMIT 1
+            """,
+            (product_id, color, size, exclude_sku_id)
+        )
+        if cursor.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail=f"颜色和尺码组合已存在：{color} / {size}"
+            )
 
 @app.post("/products")
 async def create_product(
     category_name: str = Form(...),
     product_name: str = Form(...),
-    sku_name: str = Form("榛樿瑙勬牸"),
+    sku_name: str = Form("默认规格"),
     price: float = Form(...),
     available_stock: int = Form(...),
     skus_json: str | None = Form(None),
@@ -737,7 +827,7 @@ async def create_product(
 
     category_name = category_name.strip()
     product_name = product_name.strip()
-    sku_name = sku_name.strip() or "榛樿瑙勬牸"
+    sku_name = sku_name.strip() or "默认规格"
 
     if not category_name:
         raise HTTPException(status_code=400, detail="鍟嗗搧鍒嗙被涓嶈兘涓虹┖")
@@ -824,21 +914,29 @@ async def create_product(
                     sku_ids = []
 
                     for sku_row in sku_rows:
+                        ensure_admin_sku_unique(cursor, product_id, sku_row)
                         cursor.execute(
                             """
                             INSERT INTO product_sku(
                                 product_id,
+                                sku_code,
                                 sku_name,
+                                color_name,
+                                size_name,
                                 price,
                                 status,
                                 is_deleted
                             )
-                            VALUES(%s, %s, %s, 'ON_SALE', 0)
+                            VALUES(%s, %s, %s, %s, %s, %s, %s, 0)
                             """,
                             (
                                 product_id,
+                                sku_row["sku_code"],
                                 sku_row["sku_name"],
+                                sku_row["color"],
+                                sku_row["size"],
                                 sku_row["price"],
+                                sku_row["status"],
                             )
                         )
                         sku_id = cursor.lastrowid
@@ -855,7 +953,7 @@ async def create_product(
                             """,
                             (
                                 sku_id,
-                                sku_row["available_stock"],
+                                sku_row["stock"],
                             )
                         )
 
@@ -886,9 +984,13 @@ async def create_product(
                             image_url,
                             product_status,
                             sku_id,
+                            sku_code,
                             sku_name,
+                            color_name,
+                            size_name,
                             price,
                             sku_status,
+                            sku_is_deleted,
                             available_stock,
                             locked_stock,
                             total_sold_count,
@@ -903,6 +1005,7 @@ async def create_product(
                         (product_id,)
                     )
                     rows = cursor.fetchall()
+                    rows = serialize_sku_rows(rows)
                     rows = attach_product_images(conn, rows)
 
             except Exception:
@@ -1266,6 +1369,38 @@ def query_cart_rows(conn, user_id: int):
         return cursor.fetchall()
 
 
+def validate_sku_for_purchase(conn, sku_id: int, quantity: int) -> dict:
+    """在调用既有存储过程前给出清晰校验；存储过程仍负责事务内最终复核。"""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                s.id AS sku_id,
+                s.status AS sku_status,
+                s.is_deleted AS sku_is_deleted,
+                p.status AS product_status,
+                p.is_deleted AS product_is_deleted,
+                COALESCE(i.available_stock, 0) AS available_stock
+            FROM product_sku s
+            JOIN product p ON s.product_id = p.id
+            LEFT JOIN inventory i ON s.id = i.sku_id
+            WHERE s.id = %s
+              AND s.status = 'ON_SALE'
+              AND s.is_deleted = 0
+              AND p.status = 'ON_SALE'
+              AND p.is_deleted = 0
+            """,
+            (sku_id,)
+        )
+        sku = cursor.fetchone()
+
+    if not sku:
+        raise HTTPException(status_code=400, detail="SKU 不存在、已删除或未上架")
+    if int(sku["available_stock"] or 0) < quantity:
+        raise HTTPException(status_code=400, detail="SKU 库存不足")
+    return sku
+
+
 @app.get("/addresses/user/{user_id}")
 def get_user_addresses(user_id: int):
     """
@@ -1587,6 +1722,9 @@ def add_to_cart(req: CartAddRequest):
             "cart_total_amount": total_amount,
             "data": jsonable_encoder(rows)
         }
+
+    except HTTPException:
+        raise
 
     except MySQLError as e:
         # MySQL 瀛樺偍杩囩▼ SIGNAL 鎶涘嚭鐨勯敊璇紝閫氬父鍦?e.args[1]
@@ -2115,6 +2253,7 @@ def create_direct_order(req: DirectOrderRequest):
     try:
         with get_db() as conn:
             try:
+                validate_sku_for_purchase(conn, req.sku_id, req.quantity)
                 with conn.cursor() as cursor:
                     # 1. 璋冪敤鐩存帴涓嬪崟瀛樺偍杩囩▼锛岀敤 MySQL 鐢ㄦ埛鍙橀噺鎺ユ敹 OUT 鍙傛暟
                     cursor.execute(
@@ -2245,6 +2384,9 @@ def create_direct_order(req: DirectOrderRequest):
             "order_items": jsonable_encoder(order_items),
             "inventory_logs": jsonable_encoder(inventory_logs)
         }
+
+    except HTTPException:
+        raise
 
     except MySQLError as e:
         error_message = e.args[1] if len(e.args) > 1 else str(e)
@@ -2380,6 +2522,7 @@ def refund_order(req: RefundOrderRequest):
     try:
         with get_db() as conn:
             try:
+                validate_sku_for_purchase(conn, req.sku_id, req.quantity)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -3044,6 +3187,315 @@ def get_admin_stats(authorization: str | None = Header(None)):
             detail=f"查询后台销量统计失败：{str(e)}"
         )
 
+def admin_sku_payload_to_row(payload: AdminSkuPayload) -> dict:
+    return normalize_structured_sku_rows([{
+        "sku_code": payload.sku_code,
+        "sku_name": payload.sku_name,
+        "color": payload.color,
+        "size": payload.size,
+        "price": payload.price,
+        "stock": payload.stock,
+        "on_sale": payload.on_sale,
+    }])[0]
+
+
+def query_admin_product_skus(conn, product_id: int) -> list[dict]:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                p.id AS product_id,
+                p.name AS product_name,
+                p.status AS product_status,
+                s.id AS sku_id,
+                s.sku_code,
+                s.sku_name,
+                s.color_name,
+                s.size_name,
+                s.price,
+                s.status AS sku_status,
+                s.is_deleted AS sku_is_deleted,
+                COALESCE(i.available_stock, 0) AS available_stock,
+                COALESCE(i.locked_stock, 0) AS locked_stock,
+                i.updated_at AS inventory_updated_at
+            FROM product p
+            JOIN product_sku s ON p.id = s.product_id
+            LEFT JOIN inventory i ON s.id = i.sku_id
+            WHERE p.id = %s
+              AND p.is_deleted = 0
+            ORDER BY s.is_deleted ASC, s.id ASC
+            """,
+            (product_id,)
+        )
+        return serialize_sku_rows(cursor.fetchall())
+
+
+@app.get("/admin/products/{product_id}/skus")
+def get_admin_product_skus(product_id: int, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            rows = query_admin_product_skus(conn, product_id)
+        if not rows:
+            raise HTTPException(status_code=404, detail="商品不存在或没有 SKU")
+        return {
+            "success": True,
+            "message": "查询商品 SKU 成功",
+            "product_id": product_id,
+            "count": len(rows),
+            "data": jsonable_encoder(rows),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询商品 SKU 失败：{str(e)}")
+
+
+@app.post("/admin/products/{product_id}/skus")
+def create_admin_product_skus(
+    product_id: int,
+    req: AdminSkuBatchCreateRequest,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    sku_rows = normalize_structured_sku_rows([
+        {
+            "sku_code": item.sku_code,
+            "sku_name": item.sku_name,
+            "color": item.color,
+            "size": item.size,
+            "price": item.price,
+            "stock": item.stock,
+            "on_sale": item.on_sale,
+        }
+        for item in req.skus
+    ])
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM product
+                        WHERE id = %s AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    if not cursor.fetchone():
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+
+                    created_sku_ids = []
+                    for sku_row in sku_rows:
+                        ensure_admin_sku_unique(cursor, product_id, sku_row)
+                        cursor.execute(
+                            """
+                            INSERT INTO product_sku(
+                                product_id, sku_code, sku_name, color_name,
+                                size_name, price, status, is_deleted
+                            )
+                            VALUES(%s, %s, %s, %s, %s, %s, %s, 0)
+                            """,
+                            (
+                                product_id,
+                                sku_row["sku_code"],
+                                sku_row["sku_name"],
+                                sku_row["color"],
+                                sku_row["size"],
+                                sku_row["price"],
+                                sku_row["status"],
+                            )
+                        )
+                        sku_id = cursor.lastrowid
+                        created_sku_ids.append(sku_id)
+                        cursor.execute(
+                            """
+                            INSERT INTO inventory(sku_id, available_stock, locked_stock)
+                            VALUES(%s, %s, 0)
+                            """,
+                            (sku_id, sku_row["stock"])
+                        )
+                        cursor.execute(
+                            """
+                            INSERT INTO product_sales_stat(sku_id, total_sold_count, total_sales_amount)
+                            VALUES(%s, 0, 0.00)
+                            """,
+                            (sku_id,)
+                        )
+                conn.commit()
+                rows = query_admin_product_skus(conn, product_id)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "新增 SKU 组合成功",
+            "product_id": product_id,
+            "sku_ids": created_sku_ids,
+            "count": len(created_sku_ids),
+            "data": jsonable_encoder(rows),
+        }
+    except HTTPException:
+        raise
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(status_code=400, detail=f"新增 SKU 失败：{error_message}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"新增 SKU 失败：{str(e)}")
+
+
+@app.patch("/admin/products/{product_id}/skus/{sku_id}")
+def update_admin_product_sku(
+    product_id: int,
+    sku_id: int,
+    req: AdminSkuUpdateRequest,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    sku_row = admin_sku_payload_to_row(req)
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM product_sku
+                        WHERE id = %s
+                          AND product_id = %s
+                          AND is_deleted = 0
+                        FOR UPDATE
+                        """,
+                        (sku_id, product_id)
+                    )
+                    if not cursor.fetchone():
+                        raise HTTPException(status_code=404, detail="SKU 不存在、已删除或不属于该商品")
+
+                    ensure_admin_sku_unique(cursor, product_id, sku_row, sku_id)
+                    cursor.execute(
+                        """
+                        UPDATE product_sku
+                        SET sku_code = %s,
+                            sku_name = %s,
+                            color_name = %s,
+                            size_name = %s,
+                            price = %s,
+                            status = %s
+                        WHERE id = %s AND product_id = %s AND is_deleted = 0
+                        """,
+                        (
+                            sku_row["sku_code"],
+                            sku_row["sku_name"],
+                            sku_row["color"],
+                            sku_row["size"],
+                            sku_row["price"],
+                            sku_row["status"],
+                            sku_id,
+                            product_id,
+                        )
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory(sku_id, available_stock, locked_stock)
+                        VALUES(%s, %s, 0)
+                        ON DUPLICATE KEY UPDATE available_stock = VALUES(available_stock)
+                        """,
+                        (sku_id, sku_row["stock"])
+                    )
+                conn.commit()
+                rows = query_admin_product_skus(conn, product_id)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+
+        updated_row = next(row for row in rows if int(row["sku_id"]) == sku_id)
+        return {
+            "success": True,
+            "message": "SKU 修改成功",
+            "product_id": product_id,
+            "sku_id": sku_id,
+            "data": jsonable_encoder(updated_row),
+        }
+    except HTTPException:
+        raise
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(status_code=400, detail=f"修改 SKU 失败：{error_message}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"修改 SKU 失败：{str(e)}")
+
+
+@app.delete("/admin/products/{product_id}/skus/{sku_id}")
+def delete_admin_product_sku(
+    product_id: int,
+    sku_id: int,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM product_sku
+                        WHERE product_id = %s AND is_deleted = 0
+                        ORDER BY id
+                        FOR UPDATE
+                        """,
+                        (product_id,)
+                    )
+                    active_sku_ids = [int(row["id"]) for row in cursor.fetchall()]
+                    if sku_id not in active_sku_ids:
+                        raise HTTPException(status_code=404, detail="SKU 不存在、已删除或不属于该商品")
+                    if len(active_sku_ids) <= 1:
+                        raise HTTPException(status_code=400, detail="不允许删除最后一个未删除 SKU")
+
+                    cursor.execute(
+                        """
+                        UPDATE product_sku
+                        SET is_deleted = 1,
+                            status = 'OFF_SALE'
+                        WHERE id = %s AND product_id = %s AND is_deleted = 0
+                        """,
+                        (sku_id, product_id)
+                    )
+                conn.commit()
+                rows = query_admin_product_skus(conn, product_id)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "SKU 已逻辑删除",
+            "product_id": product_id,
+            "sku_id": sku_id,
+            "data": jsonable_encoder(rows),
+        }
+    except HTTPException:
+        raise
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(status_code=400, detail=f"删除 SKU 失败：{error_message}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除 SKU 失败：{str(e)}")
+
+
 @app.get("/admin/inventory")
 def get_admin_inventory(authorization: str | None = Header(None)):
     """
@@ -3065,9 +3517,13 @@ def get_admin_inventory(authorization: str | None = Header(None)):
                         image_url,
                         product_status,
                         sku_id,
+                        sku_code,
                         sku_name,
+                        color_name,
+                        size_name,
                         price,
                         sku_status,
+                        sku_is_deleted,
                         available_stock,
                         locked_stock,
                         total_sold_count,
@@ -3080,6 +3536,7 @@ def get_admin_inventory(authorization: str | None = Header(None)):
                     """
                 )
                 rows = cursor.fetchall()
+                rows = serialize_sku_rows(rows)
                 rows = attach_product_images(conn, rows)
 
         return {
@@ -3102,6 +3559,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
     后台修改 SKU 可用库存。
     注意：这里修改的是 available_stock，不直接修改 locked_stock。
     """
+    require_admin_user(authorization)
     try:
         with get_db() as conn:
             try:
@@ -3173,9 +3631,13 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                             image_url,
                             product_status,
                             sku_id,
+                            sku_code,
                             sku_name,
+                            color_name,
+                            size_name,
                             price,
                             sku_status,
+                            sku_is_deleted,
                             available_stock,
                             locked_stock,
                             total_sold_count,
@@ -3189,6 +3651,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                         (req.sku_id,)
                     )
                     row = cursor.fetchone()
+                    serialize_sku_rows([row])
                     attach_product_images(conn, [row])
 
             except HTTPException:
@@ -3288,9 +3751,13 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                             image_url,
                             product_status,
                             sku_id,
+                            sku_code,
                             sku_name,
+                            color_name,
+                            size_name,
                             price,
                             sku_status,
+                            sku_is_deleted,
                             available_stock,
                             locked_stock,
                             total_sold_count,
@@ -3305,6 +3772,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                         (req.product_id,)
                     )
                     rows = cursor.fetchall()
+                    rows = serialize_sku_rows(rows)
                     rows = attach_product_images(conn, rows)
 
             except HTTPException:

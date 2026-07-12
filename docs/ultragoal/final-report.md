@@ -8,6 +8,7 @@ Status: IN_PROGRESS
 - Phase commits and pushes: Phase 00 pending; Phases 01-09 pending
 - Migrations: Phase 01 migration implemented; live execution credential-blocked by MySQL `ERROR 1045`
 - APIs: Phase 02 catalog, favorite, category, tag, image, and order metadata APIs implemented
+- Admin: Phase 03 catalog filters, metadata editing, selection, bulk tags, and image reorder integration implemented
 - Automated tests: baseline 78/78 passed; JS syntax and Python compile passed
 - Browser evidence: pending under ignored `artifacts/ultragoal/`
 - Requirements: 0 PASS, 9 PARTIAL, 0 BLOCKED, 10 PENDING

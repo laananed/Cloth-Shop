@@ -3633,6 +3633,13 @@ function initAdminPage() {
   const adminProductSearchInput = shell.querySelector('[data-admin-product-search]');
   const adminProductSearchClear = shell.querySelector('[data-admin-product-search-clear]');
   const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
+  const adminCategoryFilter = shell.querySelector('[data-admin-category-filter]');
+  const adminSelectFiltered = shell.querySelector('[data-admin-select-filtered]');
+  const adminClearSelection = shell.querySelector('[data-admin-clear-selection]');
+  const adminSelectedCount = shell.querySelector('[data-admin-selected-count]');
+  const adminBulkTagMode = shell.querySelector('[data-admin-bulk-tag-mode]');
+  const adminBulkTagIds = shell.querySelector('[data-admin-bulk-tag-ids]');
+  const adminBulkTagSubmit = shell.querySelector('[data-admin-bulk-tag-submit]');
   const productForm = shell.querySelector('[data-admin-product-form]');
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
@@ -3670,6 +3677,8 @@ function initAdminPage() {
     { value: 'OFF_SALE', label: '已下架' },
   ];
   let activeAdminProductFilter = 'ALL';
+  let activeAdminCategoryFilter = 'ALL';
+  const selectedAdminProductIds = new Set();
   let activeAdminProductSearchKeyword = "";
 
   function resetAdminDashboardState() {
@@ -3748,8 +3757,9 @@ function initAdminPage() {
         activeAdminProductFilter === 'ALL' ||
         getAdminProductSaleState(row).key === activeAdminProductFilter;
       const matchSearch = matchesAdminProductSearch(row);
+      const matchCategory = activeAdminCategoryFilter === 'ALL' || row.category === activeAdminCategoryFilter;
 
-      return matchStatus && matchSearch;
+      return matchStatus && matchSearch && matchCategory;
     });
   }
 
@@ -4129,6 +4139,8 @@ function convertApiStatsToRenderedStats(result) {
       return {
         name: `${row.product_name || "未知商品"} / ${row.sku_name || "默认规格"}`,
         category: row.category_name || "未分类",
+        description: row.description || "",
+        tags: Array.isArray(row.tags) ? row.tags : [],
         unitsLabel: `销量 ${Number(row.total_sold_count || 0)} 件`,
         revenueLabel: formatPrice(revenue),
         barWidth,
@@ -4386,6 +4398,12 @@ async function refreshAdminProductsFromApi() {
 
   function renderProducts() {
     const allRows = Array.isArray(renderedProducts?.rows) ? renderedProducts.rows : [];
+    if (adminSelectedCount) adminSelectedCount.textContent = `已选 ${selectedAdminProductIds.size} 项`;
+    if (adminCategoryFilter) {
+      const categories = [...new Set(allRows.map((row) => row.category).filter(Boolean))].sort();
+      adminCategoryFilter.innerHTML = '<option value="ALL">全部分类</option>' + categories.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+      adminCategoryFilter.value = categories.includes(activeAdminCategoryFilter) ? activeAdminCategoryFilter : 'ALL';
+    }
     const searchKeyword = String(activeAdminProductSearchKeyword || "").trim();
     const counts = {
       all: allRows.length,
@@ -4442,6 +4460,7 @@ async function refreshAdminProductsFromApi() {
 
         return `
           <article class="admin-row admin-product-row" data-admin-product-id="${row.productId}">
+            <label class="admin-product-select"><input type="checkbox" data-admin-product-select="${row.productId}" ${selectedAdminProductIds.has(Number(row.productId)) ? 'checked' : ''} /> 选择</label>
             <div class="admin-product-row__main">
               <div class="admin-product-thumb-wrap">
                 ${
@@ -4465,6 +4484,8 @@ async function refreshAdminProductsFromApi() {
                 <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
                 <span>状态：${escapeHtml(statusLabel)} · 图片 ${escapeHtml(imageCount)} 张 · ${escapeHtml(row.imageLabel)}</span>
                 <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
+                <label class="admin-field"><span>商品介绍</span><textarea data-admin-product-description="${row.productId}" rows="3">${escapeHtml(row.description || '')}</textarea></label>
+                <button type="button" class="ghost-button ghost-button--small" data-admin-product-metadata-save="${row.productId}">保存介绍</button>
 
                 <div class="admin-sku-list">
                   ${row.skuList
@@ -4649,6 +4670,35 @@ async function deleteAdminProductToApi(productId) {
 
   return result;
 }
+
+async function loadAdminCategoriesToApi() {
+  return adminFetch(`${API_BASE_URL}/admin/categories`);
+}
+
+async function loadAdminTagsToApi() {
+  return adminFetch(`${API_BASE_URL}/admin/tags`);
+}
+
+async function updateAdminProductMetadataToApi(productId, description, categoryId = null, tagIds = []) {
+  return adminFetch(`${API_BASE_URL}/admin/products/${productId}/metadata`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description, category_id: categoryId, tag_ids: tagIds }),
+  });
+}
+
+async function bulkAdminTagsToApi(productIds, tagIds, mode) {
+  return adminFetch(`${API_BASE_URL}/admin/tags/bulk`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ product_ids: productIds, tag_ids: tagIds, mode }),
+  });
+}
+
+async function reorderAdminProductImagesToApi(productId, images) {
+  return adminFetch(`${API_BASE_URL}/admin/products/${productId}/images/reorder`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ images: images.map((image, index) => ({ image_id: image.id, sort_order: image.sort_order ?? index, is_main: Boolean(image.is_main) })) }),
+  });
+}
   
 function parseAdminSkuRows(values) {
   const rawText = String(values.skuRows || "").trim();
@@ -4670,7 +4720,8 @@ function parseAdminSkuRows(values) {
 
       const skuName = parts[0];
       const price = Number(parts[1]);
-      const availableStock = Number(parts[2]);
+      const stockText = parts[2];
+      const availableStock = stockText === "" ? 50 : Number(stockText);
 
       if (!skuName) {
         throw new Error(`第 ${index + 1} 行 SKU 名称不能为空`);
@@ -5117,6 +5168,27 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     });
   }
 
+  adminCategoryFilter?.addEventListener('change', () => {
+    activeAdminCategoryFilter = adminCategoryFilter.value || 'ALL';
+    renderProducts();
+  });
+
+  adminSelectFiltered?.addEventListener('click', () => {
+    getFilteredAdminProductRows(renderedProducts?.rows || []).forEach((row) => selectedAdminProductIds.add(Number(row.productId)));
+    renderProducts();
+  });
+
+  adminClearSelection?.addEventListener('click', () => {
+    selectedAdminProductIds.clear();
+    renderProducts();
+  });
+
+  adminBulkTagSubmit?.addEventListener('click', async () => {
+    const tagIds = String(adminBulkTagIds?.value || '').split(',').map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    await bulkAdminTagsToApi([...selectedAdminProductIds], tagIds, adminBulkTagMode?.value || 'add');
+    await refreshAdminProductsFromApi();
+  });
+
   if (ordersBody) {
     ordersBody.addEventListener("click", async (event) => {
       const detailButton = event.target.closest("[data-admin-order-detail-id]");
@@ -5322,6 +5394,21 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   });
 
   productList.addEventListener("click", async (event) => {
+      const selectInput = event.target.closest('[data-admin-product-select]');
+      const metadataButton = event.target.closest('[data-admin-product-metadata-save]');
+      if (selectInput) {
+        const productId = Number(selectInput.dataset.adminProductSelect);
+        selectInput.checked ? selectedAdminProductIds.add(productId) : selectedAdminProductIds.delete(productId);
+        if (adminSelectedCount) adminSelectedCount.textContent = `已选 ${selectedAdminProductIds.size} 项`;
+        return;
+      }
+      if (metadataButton) {
+        const productId = Number(metadataButton.dataset.adminProductMetadataSave);
+        const description = productList.querySelector(`[data-admin-product-description="${productId}"]`)?.value || '';
+        await updateAdminProductMetadataToApi(productId, description);
+        await refreshAdminProductsFromApi();
+        return;
+      }
     const stockButton = event.target.closest("[data-admin-stock-save]");
     const statusButton = event.target.closest("[data-admin-product-status-id]");
     const deleteButton = event.target.closest("[data-admin-product-delete-id]");

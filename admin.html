@@ -133,6 +133,20 @@
 
               <div class="admin-product-filter" data-admin-product-filter-bar></div>
 
+              <div class="admin-product-filter admin-catalog-toolbar">
+                <label>商品分类
+                  <select data-admin-category-filter><option value="ALL">全部分类</option></select>
+                </label>
+                <button type="button" class="ghost-button ghost-button--small" data-admin-select-filtered>选择当前筛选</button>
+                <button type="button" class="ghost-button ghost-button--small" data-admin-clear-selection>清空选择</button>
+                <strong data-admin-selected-count>已选 0 项</strong>
+                <select data-admin-bulk-tag-mode aria-label="批量标签操作">
+                  <option value="add">批量添加标签</option><option value="remove">批量移除标签</option><option value="replace">批量替换全部标签</option>
+                </select>
+                <input type="text" data-admin-bulk-tag-ids placeholder="标签 ID，例如 1,2" />
+                <button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-bulk-tag-submit>应用标签</button>
+              </div>
+
               <p class="admin-feedback" data-admin-product-manage-feedback aria-live="polite"></p>
 
               <div class="admin-list" data-admin-products-list></div>

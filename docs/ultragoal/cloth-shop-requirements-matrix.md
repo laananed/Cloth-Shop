@@ -19,7 +19,7 @@
 | R15 | Operation log | creates or safely extends non-sensitive operation metadata | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
 | R16 | Simplified footer | pending | pending | pending | pending | PENDING |
 | R17 | Simplified products heading | pending | pending | pending | pending | PENDING |
-| R18 | Categories and multiple tags | protected uncategorized, six seeds, tag and relation tables, tag-aware view | migration contract tests | live DB blocked by `ERROR 1045` | pending | PARTIAL |
+| R18 | Categories and multiple tags | DB schema/APIs plus admin combined filter, real-ID multi-select, and bulk tag controls | migration, backend, and admin contract tests | live DB blocked by `ERROR 1045` | UI automation blocked | PARTIAL |
 | R19 | Promotional copy | pending | pending | pending | pending | PENDING |
 
 Rows move to `PASS`, `PARTIAL`, or `BLOCKED` only with concrete implementation and verification evidence.

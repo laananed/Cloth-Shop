@@ -22,6 +22,11 @@ coverage/
 
 # Logs
 *.log
+test-results/
+artifacts/ultragoal/
+backend/uploads/
+*test-screenshot*.png
+*test-image*.png
 
 # Local helper data
 .agents/

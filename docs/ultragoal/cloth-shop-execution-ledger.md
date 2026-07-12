@@ -3,7 +3,7 @@
 | Phase | Status | Evidence | Commit | Push |
 | --- | --- | --- | --- | --- |
 | 00 Baseline | COMPLETE | HEAD `c07a9dc`; baseline tests 78/78; JS syntax and Python compile passed | pending | pending |
-| 01 Database | PENDING | Not started | pending | pending |
+| 01 Database | COMPLETE_WITH_LIMITATION | `11_catalog_metadata_favorites_tags.sql`; migration contract tests 6/6; live execution blocked by unavailable DB credentials (`ERROR 1045`) | pending | PUSH_PENDING |
 | 02 Backend | PENDING | Not started | pending | pending |
 | 03 Admin | PENDING | Not started | pending | pending |
 | 04 Favorites and cart | PENDING | Not started | pending | pending |
@@ -29,3 +29,10 @@
 - Baseline tests: 78 passed, 0 failed.
 - `node --check src/main.js` and `python -m compileall backend/app` passed.
 - Repository SQL contains `v_product_detail` and `product_image`; the live database audit remains a Phase 01 prerequisite.
+
+## Phase 01 evidence
+
+- Added one repeatable MySQL 8.0.28 migration using `information_schema.COLUMNS` and prepared DDL for missing columns.
+- Added product-level favorites, categories/protection seeds, product tags/relations, buyer remarks, operation-log metadata, and a tag-aware `v_product_detail`.
+- Static safety tests prove the migration contains no destructive DML against product, inventory, orders, or images.
+- Live MySQL connection with the available default credentials failed with `ERROR 1045`; no credential values were printed or committed.

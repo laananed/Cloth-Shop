@@ -57,11 +57,11 @@
 
 当前仓库中可见的 SQL 文件包括：
 
-1. `04_create_view.sql`
-2. `06_add_refund_order.sql`
-3. `07_create_admin_user.sql`
-
-如果你本地还有其他编号更早的 SQL 文件，请按实际文件顺序继续执行。
+1. `sql语句/01_数据库结构与增量迁移.sql`
+2. `sql语句/02_视图.sql`
+3. `sql语句/03_存储过程_触发器_函数.sql`
+4. `sql语句/04_测试数据与验证.sql`
+5. `sql语句/05_账号与支付密码初始化.sql`
 
 ## 后端启动
 
@@ -89,19 +89,19 @@ http://127.0.0.1:8050/docs
 在项目根目录执行：
 
 ```bash
-python -m http.server 5800
+python -m http.server 5900
 ```
 
 前台地址：
 
 ```text
-http://127.0.0.1:5800/index.html
+http://127.0.0.1:5900/index.html
 ```
 
 后台地址：
 
 ```text
-http://127.0.0.1:5800/admin.html
+http://127.0.0.1:5900/admin.html
 ```
 
 ## 测试账号
@@ -118,8 +118,8 @@ http://127.0.0.1:5800/admin.html
 1. 启动 MySQL
 2. 启动后端 `8050`
 3. 打开 `http://127.0.0.1:8050/docs` 检查接口
-4. 启动前端 `5800`
-5. 打开 `http://127.0.0.1:5800/index.html`
+4. 启动前端 `5900`
+5. 打开 `http://127.0.0.1:5900/index.html`
 6. 使用浏览器开发者工具查看 `Console` 和 `Network`
 
 ## 常见问题

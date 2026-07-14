@@ -21,8 +21,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://127.0.0.1:5800",
-        "http://localhost:5800",
+        "http://127.0.0.1:5900",
+        "http://localhost:5900",
         "http://127.0.0.1:8050",
         "http://localhost:8050",
         "https://laananed.github.io",

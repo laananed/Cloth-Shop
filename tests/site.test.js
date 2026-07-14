@@ -2,6 +2,26 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
+test('one-click launcher prefers the cloned backend virtual environment', () => {
+  const launcher = readFileSync('start_dev.ps1', 'utf8');
+
+  assert.ok(launcher.includes("Join-Path $backendDir '.venv\\Scripts\\python.exe'"));
+  assert.ok(launcher.includes("Join-Path $rootDir '.venv\\Scripts\\python.exe'"));
+});
+
+test('frontend startup port stays aligned across launcher cors and readme', () => {
+  const launcher = readFileSync('start_dev.ps1', 'utf8');
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const readme = readFileSync('README.md', 'utf8');
+
+  assert.ok(launcher.includes("'http.server', '5900'"));
+  assert.ok(launcher.includes('Wait-ForPort -Port 5900'));
+  assert.ok(backend.includes('"http://127.0.0.1:5900"'));
+  assert.ok(backend.includes('"http://localhost:5900"'));
+  assert.ok(readme.includes('python -m http.server 5900'));
+  assert.ok(readme.includes('http://127.0.0.1:5900/index.html'));
+});
+
 import {
   getAdminImageOptions,
   getAuthCheckoutContract,
@@ -1338,7 +1358,7 @@ test('admin authentication source wiring is present', () => {
   const html = readFileSync('admin.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
   const styles = readFileSync('src/styles.css', 'utf8');
-  const sql = readFileSync('07_create_admin_user.sql', 'utf8');
+  const sql = readFileSync('sql语句/05_账号与支付密码初始化.sql', 'utf8');
 
   assert.ok(backend.includes('@app.post("/admin/login")'));
   assert.ok(backend.includes('AdminLoginRequest'));
@@ -1539,7 +1559,7 @@ test('front page exposes a visible admin entry point', () => {
 });
 
 test('[SKU-1] product sku schema supports color and size dimensions', () => {
-  const migrationPath = '11_add_product_sku_dimensions.sql';
+  const migrationPath = 'sql语句/01_数据库结构与增量迁移.sql';
 
   assert.equal(existsSync(migrationPath), true, `${migrationPath} should exist`);
 
@@ -1556,7 +1576,7 @@ test('[SKU-1] product sku schema supports color and size dimensions', () => {
 });
 
 test('[SKU-1] product detail view keeps dimensions inventory timestamps and image attachment', () => {
-  const migrationPath = '11_add_product_sku_dimensions.sql';
+  const migrationPath = 'sql语句/02_视图.sql';
 
   assert.equal(existsSync(migrationPath), true, `${migrationPath} should exist`);
 
@@ -1576,7 +1596,7 @@ test('[SKU-1] product detail view keeps dimensions inventory timestamps and imag
 
 test('[SKU-1] legacy skus retain sku names and a compatibility path', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
-  const migration = readFileSync('11_add_product_sku_dimensions.sql', 'utf8');
+  const migration = readFileSync('sql语句/02_视图.sql', 'utf8');
 
   assert.ok(backend.includes('if not skus_json or not skus_json.strip():'));
   assert.ok(backend.includes('"sku_name"'));

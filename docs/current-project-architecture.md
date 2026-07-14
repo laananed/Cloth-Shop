@@ -1,16 +1,16 @@
 # Cloth-Shop 当前项目架构
 
-- 文档生成日期：2026-07-14
+- 文档生成日期：2026-07-15
 - 当前分支：`master`
-- 当前 commit：`10627da`
+- 当前 commit：`48c4782`
 - 项目技术栈：原生 HTML/CSS/JavaScript ES Module + FastAPI + PyMySQL + MySQL 8.0.28
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 共 105 项，105 项通过；指定 JavaScript 语法检查和 Python 编译检查均通过
-- 文档基线：本文档对应 commit `10627da`（`fix: 修复用户退款申请状态流转`）中的退款代码与回归测试；本文档本身当前尚未提交
+- 当前自动测试结果：`npm.cmd test` 共 106 项，106 项通过；指定 JavaScript 语法检查和 Python 编译检查均通过
+- 文档基线：审计起始 commit 为 `48c4782`（`style: 精简前台文案与基础界面`）；本文档包含当前工作区待提交的新增商品 SKU 默认库存调整
 
-> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；本轮已连接本地 MySQL，并以专用订单完成退款申请和管理员同意的 HTTP/数据库验证，但未执行浏览器端到端、迁移或并发测试。未单独实测的数据库业务链路仍以代码与 SQL 审计结论为准。
+> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已连接本地 MySQL 并完成专用订单的 HTTP/数据库验证。本轮另以浏览器自动操作验收新增商品 SKU 矩阵，但未提交商品、未执行数据库写入、迁移或并发测试。未单独实测的数据库业务链路仍以代码与 SQL 审计结论为准。
 
 ## 1. 项目概述
 
@@ -56,7 +56,7 @@ Cloth-Shop/
 │  ├─ 03_存储过程_触发器_函数.sql     # 11 个过程、3 个触发器和 1 个函数
 │  ├─ 04_测试数据与验证.sql           # 测试数据、业务流程演示和一致性查询
 │  └─ 05_账号与支付密码初始化.sql     # 支付密码字段/测试用户与管理员初始化
-├─ tests/site.test.js                 # 105 项 Node.js 行为与源码结构测试
+├─ tests/site.test.js                 # 106 项 Node.js 行为与源码结构测试
 ├─ start_dev.ps1                      # 双服务启动、端口等待和浏览器打开逻辑
 ├─ start_dev.bat                      # Windows 一键启动入口
 ├─ package.json                       # `node --test tests/site.test.js`
@@ -115,7 +115,7 @@ flowchart LR
 | 管理员登录 | `data-admin-login-form` | `loginAdmin()`、`renderAdminAuthState()` | `POST /admin/login` | `user` |
 | 登录状态恢复 | 页面初始化 | `getStoredAdminSession()`、`requireAdminSessionBeforeLoading()`、`adminFetch()` | 通过首批受保护 API 验证，无独立 `/admin/me` | `sessionStorage` + `user` |
 | 商品搜索和筛选 | 商品管理面板 | `getFilteredAdminProductRows()`、后台 `renderProducts()` | 无新增请求；内存过滤 | `GET /admin/inventory` 已加载结果 |
-| 新增商品 | `data-admin-product-form` | `buildSkuMatrix()`、`createAdminProductToApi()` | `POST /products` | `category`、`product`、`product_sku`、`inventory`、`product_sales_stat`、`product_image` |
+| 新增商品 | `data-admin-product-form` | `buildSkuMatrix()`、`createAdminProductToApi()`；新生成 SKU 默认库存 50，仍可逐行编辑 | `POST /products` | `category`、`product`、`product_sku`、`inventory`、`product_sales_stat`、`product_image` |
 | SKU 管理 | `data-admin-sku-manager` | `loadAdminProductSkusToApi()`、`createAdminProductSkusToApi()`、`updateAdminProductSkuToApi()`、`deleteAdminProductSkuToApi()` | `GET/POST /admin/products/{product_id}/skus`、`PATCH/DELETE /admin/products/{product_id}/skus/{sku_id}` | `product_sku`、`inventory`、`product_sales_stat` |
 | 库存更新 | 商品卡和 SKU 管理器 | `updateAdminSkuStockToApi()` | `POST /admin/inventory/update-stock` | `inventory` |
 | 商品上下架 | 商品管理面板 | `updateAdminProductStatusToApi()` | `POST /admin/products/update-status` | `product`、`product_sku` |
@@ -450,7 +450,7 @@ sequenceDiagram
 
     AdminUser->>Form: 输入分类、商品、颜色、尺码、基础价格并选择多图
     Form->>SKU: buildSkuMatrix(颜色, 尺码, 已编辑行)
-    SKU-->>Form: 颜色×尺码组合和 SKU 编码/价格/库存/状态
+    SKU-->>Form: 颜色×尺码组合；新行库存默认 50，已有行保留编辑值
     Form->>API: multipart + skus_json + images + Bearer token
     API->>API: 校验管理员、字段、SKU 重复和图片后缀/大小
     API->>Files: 保存 UUID 图片；第一张作为主图
@@ -460,6 +460,8 @@ sequenceDiagram
     API->>DB: commit；失败 rollback 并清理本批已保存文件
     API-->>Form: 新商品、SKU 和图片结果
 ```
+
+后台新建商品时，新生成的颜色 × 尺码 SKU 默认库存为 50；管理员仍可逐行改为包括 0 在内的非负整数，提交时 `skus_json` 使用界面中的实际值。已有商品在“管理规格”中新增缺失组合仍沿用默认库存 0，本轮未改变数据库 `inventory.available_stock` 的安全默认值或后端库存规则。
 
 ## 10. 数据来源与状态管理
 
@@ -496,28 +498,29 @@ sequenceDiagram
 
 | 命令 | 结果 |
 |---|---|
-| `npm.cmd test` | 105/105 通过，0 失败、0 跳过、0 TODO |
+| `npm.cmd test` | 106/106 通过，0 失败、0 跳过、0 TODO |
 | `node --check src/main.js` | 通过 |
 | `node --check src/sku-utils.js` | 通过 |
 | `node --check src/product-ordering.js` | 通过 |
 | `node --check src/ranking.js` | 通过 |
 | `backend/.venv/Scripts/python.exe -m py_compile backend/app/main.py` | 通过 |
 | `backend/.venv/Scripts/python.exe -m py_compile backend/app/db.py` | 通过 |
+| 浏览器自动操作新增商品 SKU 表单 | 2 色×3 尺码生成 6 行且均为 50；人工改为 35 后新增尺码，旧值保留、新行 50；库存可改为 0；未提交商品，控制台 0 错误 |
 
 ### 已覆盖模块
 
 - 直接执行 `content.js`、`ranking.js`、`product-ordering.js`、`account-store.js`、`sku-utils.js` 的纯函数行为。
-- 覆盖销量排名、可售优先排序、地址迁移/本地存储、购物车金额、注册校验、SKU 笛卡尔积、颜色尺码选择和不可售组合禁用。
+- 覆盖销量排名、可售优先排序、地址迁移/本地存储、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用。
 - 读取 `index.html`、`admin.html`、`src/main.js`、`src/styles.css`、后端 Python、SQL、README 和启动脚本，断言路由字符串、`data-*` 钩子、字段、CORS、端口、图片、认证、订单和 SKU 结构。
 
-105 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
+106 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
 
 ### 尚未覆盖或本轮未执行
 
 - **自动化 HTTP 冒烟测试**：尚未纳入测试套件。项目有 `/`、`/db-test` 和 `/docs`，但 `tests/site.test.js` 没有 `fetch` 请求；本轮退款接口验证是人工调用本地 API。
 - **真实 API 测试范围**：本轮已覆盖退款申请成功、待支付状态拦截、订单归属拦截、重复申请以及管理员同意；尚未覆盖 422、401/403、库存冲突、上传失败和其他接口的完整状态矩阵。
 - **真实数据库测试**：本轮已连接 MySQL 8.0.28，以专用订单验证待支付拦截、归属拦截、支付后申请、重复申请和管理员同意；未执行迁移、故障注入回滚或并发库存测试。
-- **浏览器测试**：没有 Playwright、Puppeteer、Selenium 或 jsdom；桌面/移动布局、键盘交互和真实 DOM 状态未自动验收。
+- **浏览器测试**：测试套件没有 Playwright、Puppeteer、Selenium 或 jsdom；本轮使用 Codex 浏览器自动操作验收了新增商品 SKU 矩阵的默认值、重建保留和库存 0 边界，但该过程尚未纳入可重复执行的仓库测试。
 - **退款回归**：已覆盖请求模型字段、退款路由不读取 SKU 字段、不调用购买校验、订单归属锁、允许状态、状态更新、提交/回滚、业务错误保留以及前端订单级请求体。
 
 ## 13. 本地启动流程
@@ -551,14 +554,14 @@ sequenceDiagram
 
 ### 已形成完整闭环
 
-- **复杂 SKU**：颜色×尺码生成、真实 SKU ID、价格/库存/状态选择、后台增删改和逻辑删除链路齐全。
+- **复杂 SKU**：颜色×尺码生成、真实 SKU ID、价格/库存/状态选择、后台增删改和逻辑删除链路齐全；新建商品的新组合默认库存为 50，矩阵重建保留已有编辑值，已有商品新增缺失组合仍默认 0。
 - **多图片**：多图上传、数据库图片列表、主图兼容、前台缩略图/大图、后台追加和逻辑删除链路齐全。
 - **购物车与下单**：数据库购物车增删改、选中项结算、直接购买、待支付订单、取消订单和库存锁定/释放链路齐全。
 - **后台订单**：订单列表/详情、发货、取消发货、状态日志和库存流水展示链路齐全。
 - **销量**：支付累计、退款回滚和后台统计代码链路齐全。
 - **退款申请与审核**：订单级申请、归属与状态校验、`REFUND_REQUESTED` 状态日志、重复申请拦截、后台同意/拒绝及退款一致性处理链路齐全；本轮已用专用订单完成真实 MySQL/API 的支付后申请与管理员同意验证。
 
-以上结论主要来自当前代码与 SQL 结构；退款申请和管理员同意分支已完成真实数据库/API 验收，浏览器交互仍未验收。
+以上结论主要来自当前代码与 SQL 结构；退款申请和管理员同意分支已完成真实数据库/API 验收，新增商品 SKU 默认库存已完成浏览器表单验收，其他浏览器交互仍未完整验收。
 
 ### 基本完成但需要真实业务验收
 

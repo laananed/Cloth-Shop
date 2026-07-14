@@ -1782,7 +1782,7 @@ test('[SKU-3] admin product form builds color size cartesian combinations', asyn
   const rows = buildSkuMatrix(['白色', '黑色'], ['S', 'M', 'L'], [], {
     productName: '复杂SKU验收测试商品',
     price: 199,
-    stock: 0,
+    stock: 50,
     onSale: 1,
   });
 
@@ -1793,7 +1793,7 @@ test('[SKU-3] admin product form builds color size cartesian combinations', asyn
   ]);
   assert.ok(rows.every((row) => row.sku_name === `${row.color} / ${row.size}`));
   assert.equal(new Set(rows.map((row) => row.sku_code)).size, 6);
-  assert.ok(rows.every((row) => row.price === 199 && row.stock === 0 && row.on_sale === 1));
+  assert.ok(rows.every((row) => row.price === 199 && row.stock === 50 && row.on_sale === 1));
 });
 
 test('[SKU-3] admin sku matrix preserves edited values while dimensions change', async () => {
@@ -1802,19 +1802,38 @@ test('[SKU-3] admin sku matrix preserves edited values while dimensions change',
   assert.equal(existsSync(modulePath), true, `${modulePath} should exist`);
 
   const { buildSkuMatrix } = await import('../src/sku-utils.js');
-  const initialRows = buildSkuMatrix(['白色'], ['S', 'M'], [], { price: 199 });
+  const initialRows = buildSkuMatrix(['白色'], ['S'], [], { price: 199, stock: 50 });
   const editedRows = initialRows.map((row) => row.size === 'S'
-    ? { ...row, sku_code: 'WHITE-S-CUSTOM', price: 209, stock: 10, on_sale: 0 }
+    ? { ...row, sku_code: 'WHITE-S-CUSTOM', price: 209, stock: 35, on_sale: 0 }
     : row);
-  const regenerated = buildSkuMatrix(['白色', '黑色'], ['S', 'M'], editedRows, { price: 199 });
+  const regenerated = buildSkuMatrix(['白色'], ['S', 'M'], editedRows, { price: 199, stock: 50 });
   const preserved = regenerated.find((row) => row.color === '白色' && row.size === 'S');
+  const added = regenerated.find((row) => row.color === '白色' && row.size === 'M');
 
-  assert.equal(regenerated.length, 4);
+  assert.equal(regenerated.length, 2);
   assert.deepEqual(
     { code: preserved.sku_code, price: preserved.price, stock: preserved.stock, onSale: preserved.on_sale },
-    { code: 'WHITE-S-CUSTOM', price: 209, stock: 10, onSale: 0 },
+    { code: 'WHITE-S-CUSTOM', price: 209, stock: 35, onSale: 0 },
   );
-  assert.equal(regenerated.filter((row) => row.color === '黑色').length, 2);
+  assert.equal(added.stock, 50);
+});
+
+test('[SKU-3] new product sku defaults to 50 without changing existing-product sku defaults or stock edits', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const createMatrixBody = sliceBetween(mainJs, 'function rebuildAdminSkuMatrix() {', 'function updateAdminSkuMatrixValue(event) {');
+  const existingProductGenerateBody = sliceBetween(
+    mainJs,
+    "adminSkuAddGenerate?.addEventListener('click', () => {",
+    'function updateAdminSkuDraft(event) {',
+  );
+  const parseRowsBody = sliceBetween(mainJs, 'function parseAdminSkuRows(values) {', 'async function createAdminProductToApi(');
+  const createApiBody = sliceBetween(mainJs, 'async function createAdminProductToApi(', 'async function appendAdminProductImagesToApi(');
+
+  assert.match(createMatrixBody, /stock:\s*50,/);
+  assert.match(existingProductGenerateBody, /stock:\s*0,/);
+  assert.ok(parseRowsBody.includes('const stock = Number(sourceRow.stock);'));
+  assert.ok(createApiBody.includes('formData.append("skus_json", JSON.stringify(skuRows))'));
+  assert.match(mainJs, /<input type="number" min="0" step="1"[^>]*data-admin-sku-stock/);
 });
 
 test('[SKU-3] admin submits structured sku json with multi-image form data', () => {

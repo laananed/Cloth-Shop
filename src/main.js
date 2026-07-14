@@ -3914,7 +3914,7 @@ function initAdminPage() {
     adminSkuRows = buildSkuMatrix(colors, sizes, adminSkuRows, {
       productName: productNameInput?.value || '',
       price: Number.isFinite(defaultPrice) && defaultPrice > 0 ? defaultPrice : 0,
-      stock: 0,
+      stock: 50,
       onSale: 1,
     });
     renderAdminSkuMatrix();

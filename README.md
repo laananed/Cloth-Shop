@@ -89,19 +89,19 @@ http://127.0.0.1:8050/docs
 在项目根目录执行：
 
 ```bash
-python -m http.server 5500
+python -m http.server 5800
 ```
 
 前台地址：
 
 ```text
-http://127.0.0.1:5500/index.html
+http://127.0.0.1:5800/index.html
 ```
 
 后台地址：
 
 ```text
-http://127.0.0.1:5500/admin.html
+http://127.0.0.1:5800/admin.html
 ```
 
 ## 测试账号
@@ -118,8 +118,8 @@ http://127.0.0.1:5500/admin.html
 1. 启动 MySQL
 2. 启动后端 `8050`
 3. 打开 `http://127.0.0.1:8050/docs` 检查接口
-4. 启动前端 `5500`
-5. 打开 `http://127.0.0.1:5500/index.html`
+4. 启动前端 `5800`
+5. 打开 `http://127.0.0.1:5800/index.html`
 6. 使用浏览器开发者工具查看 `Console` 和 `Network`
 
 ## 常见问题

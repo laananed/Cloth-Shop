@@ -1514,6 +1514,48 @@ test('refund request backend wiring is present in source', () => {
   assert.ok(backend.includes('ADMIN_REJECT_REFUND'));
 });
 
+test('refund request contract stays order based and preserves business errors', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const requestStart = backend.indexOf('class RefundOrderRequest(BaseModel):');
+  const requestEnd = backend.indexOf('\nclass ', requestStart + 1);
+  const requestModel = backend.slice(requestStart, requestEnd);
+  const routeStart = backend.indexOf('@app.post("/orders/refund")');
+  const routeEnd = backend.indexOf('\n@app.', routeStart + 1);
+  const refundRoute = backend.slice(routeStart, routeEnd);
+
+  assert.ok(requestStart >= 0);
+  assert.ok(routeStart >= 0);
+  assert.match(requestModel, /user_id:\s*int/);
+  assert.match(requestModel, /order_id:\s*int/);
+  assert.match(requestModel, /remark:\s*str/);
+  assert.doesNotMatch(requestModel, /sku_id|quantity/);
+  assert.doesNotMatch(refundRoute, /req\.(?:sku_id|quantity)/);
+  assert.doesNotMatch(refundRoute, /validate_sku_for_purchase\s*\(/);
+  assert.match(refundRoute, /WHERE id = %s\s+AND user_id = %s\s+FOR UPDATE/);
+  assert.match(refundRoute, /current_status not in \{"PAID", "SHIPPED"\}/);
+  assert.match(refundRoute, /SET status = 'REFUND_REQUESTED'/);
+  assert.ok(refundRoute.includes('未支付订单不能申请退款'));
+  assert.ok(refundRoute.includes('已取消订单不能申请退款'));
+  assert.ok(refundRoute.includes('退款申请已提交，请勿重复申请'));
+  assert.ok(refundRoute.includes('订单已经退款'));
+  assert.ok(refundRoute.includes('conn.commit()'));
+  assert.ok(refundRoute.includes('conn.rollback()'));
+  assert.match(refundRoute, /except HTTPException:\s+raise/);
+});
+
+test('frontend refund request contract sends only order level fields', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const functionStart = mainJs.indexOf('async function refundOrderFromApi(');
+  const functionEnd = mainJs.indexOf('\nfunction ', functionStart + 1);
+  const refundRequest = mainJs.slice(functionStart, functionEnd);
+
+  assert.ok(functionStart >= 0);
+  assert.ok(refundRequest.includes('user_id: CURRENT_USER_ID'));
+  assert.ok(refundRequest.includes('order_id: Number(orderId)'));
+  assert.ok(refundRequest.includes('remark'));
+  assert.doesNotMatch(refundRequest, /sku_id|quantity/);
+});
+
 test('cart invalid-item source wiring is present', () => {
   const backend = readFileSync('backend/app/main.py', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');

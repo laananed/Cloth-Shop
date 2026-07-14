@@ -2522,7 +2522,6 @@ def refund_order(req: RefundOrderRequest):
     try:
         with get_db() as conn:
             try:
-                validate_sku_for_purchase(conn, req.sku_id, req.quantity)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -2550,9 +2549,18 @@ def refund_order(req: RefundOrderRequest):
                     current_status = str(order_row.get("status") or "").strip().upper()
 
                     if current_status not in {"PAID", "SHIPPED"}:
+                        status_error_messages = {
+                            "PENDING_PAYMENT": "未支付订单不能申请退款",
+                            "CANCELLED": "已取消订单不能申请退款",
+                            "REFUND_REQUESTED": "退款申请已提交，请勿重复申请",
+                            "REFUNDED": "订单已经退款",
+                        }
                         raise HTTPException(
                             status_code=400,
-                            detail="只有已支付或已发货订单才能申请退款"
+                            detail=status_error_messages.get(
+                                current_status,
+                                f"订单当前状态 {current_status or 'UNKNOWN'} 不能申请退款"
+                            )
                         )
 
                     cursor.execute(

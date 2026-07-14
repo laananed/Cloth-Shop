@@ -1311,26 +1311,104 @@ test('admin API appends multiple images to an existing product without replacing
   assert.equal((endpoint.match(/UPDATE product\s+SET image_url = %s/g) || []).length, 1);
 });
 
-test('admin product cards append images through authenticated multipart upload and refresh the list', () => {
+test('admin product cards expose only the unified image manager entry', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const productRenderer = sliceBetween(
+    mainJs,
+    '  function renderProducts()',
+    '  function populateImageSelect()',
+  );
+
+  assert.ok(productRenderer.includes('data-admin-product-image-manage'));
+  assert.ok(productRenderer.includes('管理图片'));
+  assert.doesNotMatch(productRenderer, /data-admin-product-image-append/);
+  assert.doesNotMatch(productRenderer, /追加图片/);
+  assert.doesNotMatch(mainJs, /activeAdminProductImageAppendId/);
+  assert.doesNotMatch(mainJs, /adminProductImageAppendPreviewUrls/);
+});
+
+test('admin image manager owns multi-file selection preview and explicit upload controls', () => {
+  const html = readFileSync('admin.html', 'utf8');
   const mainJs = readFileSync('src/main.js', 'utf8');
   const styles = readFileSync('src/styles.css', 'utf8');
+  const managerMarkup = sliceBetween(
+    html,
+    '<section class="admin-image-manager"',
+    '<section class="admin-sku-manager"',
+  );
   const uploadHelper = sliceBetween(
     mainJs,
     'async function appendAdminProductImagesToApi(productId, imageFiles)',
-    'function parseAdminSkuRows(values)',
+    'async function deleteAdminProductImageToApi(productId, imageId)',
   );
 
-  assert.ok(mainJs.includes('data-admin-product-image-append'));
-  assert.match(mainJs, /type="file"[^>]+accept="image\/\*"[^>]+multiple/);
-  assert.ok(mainJs.includes('追加图片'));
-  assert.ok(mainJs.includes('原主图保持不变'));
+  assert.match(managerMarkup, /data-admin-image-manager-input[^>]*multiple/);
+  assert.match(managerMarkup, /accept="\.jpg,\.jpeg,\.png,\.webp,\.gif"/);
+  assert.ok(managerMarkup.includes('data-admin-image-manager-pending'));
+  assert.ok(managerMarkup.includes('data-admin-image-manager-upload'));
+  assert.ok(managerMarkup.includes('data-admin-image-manager-clear'));
+  assert.ok(managerMarkup.includes('data-admin-image-manager-list'));
+  assert.ok(managerMarkup.includes('data-admin-image-manager-close'));
   assert.match(uploadHelper, /files\.forEach\(\(file\) => \{\s*formData\.append\("images", file\);/);
   assert.doesNotMatch(uploadHelper, /formData\.append\("image",/);
   assert.ok(uploadHelper.includes('adminFetch(`${API_BASE_URL}/admin/products/${productId}/images`'));
-  assert.ok(mainJs.includes('await appendAdminProductImagesToApi(productId, imageFiles);'));
-  assert.ok(mainJs.includes('await refreshAdminProductsFromApi();'));
-  assert.ok(mainJs.includes('function getProductImages(product)'));
-  assert.ok(styles.includes('.admin-product-image-append'));
+  assert.ok(styles.includes('.admin-image-manager__upload'));
+  assert.ok(styles.includes('.admin-image-manager__pending'));
+});
+
+test('admin image manager keeps pending files local until explicit upload and releases preview urls', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const pendingFlow = sliceBetween(
+    mainJs,
+    'function getAdminImageFileKey(file)',
+    'function renderProductImagePreview()',
+  );
+
+  assert.ok(pendingFlow.includes('adminImageManagerPendingFiles'));
+  assert.ok(pendingFlow.includes('URL.createObjectURL(file)'));
+  assert.ok(pendingFlow.includes('URL.revokeObjectURL(item.previewUrl)'));
+  assert.ok(pendingFlow.includes('file.name'));
+  assert.ok(pendingFlow.includes('file.size'));
+  assert.ok(pendingFlow.includes('file.lastModified'));
+  assert.ok(pendingFlow.includes('file.type'));
+  assert.ok(pendingFlow.includes('data-admin-image-pending-remove'));
+  assert.ok(pendingFlow.includes('adminImageManagerPendingFiles.splice'));
+  assert.ok(pendingFlow.includes('clearAdminImageManagerPendingFiles'));
+  assert.doesNotMatch(pendingFlow, /deleteAdminProductImageToApi/);
+});
+
+test('admin image manager blocks empty or duplicate uploads and refreshes the open product after success', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const submitFlow = sliceBetween(
+    mainJs,
+    'async function submitAdminImageManagerUpload()',
+    'function renderProductImagePreview()',
+  );
+
+  assert.match(submitFlow, /if \(!activeAdminImageManagerProduct \|\| !adminImageManagerPendingFiles\.length \|\| adminImageManagerUploading\)/);
+  assert.ok(submitFlow.includes('adminImageManagerUploading = true'));
+  assert.ok(submitFlow.includes('adminImageManagerUpload.disabled = true'));
+  assert.ok(submitFlow.includes('上传中...'));
+  assert.ok(submitFlow.includes('await appendAdminProductImagesToApi(productId, imageFiles)'));
+  assert.ok(submitFlow.includes('clearAdminImageManagerPendingFiles()'));
+  assert.ok(submitFlow.includes('await refreshAdminProductsFromApi()'));
+  assert.ok(submitFlow.includes('products.find((product) => product.productId === productId)'));
+  assert.ok(submitFlow.includes('renderAdminProductImageManager()'));
+  assert.ok(submitFlow.includes('adminImageManagerUploading = false'));
+});
+
+test('closing the admin image manager clears pending files input feedback and product state', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const closeFlow = sliceBetween(
+    mainJs,
+    'function closeAdminProductImageManager()',
+    'function renderAdminProductImageManager()',
+  );
+
+  assert.ok(closeFlow.includes('clearAdminImageManagerPendingFiles()'));
+  assert.ok(closeFlow.includes('adminImageManagerInput.value = ""'));
+  assert.ok(closeFlow.includes('adminImageManagerFeedback.textContent = ""'));
+  assert.ok(closeFlow.includes('activeAdminImageManagerProduct = null'));
 });
 
 test('admin API logically deletes product images and promotes a replacement main image', () => {

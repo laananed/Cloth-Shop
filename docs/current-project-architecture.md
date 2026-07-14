@@ -2,15 +2,15 @@
 
 - 文档生成日期：2026-07-15
 - 当前分支：`master`
-- 当前 commit：`48c4782`
+- 当前 commit：`cc87a3e`
 - 项目技术栈：原生 HTML/CSS/JavaScript ES Module + FastAPI + PyMySQL + MySQL 8.0.28
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 共 106 项，106 项通过；指定 JavaScript 语法检查和 Python 编译检查均通过
-- 文档基线：审计起始 commit 为 `48c4782`（`style: 精简前台文案与基础界面`）；本文档包含当前工作区待提交的新增商品 SKU 默认库存调整
+- 当前自动测试结果：`npm.cmd test` 共 110 项，110 项通过；指定 JavaScript 语法检查和 Python 编译检查均通过
+- 文档基线：审计起始 commit 为 `cc87a3e`（`fix: 将新增商品 SKU 默认库存设为 50`）；本文档包含当前工作区待提交的后台商品图片管理入口合并
 
-> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已连接本地 MySQL 并完成专用订单的 HTTP/数据库验证。本轮另以浏览器自动操作验收新增商品 SKU 矩阵，但未提交商品、未执行数据库写入、迁移或并发测试。未单独实测的数据库业务链路仍以代码与 SQL 审计结论为准。
+> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已连接本地 MySQL 并完成专用订单的 HTTP/数据库验证。本轮以浏览器自动操作验收统一图片管理弹窗的入口、已有图片、状态隔离和桌面/窄屏布局；受浏览器控制面文件选择能力限制，未执行多文件实际选择，也未执行真实图片上传、删除、数据库写入、迁移或并发测试。未单独实测的数据库业务链路仍以代码与 SQL 审计结论为准。
 
 ## 1. 项目概述
 
@@ -34,9 +34,9 @@ Cloth-Shop 是一个服装商城与进销存管理课程设计。前台承担商
 ```text
 Cloth-Shop/
 ├─ index.html                         # 前台页面、购买弹窗、图片大图和个人中心侧栏
-├─ admin.html                         # 后台登录、订单、商品、SKU、图片和统计面板
+├─ admin.html                         # 后台登录、订单、商品、SKU、统一图片管理弹窗和统计面板
 ├─ src/
-│  ├─ main.js                         # 前后台共享入口；DOM、状态、API 与主要业务交互
+│  ├─ main.js                         # 前后台共享入口；DOM、状态、API 与图片待上传预览等主要业务交互
 │  ├─ styles.css                      # 前后台共用样式和响应式规则
 │  ├─ content.js                      # 静态文案、分类、17 个展示商品和旧 mock 种子
 │  ├─ account-store.js                # localStorage 兼容数据、纯函数和旧后台 mock 辅助
@@ -56,7 +56,7 @@ Cloth-Shop/
 │  ├─ 03_存储过程_触发器_函数.sql     # 11 个过程、3 个触发器和 1 个函数
 │  ├─ 04_测试数据与验证.sql           # 测试数据、业务流程演示和一致性查询
 │  └─ 05_账号与支付密码初始化.sql     # 支付密码字段/测试用户与管理员初始化
-├─ tests/site.test.js                 # 106 项 Node.js 行为与源码结构测试
+├─ tests/site.test.js                 # 110 项 Node.js 行为与源码结构测试
 ├─ start_dev.ps1                      # 双服务启动、端口等待和浏览器打开逻辑
 ├─ start_dev.bat                      # Windows 一键启动入口
 ├─ package.json                       # `node --test tests/site.test.js`
@@ -120,7 +120,7 @@ flowchart LR
 | 库存更新 | 商品卡和 SKU 管理器 | `updateAdminSkuStockToApi()` | `POST /admin/inventory/update-stock` | `inventory` |
 | 商品上下架 | 商品管理面板 | `updateAdminProductStatusToApi()` | `POST /admin/products/update-status` | `product`、`product_sku` |
 | 商品逻辑删除 | 商品管理面板 | `deleteAdminProductToApi()` | `POST /admin/products/delete` | `product.is_deleted`、`product_sku.is_deleted` |
-| 图片追加和删除 | `data-admin-image-manager` | `appendAdminProductImagesToApi()`、`deleteAdminProductImageToApi()` | `POST/DELETE /admin/products/{product_id}/images...` | `product_image`、兼容主图 `product.image_url` |
+| 图片查看、追加和删除 | 商品卡唯一的 `data-admin-product-image-manage` 入口与 `data-admin-image-manager` 弹窗 | `renderAdminProductImageManager()`、`submitAdminImageManagerUpload()`、`appendAdminProductImagesToApi()`、`deleteAdminProductImageToApi()` | `POST/DELETE /admin/products/{product_id}/images...` | `product_image`、兼容主图 `product.image_url` |
 | 后台订单 | 订单面板 | `loadAdminOrdersFromApi()`、`renderAdminOrderDetail()` | `GET /admin/orders`、`GET /admin/orders/{order_id}` | `v_order_summary`、`v_user_order_detail`、支付/状态/库存日志 |
 | 发货和取消发货 | 订单操作列 | `shipAdminOrderToApi()`、`unshipAdminOrderToApi()` | `POST /admin/orders/ship`、`/unship` | `order_main`、`order_status_log` |
 | 退款同意和拒绝 | 退款待处理订单 | `approveAdminRefundToApi()`、`rejectAdminRefundToApi()` | `POST /admin/orders/refund/approve`、`/reject` | `order_main`、`inventory`、`inventory_log`、`payment_record`、`product_sales_stat` |
@@ -149,7 +149,7 @@ flowchart LR
 | POST | `/admin/products/{product_id}/images` | 向已有商品追加多张图片 | 管理员 Bearer 令牌 | `product`、`product_image` |
 | DELETE | `/admin/products/{product_id}/images/{image_id}` | 逻辑删除图片；删除主图时提升下一张 | 管理员 Bearer 令牌 | `product`、`product_image` |
 
-当前没有独立图片查询 API；图片数组附加在商品/后台库存响应中。当前也没有手动指定任意图片为主图的 API。
+当前没有独立图片查询 API；图片数组附加在商品/后台库存响应中。后台商品卡只保留“管理图片”入口，弹窗统一查看已有图片、选择与预览待上传图片、确认上传和删除；上传、删除成功后均重新加载 `GET /admin/inventory`，同步刷新弹窗和商品卡。当前仍没有手动指定任意图片为主图的 API。
 
 ### 购物车
 
@@ -463,6 +463,34 @@ sequenceDiagram
 
 后台新建商品时，新生成的颜色 × 尺码 SKU 默认库存为 50；管理员仍可逐行改为包括 0 在内的非负整数，提交时 `skus_json` 使用界面中的实际值。已有商品在“管理规格”中新增缺失组合仍沿用默认库存 0，本轮未改变数据库 `inventory.available_stock` 的安全默认值或后端库存规则。
 
+### 9.6 后台商品图片管理
+
+```mermaid
+sequenceDiagram
+    actor AdminUser as 管理员
+    participant Card as 商品管理卡片
+    participant Modal as 图片管理弹窗
+    participant JS as src/main.js
+    participant API as 现有图片 API
+    participant Inventory as GET /admin/inventory
+
+    AdminUser->>Card: 点击唯一“管理图片”入口
+    Card->>Modal: 展示商品 ID、有效图片、主图标记和上传区
+    AdminUser->>Modal: 多选新图片
+    Modal->>JS: 本地去重并创建预览 URL，不发送请求
+    AdminUser->>Modal: 移除单项、清空或确认上传
+    JS->>API: POST /admin/products/{product_id}/images
+    API-->>JS: 返回最新 images、image_url 和 image_count
+    JS->>Inventory: 重新加载后台商品
+    Inventory-->>Modal: 刷新弹窗图片与商品卡主图/数量
+    AdminUser->>Modal: 确认删除已有图片
+    JS->>API: DELETE /admin/products/{product_id}/images/{image_id}
+    API-->>JS: 返回删除后的图片和主图
+    JS->>Inventory: 重新加载并保持弹窗打开
+```
+
+待上传文件只存在于当前弹窗内存状态，以文件名、大小、`lastModified` 和 MIME 类型组合去重。单项移除、清空、上传成功、关闭弹窗和页面卸载都会释放本地对象 URL；关闭后打开其他商品不会沿用文件或反馈。数据库结构、API 路径、字段、逻辑删除和删除主图后的自动提升规则均未改变。图片逻辑删除仍不会自动清理磁盘文件。
+
 ## 10. 数据来源与状态管理
 
 | 数据来源 | 当前职责 | 权威性与限制 |
@@ -498,7 +526,7 @@ sequenceDiagram
 
 | 命令 | 结果 |
 |---|---|
-| `npm.cmd test` | 106/106 通过，0 失败、0 跳过、0 TODO |
+| `npm.cmd test` | 110/110 通过，0 失败、0 跳过、0 TODO |
 | `node --check src/main.js` | 通过 |
 | `node --check src/sku-utils.js` | 通过 |
 | `node --check src/product-ordering.js` | 通过 |
@@ -506,21 +534,22 @@ sequenceDiagram
 | `backend/.venv/Scripts/python.exe -m py_compile backend/app/main.py` | 通过 |
 | `backend/.venv/Scripts/python.exe -m py_compile backend/app/db.py` | 通过 |
 | 浏览器自动操作新增商品 SKU 表单 | 2 色×3 尺码生成 6 行且均为 50；人工改为 35 后新增尺码，旧值保留、新行 50；库存可改为 0；未提交商品，控制台 0 错误 |
+| 浏览器自动操作统一图片管理弹窗 | 34 张商品卡各只有一个“管理图片”入口；旧入口为 0；弹窗商品/图片/主图/空上传状态正确；关闭后切换商品无状态串用；1280px 与 390px 均无横向溢出；控制台 0 错误；未真实上传或删除 |
 
 ### 已覆盖模块
 
 - 直接执行 `content.js`、`ranking.js`、`product-ordering.js`、`account-store.js`、`sku-utils.js` 的纯函数行为。
-- 覆盖销量排名、可售优先排序、地址迁移/本地存储、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用。
+- 覆盖销量排名、可售优先排序、地址迁移/本地存储、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用，以及后台图片唯一入口、弹窗上传控件、本地待上传状态、对象 URL 释放、空列表/上传锁和刷新契约。
 - 读取 `index.html`、`admin.html`、`src/main.js`、`src/styles.css`、后端 Python、SQL、README 和启动脚本，断言路由字符串、`data-*` 钩子、字段、CORS、端口、图片、认证、订单和 SKU 结构。
 
-106 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
+110 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
 
 ### 尚未覆盖或本轮未执行
 
 - **自动化 HTTP 冒烟测试**：尚未纳入测试套件。项目有 `/`、`/db-test` 和 `/docs`，但 `tests/site.test.js` 没有 `fetch` 请求；本轮退款接口验证是人工调用本地 API。
 - **真实 API 测试范围**：本轮已覆盖退款申请成功、待支付状态拦截、订单归属拦截、重复申请以及管理员同意；尚未覆盖 422、401/403、库存冲突、上传失败和其他接口的完整状态矩阵。
 - **真实数据库测试**：本轮已连接 MySQL 8.0.28，以专用订单验证待支付拦截、归属拦截、支付后申请、重复申请和管理员同意；未执行迁移、故障注入回滚或并发库存测试。
-- **浏览器测试**：测试套件没有 Playwright、Puppeteer、Selenium 或 jsdom；本轮使用 Codex 浏览器自动操作验收了新增商品 SKU 矩阵的默认值、重建保留和库存 0 边界，但该过程尚未纳入可重复执行的仓库测试。
+- **浏览器测试**：测试套件没有 Playwright、Puppeteer、Selenium 或 jsdom；既有轮次验收了新增商品 SKU 矩阵，本轮验收了统一图片管理弹窗的入口、已有图片、主图标记、空上传状态、关闭/切换清理及桌面/窄屏布局。当前浏览器控制面不支持向文件 input 设置本地文件，因此多文件实际预览、单项移除和清空未在浏览器中执行；真实上传和删除为避免污染现有图片也未执行。
 - **退款回归**：已覆盖请求模型字段、退款路由不读取 SKU 字段、不调用购买校验、订单归属锁、允许状态、状态更新、提交/回滚、业务错误保留以及前端订单级请求体。
 
 ## 13. 本地启动流程
@@ -555,7 +584,7 @@ sequenceDiagram
 ### 已形成完整闭环
 
 - **复杂 SKU**：颜色×尺码生成、真实 SKU ID、价格/库存/状态选择、后台增删改和逻辑删除链路齐全；新建商品的新组合默认库存为 50，矩阵重建保留已有编辑值，已有商品新增缺失组合仍默认 0。
-- **多图片**：多图上传、数据库图片列表、主图兼容、前台缩略图/大图、后台追加和逻辑删除链路齐全。
+- **多图片**：多图上传、数据库图片列表、主图兼容、前台缩略图/大图和逻辑删除链路齐全；后台商品卡只保留“管理图片”入口，统一弹窗承担已有图片查看、新图片选择与本地预览、单项移除、清空、确认上传和删除。
 - **购物车与下单**：数据库购物车增删改、选中项结算、直接购买、待支付订单、取消订单和库存锁定/释放链路齐全。
 - **后台订单**：订单列表/详情、发货、取消发货、状态日志和库存流水展示链路齐全。
 - **销量**：支付累计、退款回滚和后台统计代码链路齐全。

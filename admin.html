@@ -241,7 +241,33 @@
         </header>
         <p class="admin-image-manager__summary" data-admin-image-manager-summary></p>
         <p class="admin-feedback" data-admin-image-manager-feedback aria-live="polite"></p>
-        <div class="admin-image-manager__list" data-admin-image-manager-list></div>
+        <section class="admin-image-manager__section" aria-labelledby="admin-image-manager-existing-title">
+          <div class="admin-image-manager__section-heading">
+            <h3 id="admin-image-manager-existing-title">已有图片</h3>
+            <span>删除主图后，系统会按现有规则自动提升下一张图片。</span>
+          </div>
+          <div class="admin-image-manager__list" data-admin-image-manager-list></div>
+        </section>
+        <section class="admin-image-manager__upload" aria-labelledby="admin-image-manager-upload-title">
+          <div class="admin-image-manager__section-heading">
+            <h3 id="admin-image-manager-upload-title">追加新图片</h3>
+            <span>先预览并确认，选择文件不会自动上传。</span>
+          </div>
+          <label class="admin-image-manager__picker">
+            <span>选择图片（支持多选）</span>
+            <input
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,.gif"
+              data-admin-image-manager-input
+              multiple
+            />
+          </label>
+          <div class="admin-image-manager__pending" data-admin-image-manager-pending hidden aria-live="polite"></div>
+          <div class="admin-image-manager__upload-actions">
+            <button class="ghost-button ghost-button--small" type="button" data-admin-image-manager-clear disabled>清空选择</button>
+            <button class="admin-submit admin-image-manager__upload-button" type="button" data-admin-image-manager-upload disabled>确认上传</button>
+          </div>
+        </section>
       </div>
     </section>
 

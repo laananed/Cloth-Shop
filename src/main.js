@@ -3815,6 +3815,10 @@ function initAdminPage() {
   const adminImageManagerSummary = document.querySelector('[data-admin-image-manager-summary]');
   const adminImageManagerFeedback = document.querySelector('[data-admin-image-manager-feedback]');
   const adminImageManagerList = document.querySelector('[data-admin-image-manager-list]');
+  const adminImageManagerInput = document.querySelector('[data-admin-image-manager-input]');
+  const adminImageManagerPending = document.querySelector('[data-admin-image-manager-pending]');
+  const adminImageManagerClear = document.querySelector('[data-admin-image-manager-clear]');
+  const adminImageManagerUpload = document.querySelector('[data-admin-image-manager-upload]');
   const adminImageManagerCloseButtons = document.querySelectorAll('[data-admin-image-manager-close]');
   const adminSkuManager = document.querySelector('[data-admin-sku-manager]');
   const adminSkuManagerTitle = document.querySelector('[data-admin-sku-manager-title]');
@@ -3840,9 +3844,9 @@ function initAdminPage() {
   let products = [];
   let orders = [];
   let summary = null;
-  let activeAdminProductImageAppendId = null;
-  let adminProductImageAppendPreviewUrls = [];
   let activeAdminImageManagerProduct = null;
+  let adminImageManagerPendingFiles = [];
+  let adminImageManagerUploading = false;
   let adminSkuRows = [];
   let activeAdminSkuManagerProduct = null;
   let adminSkuManagerRows = [];
@@ -4868,13 +4872,6 @@ async function refreshAdminProductsFromApi() {
                   </button>
                   <button
                     type="button"
-                    class="ghost-button ghost-button--small ghost-button--solid"
-                    data-admin-product-image-append="${row.productId}"
-                  >
-                    追加图片
-                  </button>
-                  <button
-                    type="button"
                     class="ghost-button ghost-button--small ${isOnSaleProduct ? "ghost-button--danger" : "ghost-button--solid"}"
                     data-admin-product-status-id="${row.productId}"
                     data-admin-product-next-status="${nextStatus}"
@@ -4889,23 +4886,6 @@ async function refreshAdminProductsFromApi() {
                     删除商品
                   </button>
                 </div>
-                ${activeAdminProductImageAppendId === row.productId ? `
-                  <div class="admin-product-image-append" data-admin-product-image-append-panel="${row.productId}">
-                    <strong>为“${escapeHtml(row.name)}”追加图片</strong>
-                    <p class="admin-image-preview__note">新图片会追加到现有图片之后，原主图保持不变。</p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      data-admin-product-image-append-input="${row.productId}"
-                    />
-                    <div class="admin-image-preview" data-admin-product-image-append-preview hidden aria-live="polite"></div>
-                    <div class="admin-product-image-append__actions">
-                      <button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-product-image-append-submit="${row.productId}" disabled>确认上传</button>
-                      <button type="button" class="ghost-button ghost-button--small" data-admin-product-image-append-cancel="${row.productId}">取消</button>
-                    </div>
-                  </div>
-                ` : ""}
               </div>
             </div>
           </article>
@@ -5259,12 +5239,107 @@ async function deleteAdminProductImageToApi(productId, imageId) {
 
   let productPreviewUrls = [];
 
-  function clearAdminProductImageAppendPreview() {
-    adminProductImageAppendPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
-    adminProductImageAppendPreviewUrls = [];
+  function getAdminImageFileKey(file) {
+    return [file.name, file.size, file.lastModified, file.type].join("::");
+  }
+
+  function renderAdminImageManagerPendingFiles() {
+    const hasPendingFiles = adminImageManagerPendingFiles.length > 0;
+
+    if (adminImageManagerPending) {
+      adminImageManagerPending.hidden = !hasPendingFiles;
+      adminImageManagerPending.innerHTML = hasPendingFiles
+        ? adminImageManagerPendingFiles.map((item, index) => `
+            <article class="admin-image-manager__pending-item">
+              <img src="${escapeHtml(item.previewUrl)}" alt="待上传图片 ${index + 1}" />
+              <div class="admin-image-manager__pending-meta">
+                <strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong>
+                <span>${escapeHtml((item.file.size / 1024).toFixed(1))} KB</span>
+              </div>
+              <button
+                class="ghost-button ghost-button--small ghost-button--danger"
+                type="button"
+                data-admin-image-pending-remove="${index}"
+                aria-label="移除待上传图片 ${escapeHtml(item.file.name)}"
+                ${adminImageManagerUploading ? "disabled" : ""}
+              >
+                移除
+              </button>
+            </article>
+          `).join("")
+        : "";
+    }
+
+    if (adminImageManagerClear) {
+      adminImageManagerClear.disabled = !hasPendingFiles || adminImageManagerUploading;
+    }
+
+    if (adminImageManagerUpload) {
+      adminImageManagerUpload.disabled = !hasPendingFiles || adminImageManagerUploading;
+      adminImageManagerUpload.textContent = adminImageManagerUploading ? "上传中..." : "确认上传";
+    }
+
+    if (adminImageManagerInput) {
+      adminImageManagerInput.disabled = adminImageManagerUploading;
+    }
+
+    adminImageManagerCloseButtons.forEach((button) => {
+      button.disabled = adminImageManagerUploading;
+    });
+  }
+
+  function addAdminImageManagerPendingFiles(files) {
+    const knownKeys = new Set(adminImageManagerPendingFiles.map((item) => item.key));
+
+    Array.from(files || []).forEach((file) => {
+      const key = getAdminImageFileKey(file);
+      if (knownKeys.has(key)) {
+        return;
+      }
+
+      knownKeys.add(key);
+      adminImageManagerPendingFiles.push({
+        file,
+        key,
+        previewUrl: URL.createObjectURL(file),
+      });
+    });
+
+    if (adminImageManagerInput) {
+      adminImageManagerInput.value = "";
+    }
+    renderAdminImageManagerPendingFiles();
+  }
+
+  function clearAdminImageManagerPendingFiles() {
+    adminImageManagerPendingFiles.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    adminImageManagerPendingFiles = [];
+    if (adminImageManagerInput) {
+      adminImageManagerInput.value = "";
+    }
+    renderAdminImageManagerPendingFiles();
+  }
+
+  function removeAdminImageManagerPendingFile(index) {
+    const item = adminImageManagerPendingFiles[index];
+    if (!item || adminImageManagerUploading) {
+      return;
+    }
+
+    URL.revokeObjectURL(item.previewUrl);
+    adminImageManagerPendingFiles.splice(index, 1);
+    renderAdminImageManagerPendingFiles();
   }
 
   function closeAdminProductImageManager() {
+    clearAdminImageManagerPendingFiles();
+    if (adminImageManagerInput) {
+      adminImageManagerInput.value = "";
+    }
+    if (adminImageManagerFeedback) {
+      adminImageManagerFeedback.textContent = "";
+      adminImageManagerFeedback.dataset.state = "";
+    }
     activeAdminImageManagerProduct = null;
     if (adminImageManager) {
       adminImageManager.hidden = true;
@@ -5293,16 +5368,11 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     }
 
     if (adminImageManagerSummary) {
-      adminImageManagerSummary.textContent = `当前共 ${images.length} 张有效图片${onlyOneImage ? "，至少保留一张图片" : ""}`;
-    }
-
-    if (adminImageManagerFeedback) {
-      adminImageManagerFeedback.textContent = "";
-      adminImageManagerFeedback.classList.remove("is-error");
+      adminImageManagerSummary.textContent = `商品 ID：${activeAdminImageManagerProduct.productId} · 当前共 ${images.length} 张有效图片${onlyOneImage ? "，至少保留一张图片" : ""}`;
     }
 
     if (adminImageManagerList) {
-      adminImageManagerList.innerHTML = images.map((image, index) => {
+      adminImageManagerList.innerHTML = images.length ? images.map((image, index) => {
         const imageId = Number(image.id);
         const hasRealImageId = Number.isInteger(imageId) && imageId > 0;
         const isMain = Number(image.is_main || 0) === 1;
@@ -5335,7 +5405,57 @@ async function deleteAdminProductImageToApi(productId, imageId) {
             </div>
           </article>
         `;
-      }).join("");
+      }).join("") : '<p class="admin-image-manager__empty">当前商品暂无有效图片，可以在下方选择并上传新图片。</p>';
+    }
+
+    renderAdminImageManagerPendingFiles();
+  }
+
+  async function submitAdminImageManagerUpload() {
+    if (!activeAdminImageManagerProduct || !adminImageManagerPendingFiles.length || adminImageManagerUploading) {
+      return;
+    }
+
+    const productId = activeAdminImageManagerProduct.productId;
+    const imageFiles = adminImageManagerPendingFiles.map((item) => item.file);
+
+    try {
+      adminImageManagerUploading = true;
+      adminImageManagerUpload.disabled = true;
+      renderAdminImageManagerPendingFiles();
+      setFeedback(adminImageManagerFeedback, "上传中...");
+
+      const result = await appendAdminProductImagesToApi(productId, imageFiles);
+      clearAdminImageManagerPendingFiles();
+
+      if (activeAdminImageManagerProduct?.productId === productId) {
+        activeAdminImageManagerProduct = {
+          ...activeAdminImageManagerProduct,
+          image: result.image_url,
+          image_url: result.image_url,
+          images: result.images,
+          imageCount: result.image_count,
+          image_count: result.image_count,
+        };
+        renderAdminProductImageManager();
+      }
+
+      await refreshAdminProductsFromApi();
+
+      if (activeAdminImageManagerProduct?.productId === productId) {
+        activeAdminImageManagerProduct = products.find((product) => product.productId === productId) || activeAdminImageManagerProduct;
+        renderAdminProductImageManager();
+        setFeedback(adminImageManagerFeedback, result.message || "商品图片追加成功");
+      }
+      setFeedback(productManageFeedback || productFeedback, result.message || "商品图片追加成功");
+    } catch (error) {
+      console.error("后台追加商品图片失败：", error);
+      if (activeAdminImageManagerProduct?.productId === productId) {
+        setFeedback(adminImageManagerFeedback, `追加图片失败：${error.message}`, true);
+      }
+    } finally {
+      adminImageManagerUploading = false;
+      renderAdminImageManagerPendingFiles();
     }
   }
 
@@ -5378,6 +5498,22 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   adminImageManagerCloseButtons.forEach((button) => {
     button.addEventListener("click", closeAdminProductImageManager);
   });
+
+  adminImageManagerInput?.addEventListener("change", (event) => {
+    addAdminImageManagerPendingFiles(event.target.files);
+  });
+
+  adminImageManagerPending?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-admin-image-pending-remove]");
+    if (!removeButton) {
+      return;
+    }
+    removeAdminImageManagerPendingFile(Number(removeButton.dataset.adminImagePendingRemove));
+  });
+
+  adminImageManagerClear?.addEventListener("click", clearAdminImageManagerPendingFiles);
+  adminImageManagerUpload?.addEventListener("click", submitAdminImageManagerUpload);
+  window.addEventListener("beforeunload", clearAdminImageManagerPendingFiles);
 
   adminSkuManagerCloseButtons.forEach((button) => {
     button.addEventListener('click', closeAdminSkuManager);
@@ -5806,49 +5942,10 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   }
 
   if (productList) {
-  productList.addEventListener("change", (event) => {
-    const input = event.target.closest("[data-admin-product-image-append-input]");
-    if (!input) {
-      return;
-    }
-
-    clearAdminProductImageAppendPreview();
-    const files = Array.from(input.files || []);
-    const panel = input.closest("[data-admin-product-image-append-panel]");
-    const preview = panel?.querySelector("[data-admin-product-image-append-preview]");
-    const submitButton = panel?.querySelector("[data-admin-product-image-append-submit]");
-
-    if (submitButton) {
-      submitButton.disabled = files.length === 0;
-    }
-
-    if (!preview) {
-      return;
-    }
-
-    if (!files.length) {
-      preview.hidden = true;
-      preview.innerHTML = "";
-      return;
-    }
-
-    adminProductImageAppendPreviewUrls = files.slice(0, 4).map((file) => URL.createObjectURL(file));
-    preview.hidden = false;
-    preview.innerHTML = `
-      <p class="admin-image-preview__note">已选择 ${escapeHtml(files.length)} 张图片，原主图保持不变。</p>
-      <div class="admin-image-preview__grid">
-        ${adminProductImageAppendPreviewUrls.map((url, index) => `<img src="${escapeHtml(url)}" alt="待追加图片 ${index + 1}" />`).join("")}
-      </div>
-    `;
-  });
-
   productList.addEventListener("click", async (event) => {
     const stockButton = event.target.closest("[data-admin-stock-save]");
     const statusButton = event.target.closest("[data-admin-product-status-id]");
     const deleteButton = event.target.closest("[data-admin-product-delete-id]");
-    const appendButton = event.target.closest("[data-admin-product-image-append]");
-    const appendSubmitButton = event.target.closest("[data-admin-product-image-append-submit]");
-    const appendCancelButton = event.target.closest("[data-admin-product-image-append-cancel]");
     const manageImagesButton = event.target.closest("[data-admin-product-image-manage]");
     const manageSkusButton = event.target.closest("[data-admin-product-sku-manage]");
 
@@ -5865,6 +5962,7 @@ async function deleteAdminProductImageToApi(productId, imageId) {
 
     if (manageImagesButton) {
       const productId = Number(manageImagesButton.dataset.adminProductImageManage);
+      clearAdminImageManagerPendingFiles();
       activeAdminImageManagerProduct = products.find((product) => product.productId === productId) || null;
 
       if (!activeAdminImageManagerProduct) {
@@ -5872,50 +5970,11 @@ async function deleteAdminProductImageToApi(productId, imageId) {
         return;
       }
 
+      if (adminImageManagerFeedback) {
+        adminImageManagerFeedback.textContent = "";
+        adminImageManagerFeedback.dataset.state = "";
+      }
       renderAdminProductImageManager();
-      return;
-    }
-
-    if (appendButton) {
-      clearAdminProductImageAppendPreview();
-      activeAdminProductImageAppendId = Number(appendButton.dataset.adminProductImageAppend);
-      renderProducts();
-      return;
-    }
-
-    if (appendCancelButton) {
-      clearAdminProductImageAppendPreview();
-      activeAdminProductImageAppendId = null;
-      renderProducts();
-      return;
-    }
-
-    if (appendSubmitButton) {
-      const productId = Number(appendSubmitButton.dataset.adminProductImageAppendSubmit);
-      const panel = appendSubmitButton.closest("[data-admin-product-image-append-panel]");
-      const input = panel?.querySelector("[data-admin-product-image-append-input]");
-      const imageFiles = Array.from(input?.files || []);
-
-      if (!imageFiles.length) {
-        setFeedback(productManageFeedback || productFeedback, "请至少选择一张商品图片。", true);
-        return;
-      }
-
-      try {
-        appendSubmitButton.disabled = true;
-        appendSubmitButton.textContent = "上传中...";
-        const result = await appendAdminProductImagesToApi(productId, imageFiles);
-        setFeedback(productManageFeedback || productFeedback, result.message || "商品图片追加成功");
-        clearAdminProductImageAppendPreview();
-        activeAdminProductImageAppendId = null;
-        await refreshAdminProductsFromApi();
-      } catch (error) {
-        console.error("后台追加商品图片失败：", error);
-        appendSubmitButton.disabled = false;
-        appendSubmitButton.textContent = "确认上传";
-        setFeedback(productManageFeedback || productFeedback, `追加图片失败：${error.message}`, true);
-      }
-
       return;
     }
 

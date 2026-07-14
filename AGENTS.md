@@ -1,307 +1,228 @@
-# 项目协作规则
+# AGENTS.md
 
-## 文件安全
+本文件用于约束在 `Cloth-Shop` 仓库中工作的 Codex、ChatGPT、Claude Code 或其他代码 Agent。
 
-- 禁止批量删除文件或目录。
-- 不要使用 `del /s`、`rd /s`、`rmdir /s`、`Remove-Item -Recurse`、`rm -rf`。
-- 需要删除文件时，只能一次删除一个明确路径的文件，并且必须获得用户明确授权。
-- 不要为了让工作区干净而删除、还原、隐藏或移动用户的文件。
+目标不是让 Agent 尽可能多地修改代码，而是让每次修改都形成一个可理解、可测试、可回滚的最小业务闭环。
 
-## Jujutsu 提交流程
+## 1. 项目定位
 
-当用户要求使用 Jujutsu（`jj`）提交修改时，必须遵循以下流程。
+- 项目：服装商城 / 进销存管理系统课程设计。
+- 数据库：MySQL 8.0.28，数据库名 `frieren_cloth_shop_db`。
+- 后端：FastAPI + PyMySQL。
+- 前端：原生 HTML、CSS、JavaScript ES Module。
+- 测试：Node.js 内置测试框架，主要测试文件为 `tests/site.test.js`。
+- 默认分支：`master`。
 
-### 1. 确认仓库
+课程设计重点是数据库结构、业务一致性、事务、库存、订单状态和可演示性。不要为了追求框架复杂度而破坏现有稳定链路。
 
-1. 确认终端位于项目根目录。
-2. 执行 `jj root`。
-3. 确认项目根目录存在 `.jj`。
-4. 如果 `jj root` 失败或 `.jj` 不存在，立即停止；不要自行初始化，除非用户明确要求初始化。
+## 2. 主要目录与职责
 
-### 2. 检查修改
+以下只是当前结构地图。执行任务前仍必须读取实际文件，实际代码优先于本文件描述。
 
-提交前必须执行：
+- `index.html`：前台页面结构与购买相关弹窗。
+- `admin.html`：后台登录、商品、订单、图片、SKU 和统计页面结构。
+- `src/main.js`：前后台主要交互、状态协调和 API 调用入口。
+- `src/styles.css`：前后台主要样式。
+- `src/sku-utils.js`：结构化 SKU 组合、校验或辅助逻辑。
+- `src/ranking.js`：销量排名逻辑。
+- `src/product-ordering.js`：商品可售状态与前台排序逻辑。
+- `src/content.js`、`src/account-store.js` 等：静态数据、旧本地状态或兼容逻辑。不要把已经迁移到数据库的业务重新改回 `localStorage` 或 mock 数据。
+- `backend/app/main.py`：FastAPI 路由、请求模型、主要业务逻辑和数据库调用。
+- `backend/app/db.py`：数据库连接。
+- 根目录编号 SQL：数据库初始化或增量迁移。
+- `tests/site.test.js`：前端结构、工具函数和关键回归断言。
+- `docs/`：课程设计、开发计划和说明文档。
+- `backend/uploads/`：运行时上传文件。除非任务明确要求，不要把本地上传产物加入版本控制。
 
-```powershell
-jj status
-jj diff --stat
-jj diff --git
+## 3. 每次任务开始前必须完成的分析
+
+在修改代码之前，先检查当前工作区和相关代码，不要直接根据任务标题开始编码。
+
+至少完成以下步骤：
+
+1. 阅读本文件、`README.md`、当前任务和相关目录中的补充说明。
+2. 检查 `git status`、当前分支和未提交差异，禁止覆盖用户已有修改。
+3. 使用文件名、函数名、API 路径、数据库表名和 `data-*` 属性搜索真实调用链。
+4. 明确当前系统已经具备什么，而不是假设项目仍处于旧版本。
+5. 输出或在内部建立本次影响地图：
+   - 当前行为；
+   - 本次只完成的业务闭环；
+   - 用户操作后应看到什么；
+   - 数据库应发生什么变化；
+   - 前端、后端、SQL 和测试分别涉及哪些文件；
+   - 哪些现有功能不能破坏；
+   - 自动测试与人工测试方法。
+6. 对跨层功能，按下面方向追踪完整链路：
+
+```text
+页面入口
+→ DOM/data-* 事件
+→ src/main.js 或工具模块
+→ HTTP 请求
+→ FastAPI 路由与请求模型
+→ SQL / 视图 / 存储过程 / 事务
+→ API 响应
+→ 前端状态更新与重新渲染
 ```
 
-- 必须逐个文件判断修改是否属于用户当前要求提交的功能。
-- 如果普通差异被 CRLF/LF 行尾变化淹没，使用 `jj diff -b --stat` 和 `jj diff -b --git <文件>` 辅助确认真实代码变化。
-- 检查临时文件、缓存、日志、测试产物、上传文件、无关文档、计划文件以及数据库密码、Token、密钥等敏感信息。
-- 默认不提交 `backend/uploads/products/` 中的图片。
-- 默认不提交 `docs/` 中的文件。
-- 除非用户明确指定，默认不提交只有行尾格式变化、没有语义变化的文件。
-- 如果发现无法确认归属、与当前功能无关或包含敏感信息的修改，不要提交，不要删除或还原；列出文件与修改概要，等待用户决定。
+如果链路没有追踪完整，不要开始大范围修改。
 
-### 3. 验证
+## 4. 修改范围原则
 
-- 提交前运行与修改范围相符的测试或检查命令。
-- 本项目当前前端测试命令为 `npm.cmd test`；在 PowerShell 中优先使用 `npm.cmd`，避免 `npm.ps1` 执行策略问题。
-- 测试失败时不要提交，除非用户在了解失败详情后明确要求继续。
+- 优先完成一个最小闭环，避免把无关重构、UI 优化和新功能混入同一任务。
+- 只修改实现当前闭环所必需的文件。
+- 不要因为文件较大而整体重写 `src/main.js` 或 `backend/app/main.py`。
+- 优先复用现有函数、状态映射、请求封装和 CSS 组件。
+- 新增重复逻辑前，先搜索是否已有同类工具函数。
+- 修复根因，不要只隐藏报错、吞异常或增加无条件兜底。
+- 不得删除或降级未在任务范围内的功能。
+- 不得擅自更换技术栈、端口、数据库、认证方式、目录结构或依赖管理方式。
+- 不得擅自增加生产依赖。确实需要时，先说明原因、替代方案和影响。
+- 不得引入真实支付、优惠券、多仓库、复杂 RBAC 等超出当前课程设计范围的系统。
+- 不要修改或提交 `.env`、真实密钥、真实密码和本机数据库凭据。
+- 保留中文界面和中文错误信息，避免产生乱码或 mojibake。
 
-### 4. 选择性提交
+## 5. 数据库与 SQL 规则
 
-- 使用用户提供的提交说明，不自行改写。
-- 只提交已确认属于当前功能的文件，使用文件集参数，例如：
+- 数据库结构变更必须通过新的编号增量 SQL 表达，除非任务明确要求修复尚未发布的迁移。
+- 不要为了方便直接修改已经执行过的历史 SQL，并假设其他环境会自动同步。
+- 新迁移应说明：前置条件、执行顺序、影响表、是否可重复执行、回滚或恢复方式。
+- 先检查表、字段、索引、视图、触发器和存储过程的现状，不得根据名称猜测结构。
+- SQL 必须使用参数化查询，不要拼接用户输入。
+- 多表写操作必须考虑事务、异常回滚和并发一致性。
+- 订单、库存、销量、支付和退款相关变更必须作为一致性整体审查。
+- 商品、SKU、图片等业务数据默认沿用逻辑删除，不要无理由改成物理删除。
+- 修改表字段时，检查所有相关视图、查询别名、序列化函数和前端字段映射。
+- 修改订单状态时，检查创建、支付、取消、发货、取消发货、退款申请、退款审核和销量回滚链路。
+- 修改库存时，检查可用库存、锁定库存、购物车有效性、直接购买、购物车结算和退款恢复。
+- 不得声称 SQL 已通过真实数据库测试，除非本次确实连接数据库并执行了验证。
 
-```powershell
-jj commit -m "<用户提供的提交说明>" <文件1> <文件2> ...
+## 6. 后端规则
+
+- FastAPI 请求参数应通过 Pydantic 模型或明确的 `Form`、`File`、`Header` 参数校验。
+- 对外错误应返回明确状态码和用户可理解的中文 `detail`。
+- 管理员接口必须继续校验管理员令牌和权限。
+- 不要在新接口中绕过现有认证、库存校验或订单状态校验。
+- API 字段变化应尽量向后兼容；必须破坏兼容性时，要同步修改所有调用方和测试。
+- 数据库异常必须回滚，并转换为可诊断的接口错误；不要静默失败。
+- 上传文件必须校验格式、大小和空文件，并在数据库写入失败时清理已保存文件。
+- 修改 CORS、端口或静态文件挂载前，先检查前端启动方式、README 和现有部署配置。
+
+## 7. 前端规则
+
+- 保持前台和后台现有视觉方向，除非任务明确要求 UI 重构。
+- 使用现有 `data-*` 属性体系绑定交互，不要无理由改名并破坏测试或选择器。
+- 数据库已经接管的购物车、订单、地址、后台商品和后台订单功能，不得重新以 mock 或 `localStorage` 作为权威数据源。
+- 对加载中、空数据、接口失败、401/403、库存不足、商品下架和 SKU 无效状态提供明确反馈。
+- 按钮禁用必须同时有业务校验，不能只依赖视觉上的 `disabled`。
+- SKU 相关功能必须使用真实 `sku_id`，并保持颜色、尺码、价格、库存和在售状态一致。
+- 修改商品图片时，检查主图、图片列表、购买弹窗、全屏预览和后台图片管理。
+- 修改订单显示时，统一使用现有状态格式化逻辑，避免前后台出现不同文案。
+- 不要强制移动端屏幕方向；页面应允许用户通过设备方向自然切换。
+- 对新增纯逻辑优先抽取小型工具模块并增加单元测试，但不要为简单功能过度拆分。
+
+## 8. 大型任务与多 Agent 协作
+
+只有当任务可以清晰拆成互不依赖的分析部分时才使用子 Agent。
+
+推荐的只读分析分工：
+
+- 前端 Agent：页面入口、事件绑定、渲染状态和用户可见行为。
+- 后端 Agent：API、请求模型、认证、事务和错误处理。
+- 数据库 Agent：表、索引、视图、存储过程、触发器和数据迁移。
+- 测试 Agent：现有测试覆盖、回归风险和可执行验证命令。
+
+主 Agent 必须汇总四方结果，形成统一影响地图后再修改。
+
+禁止：
+
+- 多个 Agent 同时修改 `src/main.js`、`backend/app/main.py` 或同一个 SQL 文件。
+- 子 Agent 在未说明范围时自行重构。
+- 只汇总子 Agent 结论而不核对真实代码。
+
+## 9. 测试要求
+
+每个业务闭环完成后，执行与改动对应的最小测试，并尽量执行完整基础测试。
+
+基础命令：
+
+```bash
+npm test
+node --check src/main.js
+python -m py_compile backend/app/main.py
 ```
 
-- 不要为了提交而执行 `git add`、`git commit` 或任何 Git 写操作。
-- 不要创建、移动或跟踪 bookmark，除非用户明确要求。
-- 不要执行 `jj git push`，除非用户明确要求远程推送。
+修改其他 JavaScript 模块时，补充：
 
-### 5. 提交后验证
-
-提交成功后必须执行：
-
-```powershell
-jj status
-jj log -r "@|@-" --no-graph
-jj show "@-" --stat
+```bash
+node --check <修改的 JavaScript 文件>
 ```
 
-最终报告必须明确包含：
+按改动类型增加验证：
 
-1. 是否成功提交；
-2. 本次提交包含的文件；
-3. 提交说明；
-4. Change ID；
-5. Commit ID；
-6. 测试或验证结果；
-7. 提交后 `jj status` 的结果；
-8. 是否仍存在未提交或无关修改；
-9. 是否进行了远程推送。
+- 前端结构或样式：打开对应页面，检查桌面端和移动端关键交互。
+- API：通过 `/docs` 或等价请求验证成功、参数错误、权限错误和业务冲突。
+- 数据库迁移：记录执行 SQL、执行顺序、关键查询和预期结果。
+- 订单链路：至少验证创建、支付或取消，以及相关库存变化。
+- 退款链路：验证申请、同意或拒绝、库存恢复、销量回滚和状态显示。
+- SKU 链路：验证组合生成、唯一性、上下架、库存、购买、购物车和订单明细。
+- 图片链路：验证上传、主图、追加、逻辑删除、前台预览和文件清理。
+- 管理员链路：验证登录、刷新状态、401/403、退出和后台数据清理。
 
-如果没有执行提交，必须明确说明阻止提交的原因，不得声称已经提交。
+不得使用“应该通过”代替真实结果。无法执行的测试必须明确写为“未执行”，并说明原因和人工验证步骤。
 
-<!-- OMX:AGENTS:START -->
-<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->
-YOU ARE AN AUTONOMOUS CODING AGENT. EXECUTE TASKS TO COMPLETION WITHOUT ASKING FOR PERMISSION.
-DO NOT STOP TO ASK "SHOULD I PROCEED?" — PROCEED. DO NOT WAIT FOR CONFIRMATION ON OBVIOUS NEXT STEPS.
-IF BLOCKED, TRY AN ALTERNATIVE APPROACH. ONLY ASK WHEN TRULY AMBIGUOUS OR DESTRUCTIVE.
-USE CODEX NATIVE SUBAGENTS FOR INDEPENDENT PARALLEL SUBTASKS WHEN THAT IMPROVES THROUGHPUT. THIS IS COMPLEMENTARY TO OMX TEAM MODE.
-<!-- END AUTONOMY DIRECTIVE -->
-<!-- omx:generated:agents-md -->
+## 10. 完成标准
 
-# oh-my-codex - Intelligent Multi-Agent Orchestration
+任务只有同时满足以下条件才算完成：
 
-You are running with oh-my-codex (OMX), a coordination layer for Codex CLI.
-This AGENTS.md is the top-level operating contract for the workspace.
-Role prompts under `prompts/*.md` are narrower execution surfaces. They must follow this file, not override it.
-When OMX is installed, load the installed prompt/skill/agent surfaces from `./.codex/prompts`, `./.codex/skills`, and `./.codex/agents` (or the project-local `./.codex/...` equivalents when project scope is active).
+- 用户可见行为符合需求。
+- 数据库状态符合业务规则。
+- 前端、API、SQL 和测试之间字段一致。
+- 未破坏现有关键链路。
+- 自动测试通过，或明确记录未能执行的测试。
+- 没有遗留调试输出、临时代码、测试账号硬编码或无关文件。
+- README 或相关文档在启动方式、迁移顺序或接口发生变化时得到同步更新。
 
-<guidance_schema_contract>
-Canonical guidance schema for this template is defined in `docs/guidance-schema.md`.
-Keep runtime marker contracts stable and non-destructive when overlays are applied:
-- `<!-- OMX:RUNTIME:START --> ... <!-- OMX:RUNTIME:END -->`
-- `<!-- OMX:TEAM:WORKER:START --> ... <!-- OMX:TEAM:WORKER:END -->`
-</guidance_schema_contract>
+## 11. 最终回报格式
 
-<operating_principles>
-- Solve the task directly when you can do so safely and well.
-- Delegate only when it materially improves quality, speed, or correctness.
-- Keep progress short, concrete, and useful.
-- Prefer evidence over assumption; verify before claiming completion.
-- Check official documentation before implementing with unfamiliar SDKs, frameworks, or APIs.
-- Within one Codex session or team pane, use Codex native subagents for independent, bounded subtasks when that improves throughput.
-<!-- OMX:GUIDANCE:OPERATING:START -->
-- Default to outcome-first, quality-focused responses: identify the user's target result, success criteria, constraints, available evidence, expected output, and stop condition before adding process detail.
-- Keep collaboration style short and direct. Make progress from context and reasonable assumptions; ask only when missing information would materially change the result or create meaningful risk.
-- Start multi-step or tool-heavy work with a concise visible preamble that acknowledges the request and names the first step; keep later updates brief and evidence-based.
-- Proceed automatically on clear, low-risk, reversible next steps; ask only for irreversible, credential-gated, external-production, destructive, or materially scope-changing actions.
-- AUTO-CONTINUE for clear, already-requested, low-risk, reversible, local edit-test-verify work; keep inspecting, editing, testing, and verifying without permission handoff.
-- ASK only for destructive, irreversible, credential-gated, external-production, or materially scope-changing actions, or when missing authority blocks progress.
-- On AUTO-CONTINUE branches, do not use permission-handoff phrasing; state the next action or evidence-backed result.
-- Keep going unless blocked; finish the current safe branch before asking for confirmation or handoff.
-- Ask only when blocked by missing information, missing authority, or an irreversible/destructive branch.
-- Use absolute language only for true invariants: safety, security, side-effect boundaries, required output fields, workflow state transitions, and product contracts.
-- Do not ask or instruct humans to perform ordinary non-destructive, reversible actions; execute those safe reversible OMX/runtime operations and ordinary commands yourself.
-- Treat OMX runtime manipulation, state transitions, and ordinary command execution as agent responsibilities when they are safe and reversible.
-- Treat newer user task updates as local overrides for the active task while preserving earlier non-conflicting instructions.
-- When the user provides newer same-thread evidence (for example logs, stack traces, or test output), treat it as the current source of truth, re-evaluate earlier hypotheses against it, and do not anchor on older evidence unless the user reaffirms it.
-- Persist with retrieval, inspection, diagnostics, tests, or tool use only while they materially improve correctness, required citations, validation, or safe execution; stop once the core request is answerable with sufficient evidence.
-- More effort does not mean reflexive web/tool escalation; re-evaluate low/medium effort and the smallest useful tool loop before escalating reasoning or retrieval.
-<!-- OMX:GUIDANCE:OPERATING:END -->
-</operating_principles>
+每次完成修改后，向用户返回：
 
-## Working agreements
-- For cleanup/refactor/deslop work, write a cleanup plan and lock behavior with regression tests before editing when coverage is missing.
-- Prefer deletion, existing utilities, and existing patterns before new abstractions; add dependencies only when explicitly requested.
-- Keep diffs small, reviewable, and reversible.
-- Verify with lint, typecheck, tests, and static analysis after changes; final reports include changed files, simplifications, and remaining risks.
+1. 本次完成的闭环。
+2. 修改文件列表及每个文件的作用。
+3. 用户实际如何感受到变化。
+4. 数据库或 API 发生的变化。
+5. 执行过的测试命令及逐项结果。
+6. 人工验收步骤。
+7. 未验证事项、风险和后续建议。
+8. 建议的 Git commit 名称。
 
+不要只返回“已完成”或测试数量。
 
-<delegation_rules>
-Default posture: work directly.
+## 12. Git 与提交规则
 
-Choose the lane before acting:
-- `$deep-interview` for unclear intent, missing boundaries, or explicit "don't assume" requests. It clarifies and hands off; it does not implement.
-- `$ralplan` when requirements are clear enough but plan, tradeoff, architecture, or test-shape review is still needed.
-- `$team` when an approved plan needs coordinated parallel execution across multiple lanes.
-- `$ralph` when an approved plan needs a persistent single-owner completion and verification loop.
-- Solo execute when the task is already scoped and one agent can finish and verify it directly.
-- Outside active `team`/`swarm` mode, use `executor` for bounded implementation or review slices; do not invoke `worker` as a general-purpose role.
-- Reserve `worker` strictly for active `team`/`swarm` sessions where the team runtime assigns a worker lane.
-- `worker` is a team-runtime surface, not a general-purpose child role.
+- 不要覆盖、回滚或格式化用户未提交的无关修改。
+- 禁止使用破坏性命令，例如无授权的 `git reset --hard`、强制推送或删除分支。
+- 一个提交对应一个可测试的业务闭环。
+- 普通任务默认不自动提交、不自动推送；只有当前任务明确授权时才执行。
+- 多阶段任务明确要求自动提交时，每个阶段测试通过后创建独立最小提交。
+- 只有用户明确要求推送时才 `push`。
+- 建议提交信息使用简洁的 Conventional Commit 风格，例如：
 
+```text
+feat: 完善商品 SKU 管理闭环
+fix: 修复退款后库存未恢复问题
+test: 补充订单状态回归测试
+docs: 更新数据库迁移与验收说明
+```
 
-Use Codex native subagents for bounded implementation, research, review, or verification slices when they materially improve quality, speed, or safety. Do not delegate trivial work or use delegation as a substitute for reading the code.
-</delegation_rules>
+## 13. 任务冲突时的优先级
 
-<child_agent_protocol>
-Leader responsibilities: choose the mode, delegate bounded verifiable subtasks, integrate results, and own final verification.
-Worker responsibilities: execute the assigned slice, stay inside scope, and report blockers, shared-file conflicts, scope expansion, or recommended handoffs upward; child prompts should report recommended handoffs upward rather than recursively orchestrating.
-Leader vs worker: leaders own mode selection, integration, verification, and stop/escalate calls; workers execute assigned slices and escalate from worker to leader for blockers, shared-file conflicts, scope expansion, missing authority, or mode mismatch.
-Rules: max 6 concurrent child agents; child prompts remain under AGENTS.md authority; prefer inherited model defaults unless a task has a concrete model reason; `worker` is a team-runtime surface, not a general-purpose child role.
-</child_agent_protocol>
+发生冲突时按以下顺序处理：
 
+1. 用户当前任务中的明确要求。
+2. 当前目录更近的 `AGENTS.override.md` 或 `AGENTS.md`。
+3. 本文件。
+4. README 和项目文档。
+5. Agent 的通用偏好。
 
-<invocation_conventions>
-- `$name` — invoke a workflow skill.
-- `/skills` — browse available skills.
-- Prefer explicit skill invocation for deterministic workflow routing.
-</invocation_conventions>
-
-<model_routing>
-Match role to task shape: `explore` for repo lookup, `researcher` for official docs/reference gathering, `dependency-expert` for SDK/package decisions, `executor` for implementation, `debugger` for root cause, `architect`/`critic` for high-complexity review. Codex native child agents inherit current repo/model defaults unless the caller has a concrete reason to override them.
-</model_routing>
-
-<specialist_routing>
-Leader/workflow routing contract:
-<!-- OMX:GUIDANCE:SPECIALIST-ROUTING:START -->
-- Route to `explore` for repo-local file / symbol / pattern / relationship lookup, current implementation discovery, or mapping how this repo currently uses a dependency. `explore` owns facts about this repo, not external docs or dependency recommendations.
-- Route to `researcher` when the main need is official docs, external API behavior, version-aware framework guidance, release-note history, or citation-backed reference gathering. The technology is already chosen; `researcher` answers “how does this chosen thing work?” and is not the default dependency-comparison role.
-- Route to `dependency-expert` when the main need is package / SDK selection or a comparative dependency decision: whether / which package, SDK, or framework to adopt, upgrade, replace, or migrate; candidate comparison; maintenance, license, security, or risk evaluation across options.
-- Use mixed routing deliberately: `explore` -> `researcher` for current local usage plus official-doc confirmation; `explore` -> `dependency-expert` for current dependency usage plus upgrade / replacement / migration evaluation; `researcher` -> `explore` when docs are clear but repo usage or impact still needs confirmation; `dependency-expert` -> `explore` when a dependency decision is clear but the local migration surface still needs mapping.
-- Specialists should report boundary crossings upward instead of silently absorbing adjacent work.
-- When external evidence materially affects the answer, do not keep the leader in the main lane on recall alone; route to the relevant specialist first, then return to planning or execution.
-<!-- OMX:GUIDANCE:SPECIALIST-ROUTING:END -->
-</specialist_routing>
-
-<agent_catalog>
-Key roles: `explore`, `researcher`, `dependency-expert`, `planner`, `architect`, `debugger`, `executor`, `test-engineer`, `verifier`, and `critic`. Use the installed role catalog for full descriptions.
-</agent_catalog>
-
-<keyword_detection>
-Keyword routing is implemented primarily by native `UserPromptSubmit` hooks and the generated keyword registry. Treat hook-injected routing context as authoritative for the current turn, then load the named `SKILL.md` or prompt file as instructed.
-
-Fallback behavior when hook context is unavailable:
-- Explicit `$name` invocations run left-to-right and override implicit keywords.
-- Bare skill names do not activate skills by themselves; skill-name activation requires explicit `$skill` invocation. Natural-language routing phrases may still map to a workflow. Examples: `analyze` / `investigate` → `$analyze` for read-only deep analysis with ranked synthesis, explicit confidence, and concrete file references; `deep interview`, `interview`, `don't assume`, or `ouroboros` → `$deep-interview` for Socratic deep interview requirements clarification.
-- Keep the detailed keyword list in `src/hooks/keyword-registry.ts`; do not duplicate it here.
-
-Runtime workflows such as `autopilot`, `ralph`, `ultrawork`, `ultraqa`, `team`/`swarm`, and `ecomode` require OMX CLI runtime support. In Codex App, outside-tmux, or plain Codex sessions without OMX tmux runtime, explain that those workflows are not directly available there and continue with the nearest App-safe surface unless the user explicitly wants to launch OMX CLI from shell first.
-- When deep-interview is active in attached-tmux OMX CLI/runtime, ask each interview round via `omx question`; after launching `omx question` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing; preserve the leader pane with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` when invoking it through Bash/tool paths. Outside tmux or native surfaces that cannot render `omx question` should use the native structured question path when available; otherwise ask exactly one concise plain-text question and wait for the answer.
-
-</keyword_detection>
-
-<skills>
-Skills are workflow commands. Always load the relevant installed `SKILL.md` before following a skill-specific process. Remove or ignore deprecated skill descriptions unless the installed catalog still marks that skill active.
-</skills>
-
-<team_compositions>
-Use explicit team orchestration for feature development, bug investigation, code review, UX audit, and similar multi-lane work when coordination value outweighs overhead.
-</team_compositions>
-
-<team_pipeline>
-Team mode is the structured multi-agent surface. Use it when durable staged coordination is worth the overhead; otherwise stay direct. Terminal states: `complete`, `failed`, `cancelled`.
-</team_pipeline>
-
-<team_model_resolution>
-Team/Swarm worker model precedence: explicit `OMX_TEAM_WORKER_LAUNCH_ARGS`, inherited leader `--model`, then low-complexity default from `OMX_DEFAULT_SPARK_MODEL` (legacy alias: `OMX_SPARK_MODEL`). Normalize model flags to one canonical `--model <value>` entry and use `OMX_DEFAULT_FRONTIER_MODEL` / `OMX_DEFAULT_SPARK_MODEL` rather than guessing defaults.
-</team_model_resolution>
-
-<!-- OMX:MODELS:START -->
-## Model Capability Table
-
-Auto-generated by `omx setup` from the current `config.toml` plus OMX model overrides.
-
-| Role | Model | Reasoning Effort | Use Case |
-| --- | --- | --- | --- |
-| Frontier (leader) | `gpt-5.6-sol` | high | Primary leader/orchestrator for planning, coordination, and frontier-class reasoning. |
-| Spark (explorer/fast) | `gpt-5.6-luna` | low | Fast triage, explore, lightweight synthesis, and low-latency routing. |
-| Standard (subagent default) | `gpt-5.6-sol` | high | Default standard-capability model for installable specialists and secondary worker lanes unless a role is explicitly frontier or spark. |
-| `explore` | `gpt-5.6-luna` | low | Fast codebase search and file/symbol mapping (fast-lane, fast) |
-| `analyst` | `gpt-5.6-sol` | medium | Requirements clarity, acceptance criteria, hidden constraints (frontier-orchestrator, frontier) |
-| `planner` | `gpt-5.6-sol` | medium | Task sequencing, execution plans, risk flags (frontier-orchestrator, frontier) |
-| `architect` | `gpt-5.6-sol` | xhigh | System design, boundaries, interfaces, long-horizon tradeoffs (frontier-orchestrator, frontier) |
-| `debugger` | `gpt-5.6-sol` | high | Root-cause analysis, regression isolation, failure diagnosis (deep-worker, standard) |
-| `executor` | `gpt-5.6-sol` | medium | Code implementation, refactoring, feature work (deep-worker, standard) |
-| `team-executor` | `gpt-5.6-sol` | medium | Supervised team execution for conservative delivery lanes (deep-worker, frontier) |
-| `verifier` | `gpt-5.6-sol` | high | Completion evidence, claim validation, test adequacy (frontier-orchestrator, standard) |
-| `code-reviewer` | `gpt-5.6-sol` | high | Comprehensive review across all concerns (frontier-orchestrator, frontier) |
-| `dependency-expert` | `gpt-5.6-sol` | high | External SDK/API/package evaluation (frontier-orchestrator, standard) |
-| `test-engineer` | `gpt-5.6-sol` | medium | Test strategy, coverage, flaky-test hardening (deep-worker, frontier) |
-| `designer` | `gpt-5.6-sol` | high | UX/UI architecture, interaction design (deep-worker, standard) |
-| `writer` | `gpt-5.6-sol` | high | Documentation, migration notes, user guidance (fast-lane, standard) |
-| `git-master` | `gpt-5.6-sol` | high | Commit strategy, history hygiene, rebasing (deep-worker, standard) |
-| `code-simplifier` | `gpt-5.6-sol` | high | Simplifies recently modified code for clarity and consistency without changing behavior (deep-worker, frontier) |
-| `researcher` | `gpt-5.6-terra` | high | External documentation and reference research (fast-lane, standard) |
-| `prometheus-strict-metis` | `gpt-5.6-sol` | high | Prometheus Strict requirements interviewer and ambiguity mapper (frontier-orchestrator, frontier) |
-| `prometheus-strict-momus` | `gpt-5.6-sol` | high | Prometheus Strict adversarial plan critic and risk challenger (frontier-orchestrator, frontier) |
-| `prometheus-strict-oracle` | `gpt-5.6-sol` | high | Prometheus Strict implementation readiness verifier and handoff judge (frontier-orchestrator, standard) |
-| `critic` | `gpt-5.6-sol` | high | Plan/design critical challenge and review (frontier-orchestrator, frontier) |
-| `scholastic` | `gpt-5.6-sol` | high | Ontology-first reasoning reviewer: category mistakes, hidden assumptions, modality separation, scholastic critique, and minimal-repair proposals (frontier-orchestrator, frontier) |
-| `vision` | `gpt-5.6-sol` | low | Image/screenshot/diagram analysis (fast-lane, frontier) |
-<!-- OMX:MODELS:END -->
-
-<verification>
-Verify before claiming completion.
-<!-- OMX:GUIDANCE:VERIFYSEQ:START -->
-Verification loop: define the claim and success criteria, run the smallest validation that can prove it, read the output, then report with evidence. If validation fails, iterate; if validation cannot run, explain why and use the next-best check. Keep evidence summaries concise but sufficient.
-
-- Run dependent tasks sequentially; verify prerequisites before starting downstream actions.
-- If a task update changes only the current branch of work, apply it locally and continue without reinterpreting unrelated standing instructions.
-- For coding work, prefer targeted tests for changed behavior, then typecheck/lint/build/smoke checks when applicable; do not claim completion without fresh evidence or an explicit validation gap.
-- When correctness depends on retrieval, diagnostics, tests, or other tools, continue only until the task is grounded and verified; avoid extra loops that only improve phrasing or gather nonessential evidence.
-<!-- OMX:GUIDANCE:VERIFYSEQ:END -->
-</verification>
-
-<execution_protocols>
-Mode selection: use `$deep-interview` for unclear intent/boundaries; `$ralplan` for consensus on architecture, tradeoffs, or tests; `$team` for approved multi-lane work; `$ralph` for persistent single-owner completion/verification loops; otherwise execute directly in solo mode. Switch modes only when evidence shows the current lane is mismatched or blocked.
-
-Command routing: use normal Codex repository inspection tools/subagents as the default surface for simple read-only repository lookup tasks; use `omx sparkshell` only for explicit shell-native read-only evidence or bounded verification.
-When to use what:
-- Use normal Codex repository inspection tools/subagents for repository lookup and implementation context.
-- Use `omx sparkshell --tmux-pane` only as an explicit opt-in operator aid for shell-native tmux evidence or bounded verification; it does not replace raw evidence capture.
-
-Supervisor tmux handoff safety:
-- Never paste from tmux's implicit/current buffer. Load handoff text into a fresh named buffer with `tmux set-buffer -b <name> -- "$message"` or a temp-file-backed `tmux load-buffer -b <name> <file>`; never use `tmux load-buffer -- <message>`.
-- Verify the named buffer with `tmux show-buffer -b <name>` before any paste. A failed load or mismatched buffer is a blocker; do not run `paste-buffer` or submit keys after it.
-- Clear the pane composer with `tmux send-keys -t <pane> C-u` immediately before paste, then use bracketed paste (`tmux paste-buffer -t <pane> -b <name> -p -d`) and submit intentionally.
-- Recapture the pane after paste/Enter and verify the intended turn was accepted rather than leaving stale draft text visible.
-
-Leader vs worker: leaders choose mode, delegate bounded work, integrate, and own verification; workers execute their slice and escalate blockers, scope expansion, shared-file conflicts, or mode mismatch upward. Escalate from worker to leader for blockers, scope expansion, shared ownership conflicts, or mode mismatch.
-
-Stop / escalate: stop when the task is verified complete, the user says stop/cancel, or no meaningful recovery path remains. Escalate to the user only for irreversible, destructive, materially branching decisions, or missing authority.
-
-Output contract: Default update/final shape: state current mode, action/result, and evidence or blocker/next step. Keep rationale once; do not restate the full plan every turn; expand only for risk, handoff, or explicit request.
-
-Anti-slop workflow:
-- Cleanup/refactor/deslop work still follows the same `$deep-interview` -> `$ralplan` -> `$team`/`$ralph` path; use `$ai-slop-cleaner` as a bounded helper inside the chosen execution lane, not as a competing top-level workflow.
-- Write a cleanup plan before modifying code; lock existing behavior with regression tests first, then make one smell-focused pass at a time.
-- Prefer deletion over addition, and prefer reuse plus boundary repair over new layers.
-- No new dependencies without explicit request.
-- Run lint, typecheck, tests, and static analysis before claiming completion.
-- Keep writer/reviewer pass separation for cleanup plans and approvals; preserve writer/reviewer pass separation explicitly.
-
-Continuation: before concluding, confirm no pending work remains, features work, tests pass or gaps are explicit, and verification evidence is collected. If not, continue.
-</execution_protocols>
-
-<cancellation>
-Use the `cancel` skill to end active execution modes when work is done and verified, when the user says stop, or when a hard blocker prevents meaningful progress. Do not cancel while recoverable work remains.
-</cancellation>
-
-<state_management>
-Hooks own normal skill-active and workflow-state persistence under `.omx/state/`. OMX runtime state lives under `.omx/`; do not manually duplicate hook-owned activation state unless recovering from missing or stale state.
-</state_management>
-
-## Setup
-
-Execute `omx setup` to install all components. Execute `omx doctor` to verify installation.
-<!-- OMX:AGENTS:END -->
+任何情况下都不得以“优化”为理由绕过数据安全、权限、事务、测试或用户明确限制。

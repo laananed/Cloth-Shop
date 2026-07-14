@@ -81,11 +81,13 @@ function assertNoMojibake(source, fileName) {
   }
 }
 
-test('site copy keeps the one-page brand-led direction', () => {
+test('site copy keeps only the brand title and the approved hero slogan', () => {
   const copy = getSiteCopy();
 
-  assert.equal(typeof copy.brandName, 'string');
-  assert.equal(typeof copy.slogan, 'string');
+  assert.deepEqual(copy, {
+    brandName: '汐雾衣橱',
+    slogan: '把心动裁成裙摆，让每一次相遇都像动画开场。',
+  });
 });
 
 test('collections expose the remixed six-theme rail without the removed sleepwear section', () => {
@@ -115,11 +117,36 @@ test('theme-limited products keep curated promo badges', () => {
   assert.ok(themedProducts.every((item) => typeof item.badge === 'string' && item.badge.length > 0));
 });
 
-test('site copy reflects the new seventeen-product catalog', () => {
-  const copy = getSiteCopy();
+test('homepage copy removes catalog statistics and keeps the streamlined sections', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const hero = sliceBetween(html, '<section class="hero"', '</section>');
+  const productSection = sliceBetween(html, '<section class="section" id="products"', '</section>');
+  const footer = sliceBetween(html, '<footer class="footer">', '</footer>');
 
-  assert.match(copy.note, /17/);
-  assert.match(copy.intro, /17/);
+  assert.ok(html.includes('少女心事，沿着海风轻轻上新'));
+  assert.ok(hero.includes('把心动裁成裙摆，让每一次相遇都像动画开场。'));
+  assert.ok(hero.includes('data-primary-cta'));
+  assert.ok(hero.includes('data-secondary-cta'));
+  assert.ok(!hero.includes('data-hero-intro'));
+  assert.ok(!hero.includes('data-hero-note'));
+  assert.ok(!hero.includes('图像重做'));
+  assert.ok(!hero.includes('轻裁展示'));
+  assert.ok(!hero.includes('清透配色 / 轻玻璃卡片 / 海天蓝渐变'));
+  assert.ok(productSection.includes('<h2 id="products-title">新品商品</h2>'));
+  assert.ok(!productSection.includes('保持轻盈但能卖'));
+  assert.ok(!productSection.includes('轻互动展示，不打扰浏览'));
+  assert.ok(!html.includes('data-product-count'));
+  assert.ok(footer.includes('关于蓝笙织梦'));
+  assert.ok(!footer.includes('配送提示'));
+  assert.ok(!footer.includes('小红书'));
+  assert.ok(!footer.includes('微博'));
+  assert.ok(!footer.includes('B站'));
+  assert.ok(!footer.includes('footer__utility'));
+  assert.ok(!footer.includes('footer__social'));
+  assert.ok(!mainJs.includes('productCountLabel'));
+  assert.ok(!mainJs.includes('heroIntro'));
+  assert.ok(!mainJs.includes('heroNote'));
 });
 
 test('product preview images are present in the workspace', () => {
@@ -560,7 +587,7 @@ test('index html keeps the restored document structure and the search hook marku
   assert.ok(html.includes('data-product-search'));
   assert.ok(html.includes('data-product-search-clear'));
   assert.ok(html.includes('data-product-grid'));
-  assert.ok(html.includes('data-product-count'));
+  assert.ok(!html.includes('data-product-count'));
   assert.ok(html.includes('data-active-collection'));
   assert.ok(html.includes('data-sidebar'));
   assert.ok(html.includes('data-purchase-modal'));
@@ -648,6 +675,7 @@ test('site exposes a personal sidebar shell', () => {
 
 test('site exposes a purchase modal shell', () => {
   const html = readFileSync('index.html', 'utf8');
+  const purchaseCloseButton = html.match(/<button class="purchase-modal__close"[^>]*>([^<]*)<\/button>/);
 
   assert.ok(html.includes('data-purchase-modal'));
   assert.ok(html.includes('data-purchase-close'));
@@ -656,6 +684,11 @@ test('site exposes a purchase modal shell', () => {
   assert.ok(html.includes('data-purchase-quantity-increase'));
   assert.ok(html.includes('data-purchase-payment-options'));
   assert.ok(html.includes('data-purchase-total'));
+  assert.ok(purchaseCloseButton);
+  assert.equal(purchaseCloseButton[1], '×');
+  assert.ok(!purchaseCloseButton[1].includes('脳'));
+  assert.match(purchaseCloseButton[0], /data-purchase-close/);
+  assert.match(purchaseCloseButton[0], /aria-label="关闭"/);
 });
 
 test('homepage keeps a continuous background while restoring the lead-in screen', () => {
@@ -666,7 +699,9 @@ test('homepage keeps a continuous background while restoring the lead-in screen'
   assert.ok(html.includes('class="lead-screen"'));
   assert.ok(html.includes('data-hero-section'));
   assert.ok(html.includes('data-hero-title'));
-  assert.ok(html.includes('data-hero-intro'));
+  assert.ok(html.includes('data-hero-slogan'));
+  assert.ok(!html.includes('data-hero-intro'));
+  assert.ok(!html.includes('data-hero-note'));
   assert.ok(!html.includes('class="auth-modal is-open"'));
   assert.ok(mainJs.includes('heroBackgroundUrl'));
   assert.ok(mainJs.includes("new URL('../assets/hero-background.png', import.meta.url).href"));
@@ -686,6 +721,7 @@ test('homepage keeps a continuous background while restoring the lead-in screen'
   assert.ok(styles.includes('text-align: center'));
   assert.ok(styles.includes('background-size: cover'));
   assert.ok(styles.includes('.hero__content'));
+  assert.match(styles, /\.hero p\s*\{[^}]*max-width:\s*52ch;/);
 });
 
 test('homepage fades hero UI while later sections keep the pale blue wash', () => {

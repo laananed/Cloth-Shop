@@ -251,13 +251,16 @@ body.has-modal {
 
 .purchase-modal__close {
   appearance: none;
+  display: grid;
+  place-items: center;
   border: 0;
   width: 42px;
   height: 42px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.78);
   color: var(--ink);
-  font-size: 1.4rem;
+  font-size: 1.6rem;
+  line-height: 1;
   cursor: pointer;
 }
 
@@ -1587,7 +1590,8 @@ body::after {
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -1620,11 +1624,14 @@ body::after {
 }
 
 .topbar__note {
+  justify-self: center;
   color: var(--muted);
   font-size: 0.94rem;
+  text-align: center;
 }
 
 .topbar__admin-link {
+  justify-self: end;
   color: var(--ink);
   text-decoration: none;
   padding: 10px 14px;
@@ -2463,45 +2470,21 @@ button:disabled,
   background: rgba(255, 255, 255, 0.36);
   backdrop-filter: blur(18px);
   box-shadow: var(--shadow);
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  flex-wrap: wrap;
+  display: block;
 }
 
 .footer__story {
-  max-width: 42ch;
+  max-width: 64ch;
 }
 
 .footer__story h2 {
   margin: 0 0 10px;
 }
 
-.footer__story p,
-.footer__utility p {
+.footer__story p {
   margin: 0;
   color: var(--muted);
   line-height: 1.8;
-}
-
-.footer__utility {
-  display: grid;
-  gap: 10px;
-}
-
-.footer__social {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.footer__social a {
-  color: var(--ink);
-  text-decoration: none;
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.64);
-  border: 1px solid rgba(255, 255, 255, 0.72);
 }
 
 .auth-shell {
@@ -3359,8 +3342,17 @@ button:disabled,
   .topbar {
     border-radius: 28px;
     padding: 14px 18px;
-    flex-direction: column;
-    align-items: flex-start;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 12px;
+  }
+
+  .topbar__note {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-width: 100%;
+    font-size: 0.84rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
   }
 
   .hero {
@@ -3527,9 +3519,6 @@ button:disabled,
     align-items: flex-start;
   }
 
-  .footer {
-    flex-direction: column;
-  }
 }
 
 body::before,
@@ -3615,7 +3604,7 @@ body::after {
 }
 
 .hero p {
-  max-width: 34ch;
+  max-width: 52ch;
   font-size: clamp(1.08rem, 1.8vw, 1.22rem);
   line-height: 1.9;
 }

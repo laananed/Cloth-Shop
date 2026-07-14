@@ -201,11 +201,7 @@ function buildProduct(product) {
 export function getSiteCopy() {
   return {
     brandName: '汐雾衣橱',
-    slogan: '把轻甜、海风和角色感都挂进同一面橱窗。',
-    intro: '围绕同一位白发精灵主角重构的 17 件图像型商品，用更强氛围和更统一的宣传图来带动点击。',
-    primaryCta: '浏览新目录',
-    secondaryCta: '查看分区',
-    note: '17 个商品 · 图像重做 · 轻裁展示',
+    slogan: '把心动裁成裙摆，让每一次相遇都像动画开场。',
   };
 }
 

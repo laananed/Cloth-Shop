@@ -61,8 +61,6 @@ let productsById = new Map(products.map((product) => [product.id, product]));
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
-const heroIntro = document.querySelector('[data-hero-intro]');
-const heroNote = document.querySelector('[data-hero-note]');
 const primaryCta = document.querySelector('[data-primary-cta]');
 const secondaryCta = document.querySelector('[data-secondary-cta]');
 const collectionRail = document.querySelector('[data-collection-rail]');
@@ -70,7 +68,6 @@ const productGrid = document.querySelector('[data-product-grid]');
 const productSearchInput = document.querySelector('[data-product-search]');
 const productSearchClear = document.querySelector('[data-product-search-clear]');
 const activeCollectionLabel = document.querySelector('[data-active-collection]');
-const productCountLabel = document.querySelector('[data-product-count]');
 const heroSection = document.querySelector('[data-hero-section]');
 const hero = document.querySelector('.hero');
 
@@ -2171,13 +2168,6 @@ function renderHero() {
     heroSlogan.textContent = copy.slogan;
   }
 
-  if (heroIntro) {
-    heroIntro.textContent = copy.intro;
-  }
-
-  if (heroNote) {
-    heroNote.textContent = copy.note;
-  }
 }
 
 function updateHeroScrollState() {
@@ -2278,15 +2268,11 @@ function filteredProducts() {
 }
 
 function renderProducts() {
-  if (!productGrid || !productCountLabel) {
+  if (!productGrid) {
     return;
   }
 
   const visibleProducts = filteredProducts();
-
-  productCountLabel.textContent = activeProductSearchKeyword.trim()
-    ? `${visibleProducts.length} 件匹配商品`
-    : `${visibleProducts.length} 件商品`;
   
   if (!visibleProducts.length) {
       productGrid.innerHTML = `

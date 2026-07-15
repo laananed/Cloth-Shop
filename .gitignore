@@ -25,6 +25,7 @@ coverage/
 
 # Runtime uploads (already tracked demo assets remain tracked)
 backend/uploads/
+local_backups/
 
 # Local helper data
 .agents/

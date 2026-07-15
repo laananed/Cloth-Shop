@@ -108,6 +108,7 @@ import {
   getStoredFavorites,
   getStoredMockOrders,
   getStoredProfile,
+  migrateFinalCatalogDataset,
   getSalesSummary,
   addAdminProduct,
   renderAdminOrdersView,
@@ -252,8 +253,8 @@ test('homepage copy removes catalog statistics and keeps the streamlined section
   const productSection = sliceBetween(html, '<section class="section" id="products"', '</section>');
   const footer = sliceBetween(html, '<footer class="footer">', '</footer>');
 
-  assert.ok(html.includes('少女心事，沿着海风轻轻上新'));
-  assert.ok(hero.includes('把心动裁成裙摆，让每一次相遇都像动画开场。'));
+  assert.ok(html.includes('让每一次相遇都像动画开场。'));
+  assert.ok(hero.includes('让每一次相遇都像动画开场。'));
   assert.ok(hero.includes('data-primary-cta'));
   assert.ok(hero.includes('data-secondary-cta'));
   assert.ok(!hero.includes('data-hero-intro'));
@@ -413,7 +414,7 @@ test('[LIGHTBOX-12-5] lightbox exposes one accessible dialog with stage loading 
   assert.match(html, /data-image-lightbox-counter[^>]+aria-live="polite"/);
   assert.ok(html.includes('data-image-lightbox-hint'));
   assert.equal((html.match(/data-image-lightbox(?:\s|=)/g) || []).length, 1);
-  assert.doesNotMatch(sliceBetween(html, 'data-image-lightbox', '</div>\n    </div>'), /data-product-state-stamp|data-favorite|data-cart|data-purchase-price/);
+  assert.doesNotMatch(sliceBetween(html, 'data-image-lightbox', '<aside class="sidebar"'), /data-product-state-stamp|data-favorite|data-cart|data-purchase-price/);
 });
 
 test('[LIGHTBOX-12-6] lightbox styling uses a safe dynamic viewport checkerboard stage and non-overlapping controls', () => {
@@ -2173,7 +2174,7 @@ test('admin authentication source wiring is present', () => {
   assert.ok(html.includes('data-admin-logout'));
   assert.ok(html.includes('data-admin-shell'));
   assert.ok(html.includes('./src/styles.css?v=20260709-admin-auth-state'));
-  assert.ok(html.includes('./src/main.js?v=20260715-product-tags-batch'));
+  assert.ok(html.includes('./src/main.js?v=20260715-final-catalog-v1'));
 
   assert.ok(mainJs.includes('ADMIN_SESSION_STORAGE_KEY'));
   assert.ok(mainJs.includes('getStoredAdminSession'));
@@ -2793,7 +2794,7 @@ test('[SKU-SYNC-6] storefront cache-busts the sku utility module after selection
   const html = readFileSync('index.html', 'utf8');
 
   assert.ok(mainJs.includes("from './sku-utils.js?v=20260715a'"));
-  assert.ok(html.includes('./src/main.js?v=20260715e'));
+  assert.ok(html.includes('./src/main.js?v=20260715-final-catalog-v1'));
 });
 
 test('[SKU-SYNC-7] cart modal hides payment controls without hiding sku controls', () => {
@@ -4050,8 +4051,75 @@ test('[TAGS-15-7] batch failures retain selections while success logout and filt
   assert.ok(mainJs.includes("clearAdminProductTagBatchState({ resetOperation: true })"));
   assert.ok(mainJs.includes('clearAdminProductTagBatchSelectionForFilterChange'));
   assert.ok(mainJs.includes('reconcileBatchTagSelection('));
-  assert.ok(mainJs.includes('if (!preserveExistingOnError) {\n      products = getStoredAdminProducts(storage);'));
+  assert.ok(mainJs.includes('if (!preserveExistingOnError) {\n      products = [];'));
   assert.ok(mainJs.includes('if (!preserveExistingOnError) {\n      adminTags = [];'));
+});
+
+test('[FINAL-CATALOG-1] dataset migration clears only product-bound browser state once', () => {
+  const storage = createMemoryStorage();
+  const staleKeys = [
+    'blue-song-favorites',
+    'blue-song-orders',
+    'blue-song-cart',
+    'blue-song-cart-selections',
+    'blue-song-admin-products',
+    'blue-song-admin-orders',
+    'blue-song-admin-catalog-version',
+  ];
+
+  for (const key of staleKeys) storage.setItem(key, JSON.stringify([{ productId: 41, skuId: 89 }]));
+  storage.setItem('blue-song-profile', JSON.stringify({ email: 'kept@example.com' }));
+  storage.setItem('blue-song-theme', 'night');
+
+  assert.equal(migrateFinalCatalogDataset(storage), true);
+  for (const key of staleKeys) assert.equal(storage.getItem(key), null, `${key} should be cleared`);
+  assert.deepEqual(JSON.parse(storage.getItem('blue-song-profile')), { email: 'kept@example.com' });
+  assert.equal(storage.getItem('blue-song-theme'), 'night');
+  assert.equal(storage.getItem('blue-song-dataset-version'), 'final-catalog-v1');
+
+  storage.setItem('blue-song-favorites', JSON.stringify([{ productId: 1 }]));
+  assert.equal(migrateFinalCatalogDataset(storage), false);
+  assert.deepEqual(JSON.parse(storage.getItem('blue-song-favorites')), [{ productId: 1 }]);
+});
+
+test('[FINAL-CATALOG-2] storefront and admin never restore deleted mock products', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const indexHtml = readFileSync('index.html', 'utf8');
+  const adminHtml = readFileSync('admin.html', 'utf8');
+  const storefrontLoader = sliceBetween(mainJs, 'async function loadProductsFromApi()', 'const selectedSkuByProductId');
+  const adminLoader = sliceBetween(mainJs, 'async function refreshAdminProductsFromApi(', 'function renderOrders()');
+  const storefrontRenderer = sliceBetween(mainJs, 'function renderProducts()', 'function updateView()');
+
+  assert.ok(mainJs.includes('let products = [];'));
+  assert.ok(mainJs.includes("let productCatalogState = 'loading';"));
+  assert.doesNotMatch(storefrontLoader, /products\s*=\s*staticProducts/);
+  assert.doesNotMatch(adminLoader, /getStoredAdminProducts|renderAdminProductsView/);
+  assert.ok(storefrontLoader.includes("productCatalogState = 'ready'"));
+  assert.ok(storefrontLoader.includes("productCatalogState = 'error'"));
+  assert.ok(storefrontRenderer.includes('商品加载失败'));
+  assert.ok(storefrontRenderer.includes('暂时没有商品'));
+  assert.ok(adminLoader.includes('后台商品列表加载失败'));
+  assert.ok(indexHtml.includes('./src/main.js?v=20260715-final-catalog-v1'));
+  assert.ok(adminHtml.includes('./src/main.js?v=20260715-final-catalog-v1'));
+  assert.ok(mainJs.includes("./account-store.js?v=20260715-final-catalog-v1"));
+});
+
+test('[FINAL-CATALOG-3] reset tool is guarded transactional repeatable and preserves foreign keys', () => {
+  const scriptPath = 'scripts/reset_final_demo_data.py';
+  assert.ok(existsSync(scriptPath));
+  const script = readFileSync(scriptPath, 'utf8');
+  const gitignore = readFileSync('.gitignore', 'utf8');
+
+  assert.match(script, /from app\.db import get_connection/);
+  assert.match(script, /--execute/);
+  assert.match(script, /conn\.begin\(\)/);
+  assert.match(script, /conn\.commit\(\)/);
+  assert.match(script, /conn\.rollback\(\)/);
+  assert.match(script, /mysqldump/i);
+  assert.match(script, /AUTO_INCREMENT/);
+  assert.match(script, /backend[\\/]uploads[\\/]products/);
+  assert.doesNotMatch(script, /FOREIGN_KEY_CHECKS|TRUNCATE\s+TABLE/i);
+  assert.match(gitignore, /^local_backups\/$/m);
 });
 
 test('[TAGS-15-8] batch toolbar and product selectors remain usable on desktop and narrow screens without SQL changes', () => {

@@ -1,4 +1,4 @@
-﻿import { getAdminImageOptions, getCollections, getProducts, getSiteCopy } from './content.js?v=20260705a';
+﻿import { getAdminImageOptions, getCollections, getSiteCopy } from './content.js?v=20260705a';
 import { formatSalesRank, getSalesRankMap, parseSalesValue } from './ranking.js?v=20260709b';
 import {
   compareProductsForCustomer,
@@ -12,8 +12,6 @@ import {
   getCartTotals,
   getProductSalesRows,
   getSalesSummary,
-  addAdminProduct,
-  getStoredAdminProducts,
   getStoredAddressBook,
   formatCountBadge,
   getCartQuantityCount,
@@ -24,19 +22,18 @@ import {
   getStoredProfile,
   isProductFavorited,
   isProductInCart,
-  renderAdminProductsView,
   renderAdminStatsView,
   renderFavoriteProductItems,
   saveStoredCart,
-  saveStoredAdminProducts,
   saveStoredFavorites,
   saveStoredProfile,
   saveStoredAddressBook,
   saveStoredCartSelections,
   toggleProductFavorite,
+  migrateFinalCatalogDataset,
   validateAddress,
   validateRegistration,
-} from './account-store.js?v=20260715d';
+} from './account-store.js?v=20260715-final-catalog-v1';
 import {
   buildSkuMatrix,
   getDimensionOptions,
@@ -87,27 +84,17 @@ const CURRENT_ADDRESS_ID = 3;
 
 const copy = getSiteCopy();
 const staticCollections = getCollections();
-// const products = getProducts();
-// const salesRankMap = getSalesRankMap(products);
-// const productsById = new Map(products.map((product) => [product.id, product]));
-
-// 先保留原来的静态商品，用它提供图片、样式等前端展示信息
-const staticProducts = getProducts().map((product) => ({
-  ...product,
-  tags: createStaticProductTags(product.badge),
-}));
-
-// products 改成 let，后面会用数据库商品替换
-let products = staticProducts;
+let products = [];
 let salesRankMap = getSalesRankMap(products);
 let productsById = new Map(products.map((product) => [product.id, product]));
+let productCatalogState = 'loading';
 let hasLoadedProductsFromApi = false;
 let hasLoadedCategoriesFromApi = false;
 let apiCategoryOptions = [];
-let categoryOptions = createStaticCategories(staticCollections, staticProducts);
+let categoryOptions = createStaticCategories(staticCollections, []);
 let hasLoadedTagsFromApi = false;
 let apiTagOptions = [];
-let tagOptions = createStaticTagsFromProducts(staticProducts);
+let tagOptions = createStaticTagsFromProducts([]);
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -208,6 +195,7 @@ const adminUserChipNodes = document.querySelectorAll('[data-admin-user-chip], [d
 const adminLogoutButton = document.querySelector('[data-admin-logout]');
 
 const storage = window.localStorage;
+migrateFinalCatalogDataset(storage);
 const pageRoot = document.documentElement;
 const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
@@ -693,21 +681,14 @@ function normalizeProductDescription(value) {
 function convertApiProducts(apiRows) {
   const productMap = new Map();
 
-  apiRows.forEach((row, index) => {
+  apiRows.forEach((row) => {
     const productId = Number(row.product_id);
     const skuId = Number(row.sku_id);
 
     if (!productMap.has(productId)) {
-      const imageSource =
-        staticProducts[(productId - 1) % staticProducts.length] ||
-        staticProducts[index % staticProducts.length] ||
-        staticProducts[0];
-
       const dbImageUrl = String(row.image_url || "").trim();
       const productTags = normalizeProductTags(row.tags, { preserveInputOrder: true });
-      const productImage = dbImageUrl
-        ? `${API_BASE_URL}${dbImageUrl}`
-        : imageSource.image;
+      const productImage = dbImageUrl ? `${API_BASE_URL}${dbImageUrl}` : '';
 
       productMap.set(productId, {
         // 前端原有 ranking.js 需要 id 是字符串
@@ -751,15 +732,13 @@ function convertApiProducts(apiRows) {
         detail: normalizeProductDescription(row.description),
         skuSummary: "",
 
-        // 优先使用数据库图片；没有 image_url 时才复用原来的静态图片
         image: productImage,
         images: getProductImages(row),
-        imageFit: dbImageUrl ? "cover" : imageSource.imageFit,
-        imageFocus: dbImageUrl ? "center top" : imageSource.imageFocus,
-        imageZoom: dbImageUrl ? 1 : imageSource.imageZoom,
-
-        detailLayout: imageSource.detailLayout || "price-sales-rank",
-        purchaseLayout: imageSource.purchaseLayout || "buy",
+        imageFit: "cover",
+        imageFocus: "center top",
+        imageZoom: 1,
+        detailLayout: "price-sales-rank",
+        purchaseLayout: "buy",
       });
 
       return;
@@ -818,6 +797,7 @@ async function loadProductsFromApi() {
     }
 
     products = convertApiProducts(result.data);
+    productCatalogState = 'ready';
     hasLoadedProductsFromApi = true;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
@@ -841,10 +821,9 @@ async function loadProductsFromApi() {
       products,
     });
   } catch (error) {
-    console.error("加载后端商品失败，继续使用静态商品：", error);
-
-    // 失败时保留原来的静态商品，页面不会空白
-    products = staticProducts;
+    console.error("加载后端商品失败：", error);
+    products = [];
+    productCatalogState = 'error';
     hasLoadedProductsFromApi = false;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
@@ -857,7 +836,7 @@ async function loadProductsFromApi() {
 
 function syncStorefrontCategoryOptions() {
   if (!hasLoadedProductsFromApi) {
-    categoryOptions = createStaticCategories(staticCollections, staticProducts);
+    categoryOptions = createStaticCategories(staticCollections, []);
   } else if (hasLoadedCategoriesFromApi) {
     categoryOptions = apiCategoryOptions;
   } else {
@@ -885,7 +864,7 @@ async function loadCategoriesFromApi() {
 
 function syncStorefrontTagOptions() {
   if (!hasLoadedProductsFromApi) {
-    tagOptions = createStaticTagsFromProducts(staticProducts);
+    tagOptions = createStaticTagsFromProducts([]);
   } else if (hasLoadedTagsFromApi) {
     tagOptions = apiTagOptions;
   } else {
@@ -1298,7 +1277,7 @@ function convertApiCartRows(apiRows) {
       name: `${row.product_name} / ${row.sku_name}`,
       category: matchedProduct?.category || "商品",
       badge: "数据库购物车",
-      image: matchedProduct?.image || staticProducts[0]?.image || "",
+      image: matchedProduct?.image || "",
 
       price: Number(row.price || 0),
       quantity,
@@ -2547,6 +2526,18 @@ function renderProducts() {
   const cart = getStoredCart(storage);
   
   if (!visibleProducts.length) {
+      if (productCatalogState === 'loading') {
+        productGrid.innerHTML = '<div class="product-empty"><strong>正在加载商品...</strong><p>请稍候，正在读取商品目录。</p></div>';
+        return;
+      }
+      if (productCatalogState === 'error') {
+        productGrid.innerHTML = '<div class="product-empty"><strong>商品加载失败</strong><p>暂时无法读取商品目录，请稍后刷新页面重试。</p></div>';
+        return;
+      }
+      if (products.length === 0) {
+        productGrid.innerHTML = '<div class="product-empty"><strong>暂时没有商品</strong><p>最终商品目录尚未导入，请稍后再来。</p></div>';
+        return;
+      }
       productGrid.innerHTML = `
         <div class="product-empty">
           <strong>没有找到匹配商品</strong>
@@ -5991,15 +5982,12 @@ async function refreshAdminCategoriesFromApi() {
 }
 
   function refreshAdminData() {
-  if (!Array.isArray(products) || products.length === 0) {
-    products = getStoredAdminProducts(storage);
-  }
-
+  products = Array.isArray(products) ? products : [];
   orders = [];
   summary = getSalesSummary(products, orders);
   productRows = getProductSalesRows(products, orders);
   renderedStats = renderAdminStatsView(summary, productRows);
-  renderedProducts = renderAdminProductsView(products);
+  renderedProducts = renderAdminInventoryProductsView(products);
 }
 
 async function refreshAdminProductsFromApi({ preserveExistingOnError = false } = {}) {
@@ -6022,8 +6010,11 @@ async function refreshAdminProductsFromApi({ preserveExistingOnError = false } =
     }
 
     if (!preserveExistingOnError) {
-      products = getStoredAdminProducts(storage);
-      renderedProducts = renderAdminProductsView(products);
+      products = [];
+      renderedProducts = {
+        rows: [],
+        emptyState: `后台商品列表加载失败：${error.message}`,
+      };
       renderProducts();
     }
 
@@ -6031,7 +6022,7 @@ async function refreshAdminProductsFromApi({ preserveExistingOnError = false } =
       productManageFeedback || productFeedback,
       preserveExistingOnError
         ? `后台商品列表刷新失败，已保留当前数据：${error.message}`
-        : `后台商品列表加载数据库失败，暂时显示本地模拟商品：${error.message}`,
+        : `后台商品列表加载失败：${error.message}`,
       true
     );
     return false;

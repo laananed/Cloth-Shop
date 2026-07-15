@@ -95,6 +95,22 @@
 
 标签新增、修改、删除、恢复分别记录 `TAG_CREATE`、`TAG_UPDATE`、`TAG_DELETE`、`TAG_RESTORE`，单商品完整替换与批量标签操作分别记录 `PRODUCT_TAGS_UPDATE`、`PRODUCT_TAGS_BATCH_UPDATE`。成功日志与标签关系变更同事务提交；重名、关联删除冲突、无效商品或标签等已认证失败会在业务回滚后记录 `FAILURE`，并保留 `request_id` 与白名单摘要。日志目标类型包含 `TAG`，后台筛选项会从接口动态加载这些动作和目标类型。
 
+## 最终演示数据清理
+
+`scripts/reset_final_demo_data.py` 复用 `backend/app/db.py` 的数据库连接配置。默认运行只打印商品、库存、购物车、订单、支付、销量和相关日志的行数，不删除数据：
+
+```powershell
+backend\.venv\Scripts\python.exe scripts\reset_final_demo_data.py
+```
+
+确认连接的是要清理的演示库后，传入 `--execute` 才会执行。工具先调用本机 `mysqldump` 将完整备份写入已忽略的 `local_backups/final_demo_reset/`，再把严格受运行时商品目录限制的图片 URL 写入同目录的待清理清单，并按真实外键依赖在一个事务中清空旧商品与交易数据；提交后重置适用表的自增值，只删除数据库 `product.image_url` / `product_image.image_url` 明确引用的 `backend/uploads/products/` 文件。图片删除失败时保留清单并输出具体文件，下一次 `--execute` 会继续重试，全部处理成功后自动移除清单。用户、地址、分类、标签、支付密码和管理员认证数据不在清理范围内。
+
+```powershell
+backend\.venv\Scripts\python.exe scripts\reset_final_demo_data.py --execute
+```
+
+前端数据集版本为 `final-catalog-v1`。浏览器第一次打开该版本时会清除旧收藏、旧购物车快照/勾选项、旧本地订单和后台 mock 缓存，并保留账号资料、界面偏好与管理员会话；后续刷新不会再次清除新收藏。商品 API 返回空数组时显示空商品状态，请求失败时显示加载失败，不再回退到旧静态商品。
+
 ## 后端启动
 
 进入后端目录后执行：

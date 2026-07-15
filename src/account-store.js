@@ -11,6 +11,27 @@ const ADMIN_PRODUCTS_KEY = 'blue-song-admin-products';
 const ADMIN_ORDERS_KEY = 'blue-song-admin-orders';
 const ADMIN_CATALOG_VERSION_KEY = 'blue-song-admin-catalog-version';
 const ADMIN_CATALOG_VERSION = '20260706-catalog-17';
+const DATASET_VERSION_KEY = 'blue-song-dataset-version';
+const FINAL_DATASET_VERSION = 'final-catalog-v1';
+const PRODUCT_BOUND_STORAGE_KEYS = [
+  FAVORITES_KEY,
+  ORDERS_KEY,
+  CART_KEY,
+  CART_SELECTIONS_KEY,
+  ADMIN_PRODUCTS_KEY,
+  ADMIN_ORDERS_KEY,
+  ADMIN_CATALOG_VERSION_KEY,
+];
+
+export function migrateFinalCatalogDataset(storage) {
+  if (storage.getItem(DATASET_VERSION_KEY) === FINAL_DATASET_VERSION) {
+    return false;
+  }
+
+  PRODUCT_BOUND_STORAGE_KEYS.forEach((key) => storage.removeItem(key));
+  storage.setItem(DATASET_VERSION_KEY, FINAL_DATASET_VERSION);
+  return true;
+}
 
 function readJsonList(storage, key, fallbackFactory) {
   const raw = storage.getItem(key);

@@ -90,7 +90,7 @@
         <div class="purchase-modal__summary">
           <div class="purchase-modal__visuals">
             <div class="purchase-modal__image-frame" data-purchase-image-frame data-product-state="available">
-              <img class="purchase-modal__image" data-purchase-image alt="" />
+              <img class="purchase-modal__image" data-purchase-image alt="" role="button" tabindex="0" />
               <span class="product-state-stamp product-state-stamp--detail" data-product-state-stamp role="img" aria-label="" hidden></span>
             </div>
             <div class="purchase-modal__gallery" data-purchase-gallery hidden></div>
@@ -173,15 +173,22 @@
       aria-modal="true"
       aria-hidden="true"
       aria-label="商品大图预览"
+      tabindex="-1"
       hidden
     >
-      <div class="image-lightbox__panel">
-        <button class="image-lightbox__close" type="button" data-image-lightbox-close aria-label="关闭大图预览">×</button>
-        <button class="image-lightbox__nav image-lightbox__nav--prev" type="button" data-image-lightbox-prev aria-label="上一张图片">←</button>
-        <img class="image-lightbox__image" data-image-lightbox-image alt="" />
-        <button class="image-lightbox__nav image-lightbox__nav--next" type="button" data-image-lightbox-next aria-label="下一张图片">→</button>
+      <div class="image-lightbox__panel" data-image-lightbox-dialog>
+        <button class="image-lightbox__close" type="button" data-image-lightbox-close aria-label="关闭图片预览">×</button>
+        <div class="image-lightbox__viewer">
+          <button class="image-lightbox__nav image-lightbox__nav--prev" type="button" data-image-lightbox-prev aria-label="上一张图片">←</button>
+          <div class="image-lightbox__stage" data-image-lightbox-stage aria-busy="false">
+            <div class="image-lightbox__status" data-image-lightbox-loading role="status" hidden>图片加载中…</div>
+            <img class="image-lightbox__image" data-image-lightbox-image alt="" hidden />
+            <div class="image-lightbox__status image-lightbox__status--error" data-image-lightbox-error role="status" hidden>图片加载失败</div>
+          </div>
+          <button class="image-lightbox__nav image-lightbox__nav--next" type="button" data-image-lightbox-next aria-label="下一张图片">→</button>
+        </div>
         <div class="image-lightbox__footer">
-          <strong data-image-lightbox-counter>1 / 1</strong>
+          <strong data-image-lightbox-counter aria-live="polite" aria-atomic="true">1 / 1</strong>
           <span data-image-lightbox-hint>← → 切换图片 · Esc 退出预览</span>
         </div>
       </div>

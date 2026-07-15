@@ -47,6 +47,11 @@ import {
   resolveInitialSkuSelection,
   selectSkuDimension,
 } from './sku-utils.js?v=20260715a';
+import {
+  createImageLightboxState,
+  normalizeLightboxImages,
+  wrapLightboxIndex,
+} from './image-lightbox.js?v=20260715a';
 
 const API_BASE_URL = "http://127.0.0.1:8050";
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000;
@@ -105,8 +110,12 @@ const purchaseImage = document.querySelector('[data-purchase-image]');
 const purchaseStateStamp = purchaseModal?.querySelector('[data-product-state-stamp]') || null;
 const purchaseGallery = document.querySelector('[data-purchase-gallery]');
 const imageLightbox = document.querySelector('[data-image-lightbox]');
+const imageLightboxStage = document.querySelector('[data-image-lightbox-stage]');
 const imageLightboxImage = document.querySelector('[data-image-lightbox-image]');
 const imageLightboxCounter = document.querySelector('[data-image-lightbox-counter]');
+const imageLightboxHint = document.querySelector('[data-image-lightbox-hint]');
+const imageLightboxLoading = document.querySelector('[data-image-lightbox-loading]');
+const imageLightboxError = document.querySelector('[data-image-lightbox-error]');
 const imageLightboxPrev = document.querySelector('[data-image-lightbox-prev]');
 const imageLightboxNext = document.querySelector('[data-image-lightbox-next]');
 const imageLightboxCloseButtons = document.querySelectorAll('[data-image-lightbox-close]');
@@ -165,9 +174,9 @@ const pageRoot = document.documentElement;
 const heroBackgroundUrl = new URL('../assets/hero-background.png', import.meta.url).href;
 let activePurchaseProduct = null;
 let activePurchaseImageUrl = '';
-let imageLightboxOpen = false;
-let imageLightboxImages = [];
-let imageLightboxIndex = 0;
+let lightboxState = createImageLightboxState();
+let lightboxScrollY = 0;
+const lightboxBackgroundInertState = new Map();
 let activePurchaseSkuId = null;
 let activePurchaseColor = null;
 let activePurchaseSize = null;
@@ -617,37 +626,7 @@ function renderProductStateStamp(productState, variant = '') {
 }
 
 function getProductImages(product) {
-  const sourceImages = Array.isArray(product?.images)
-    ? product.images
-    : Array.isArray(product?.product_images)
-      ? product.product_images
-      : [];
-  const fallbackImage = String(product?.image_url || product?.image || '').trim();
-  const candidates = sourceImages.length > 0
-    ? sourceImages
-    : fallbackImage
-      ? [{ image_url: fallbackImage, is_main: 1, sort_order: 0 }]
-      : [];
-  const seen = new Set();
-
-  return candidates
-    .map((image, index) => {
-      const rawUrl = String(image?.image_url || '').trim();
-      if (!rawUrl) return null;
-      const imageUrl = rawUrl.startsWith('/') ? `${API_BASE_URL}${rawUrl}` : rawUrl;
-      if (seen.has(imageUrl)) return null;
-      seen.add(imageUrl);
-      return {
-        id: image?.id ?? null,
-        image_url: imageUrl,
-        is_main: Number(image?.is_main || 0),
-        sort_order: Number(image?.sort_order ?? index),
-        originalIndex: index,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.is_main - a.is_main || a.sort_order - b.sort_order || a.originalIndex - b.originalIndex)
-    .map(({ originalIndex, ...image }) => image);
+  return normalizeLightboxImages(product, API_BASE_URL);
 }
 
 function getProductMainImage(product) {
@@ -2856,7 +2835,7 @@ function renderPurchaseModal() {
             type="button"
             class="purchase-modal__gallery-button${image.image_url === activePurchaseImageUrl ? ' is-active' : ''}"
             data-purchase-gallery-image="${escapeHtml(image.image_url)}"
-            aria-label="切换到商品图片"
+            aria-label="${image.image_url === activePurchaseImageUrl ? '打开当前商品图片大图预览' : '切换到商品图片'}"
           >
             <img class="purchase-modal__gallery-thumb" src="${escapeHtml(image.image_url)}" alt="" loading="lazy" decoding="async" />
           </button>
@@ -3112,27 +3091,47 @@ function renderImageLightbox() {
     return;
   }
 
-  if (!imageLightboxOpen || !imageLightboxImages.length) {
+  if (!lightboxState.isOpen || !lightboxState.images.length) {
     imageLightbox.hidden = true;
     imageLightbox.classList.remove('is-open');
     imageLightbox.setAttribute('aria-hidden', 'true');
     return;
   }
 
-  const currentImage = imageLightboxImages[imageLightboxIndex];
-  const singleImage = imageLightboxImages.length <= 1;
+  lightboxState.index = wrapLightboxIndex(lightboxState.images.length, lightboxState.index);
+  const currentImage = lightboxState.images[lightboxState.index];
+  const singleImage = lightboxState.images.length <= 1;
 
   imageLightbox.hidden = false;
   imageLightbox.classList.add('is-open');
   imageLightbox.setAttribute('aria-hidden', 'false');
+  imageLightbox.setAttribute('aria-label', lightboxState.context ? `${lightboxState.context} 图片预览` : '商品图片预览');
 
   if (imageLightboxImage) {
-    imageLightboxImage.src = currentImage.image_url;
-    imageLightboxImage.alt = `${activePurchaseProduct?.name || '商品'} 大图 ${imageLightboxIndex + 1}`;
+    imageLightboxImage.alt = lightboxState.context
+      ? `${lightboxState.context}，第 ${lightboxState.index + 1} 张图片`
+      : `商品图片，第 ${lightboxState.index + 1} 张`;
+    imageLightboxImage.hidden = lightboxState.loading || lightboxState.error;
   }
 
   if (imageLightboxCounter) {
-    imageLightboxCounter.textContent = `${imageLightboxIndex + 1} / ${imageLightboxImages.length}`;
+    imageLightboxCounter.textContent = `${lightboxState.index + 1} / ${lightboxState.images.length}`;
+  }
+
+  if (imageLightboxHint) {
+    imageLightboxHint.textContent = singleImage ? 'Esc 退出预览' : '← → 切换图片 · Esc 退出预览';
+  }
+
+  if (imageLightboxStage) {
+    imageLightboxStage.setAttribute('aria-busy', String(lightboxState.loading));
+  }
+
+  if (imageLightboxLoading) {
+    imageLightboxLoading.hidden = !lightboxState.loading;
+  }
+
+  if (imageLightboxError) {
+    imageLightboxError.hidden = !lightboxState.error;
   }
 
   [imageLightboxPrev, imageLightboxNext].forEach((button) => {
@@ -3143,39 +3142,192 @@ function renderImageLightbox() {
   });
 }
 
-function openImageLightbox() {
-  if (!activePurchaseProduct || !activePurchaseImageUrl) {
+function setLightboxBackgroundInert(isInert) {
+  if (!imageLightbox) {
     return;
   }
 
-  const productImages = getProductImages(activePurchaseProduct);
-  if (!productImages.length) {
+  if (isInert) {
+    lightboxBackgroundInertState.clear();
+    Array.from(document.body.children).forEach((element) => {
+      if (element === imageLightbox) {
+        return;
+      }
+
+      lightboxBackgroundInertState.set(element, Boolean(element.inert));
+      element.inert = true;
+    });
     return;
   }
 
-  const selectedIndex = productImages.findIndex((image) => image.image_url === activePurchaseImageUrl);
-  imageLightboxImages = productImages;
-  imageLightboxIndex = selectedIndex >= 0 ? selectedIndex : 0;
-  imageLightboxOpen = true;
+  lightboxBackgroundInertState.forEach((wasInert, element) => {
+    if (element.isConnected) {
+      element.inert = wasInert;
+    }
+  });
+  lightboxBackgroundInertState.clear();
+}
+
+function getImageLightboxFocusableElements() {
+  if (!imageLightbox) {
+    return [];
+  }
+
+  return Array.from(imageLightbox.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+    .filter((element) => !element.hidden && !element.closest('[hidden]'));
+}
+
+function trapImageLightboxFocus(event) {
+  const focusableElements = getImageLightboxFocusableElements();
+
+  if (!focusableElements.length) {
+    event.preventDefault();
+    imageLightbox?.focus({ preventScroll: true });
+    return;
+  }
+
+  const firstElement = focusableElements[0];
+  const lastElement = focusableElements[focusableElements.length - 1];
+
+  if (event.shiftKey && (document.activeElement === firstElement || !imageLightbox?.contains(document.activeElement))) {
+    event.preventDefault();
+    lastElement.focus({ preventScroll: true });
+    return;
+  }
+
+  if (!event.shiftKey && (document.activeElement === lastElement || !imageLightbox?.contains(document.activeElement))) {
+    event.preventDefault();
+    firstElement.focus({ preventScroll: true });
+  }
+}
+
+function restoreLightboxFocus(sourceElement) {
+  const fallbackElement = purchaseModal?.classList.contains('is-open')
+    ? purchaseModal.querySelector('[role="dialog"]') || purchaseModal
+    : null;
+  const target = sourceElement?.isConnected ? sourceElement : fallbackElement;
+
+  if (!target || typeof target.focus !== 'function') {
+    return;
+  }
+
+  if (target === fallbackElement && !target.hasAttribute('tabindex')) {
+    target.setAttribute('tabindex', '-1');
+  }
+
+  target.focus({ preventScroll: true });
+}
+
+function preloadAdjacentLightboxImages() {
+  if (!lightboxState.isOpen || lightboxState.images.length <= 1) {
+    return;
+  }
+
+  const adjacentUrls = new Set([
+    lightboxState.images[wrapLightboxIndex(lightboxState.images.length, lightboxState.index - 1)]?.image_url,
+    lightboxState.images[wrapLightboxIndex(lightboxState.images.length, lightboxState.index + 1)]?.image_url,
+  ]);
+
+  adjacentUrls.forEach((url) => {
+    if (!url) {
+      return;
+    }
+
+    const preloader = new Image();
+    preloader.src = url;
+  });
+}
+
+function loadCurrentImageLightboxImage() {
+  const currentImage = lightboxState.images[lightboxState.index];
+
+  if (!lightboxState.isOpen || !currentImage) {
+    return;
+  }
+
+  lightboxState.requestId += 1;
+  const requestId = lightboxState.requestId;
+  lightboxState.loading = true;
+  lightboxState.error = false;
+  imageLightboxImage?.removeAttribute('src');
   renderImageLightbox();
+
+  const imageLoader = new Image();
+  imageLoader.decoding = 'async';
+  imageLoader.onload = () => {
+    if (!lightboxState.isOpen || requestId !== lightboxState.requestId) {
+      return;
+    }
+
+    if (imageLightboxImage) {
+      imageLightboxImage.src = currentImage.image_url;
+    }
+    lightboxState.loading = false;
+    lightboxState.error = false;
+    renderImageLightbox();
+    preloadAdjacentLightboxImages();
+  };
+  imageLoader.onerror = () => {
+    if (!lightboxState.isOpen || requestId !== lightboxState.requestId) {
+      return;
+    }
+
+    imageLightboxImage?.removeAttribute('src');
+    lightboxState.loading = false;
+    lightboxState.error = true;
+    renderImageLightbox();
+  };
+  imageLoader.src = currentImage.image_url;
+}
+
+function openImageLightbox(sourceElement = document.activeElement) {
+  lightboxState = createImageLightboxState({
+    product: activePurchaseProduct,
+    selectedUrl: activePurchaseImageUrl,
+    sourceElement,
+    apiBaseUrl: API_BASE_URL,
+  });
+
+  if (!lightboxState.isOpen) {
+    setFeedback(purchaseFeedback, '暂无可预览图片', true);
+    return;
+  }
+
+  lightboxScrollY = window.scrollY;
+  setLightboxBackgroundInert(true);
+  document.body.classList.add('has-lightbox');
+  renderImageLightbox();
+  loadCurrentImageLightboxImage();
+  window.requestAnimationFrame(() => {
+    const focusTarget = imageLightboxCloseButtons[0] || imageLightbox;
+    focusTarget?.focus({ preventScroll: true });
+  });
 }
 
 function closeImageLightbox() {
-  imageLightboxOpen = false;
-  imageLightboxImages = [];
-  imageLightboxIndex = 0;
-  renderImageLightbox();
-}
-
-function showImageLightboxStep(step) {
-  if (!imageLightboxOpen || imageLightboxImages.length <= 1) {
+  if (!lightboxState.isOpen) {
+    lightboxState = createImageLightboxState();
+    renderImageLightbox();
     return;
   }
 
-  imageLightboxIndex = (imageLightboxIndex + step + imageLightboxImages.length) % imageLightboxImages.length;
-  activePurchaseImageUrl = imageLightboxImages[imageLightboxIndex].image_url;
+  const sourceElement = lightboxState.sourceElement;
+  lightboxState.requestId += 1;
+  lightboxState = createImageLightboxState();
+  document.body.classList.remove('has-lightbox');
+  setLightboxBackgroundInert(false);
   renderImageLightbox();
-  renderPurchaseModal();
+  window.scrollTo({ top: lightboxScrollY, left: window.scrollX, behavior: 'auto' });
+  window.requestAnimationFrame(() => restoreLightboxFocus(sourceElement));
+}
+
+function showImageLightboxStep(step) {
+  if (!lightboxState.isOpen || lightboxState.images.length <= 1) {
+    return;
+  }
+
+  lightboxState.index = wrapLightboxIndex(lightboxState.images.length, lightboxState.index + step);
+  loadCurrentImageLightboxImage();
 }
 
 function setPurchaseQuantity(nextQuantity) {
@@ -7032,7 +7184,13 @@ purchaseCloseButtons.forEach((button) => {
 });
 
 if (purchaseImage) {
-  purchaseImage.addEventListener('click', openImageLightbox);
+  purchaseImage.addEventListener('click', (event) => openImageLightbox(event.currentTarget));
+  purchaseImage.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openImageLightbox(event.currentTarget);
+    }
+  });
 }
 
 imageLightboxCloseButtons.forEach((button) => {
@@ -7069,6 +7227,11 @@ if (purchaseModal) {
     const submitButton = event.target.closest('[data-purchase-submit]');
 
     if (galleryButton) {
+      if (galleryButton.dataset.purchaseGalleryImage === activePurchaseImageUrl) {
+        openImageLightbox(galleryButton);
+        return;
+      }
+
       activePurchaseImageUrl = galleryButton.dataset.purchaseGalleryImage || '';
       renderPurchaseModal();
       return;
@@ -7290,7 +7453,12 @@ if (secondaryCta) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (imageLightboxOpen) {
+  if (lightboxState.isOpen) {
+    if (event.key === 'Tab') {
+      trapImageLightboxFocus(event);
+      return;
+    }
+
     if (event.key === 'Escape') {
       event.preventDefault();
       closeImageLightbox();

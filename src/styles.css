@@ -60,6 +60,10 @@ body.has-modal {
   overflow: hidden;
 }
 
+body.has-lightbox {
+  overflow: hidden;
+}
+
 .site-menu-button {
   position: fixed;
   top: 18px;
@@ -343,8 +347,12 @@ body.has-modal {
   z-index: 90;
   display: none;
   place-items: center;
-  padding: 24px;
-  background: rgba(4, 10, 18, 0.9);
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  overflow: hidden;
+  background: rgba(5, 10, 20, 0.88);
   backdrop-filter: blur(8px);
 }
 
@@ -355,24 +363,78 @@ body.has-modal {
 .image-lightbox__panel {
   position: relative;
   display: grid;
-  place-items: center;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  width: min(92vw, 1200px);
   max-width: 100%;
-  max-height: 100%;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+}
+
+.image-lightbox__viewer {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.image-lightbox__stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  width: 100%;
+  height: min(78vh, calc(100vh - 132px));
+  height: min(78dvh, calc(100dvh - 132px));
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(8px, 1.6vw, 18px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 14px;
+  background-color: #eef3f8;
+  background-image:
+    linear-gradient(45deg, rgba(116, 137, 158, 0.12) 25%, transparent 25%, transparent 75%, rgba(116, 137, 158, 0.12) 75%),
+    linear-gradient(45deg, rgba(116, 137, 158, 0.12) 25%, transparent 25%, transparent 75%, rgba(116, 137, 158, 0.12) 75%);
+  background-position: 0 0, 8px 8px;
+  background-size: 16px 16px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
 }
 
 .image-lightbox__image {
   display: block;
-  max-width: 90vw;
-  max-height: 82vh;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+  object-position: center;
+  border-radius: 8px;
+}
+
+.image-lightbox__status {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 1;
+  min-width: 132px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(15, 39, 61, 0.82);
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.image-lightbox__status--error {
+  background: rgba(128, 34, 50, 0.9);
 }
 
 .image-lightbox__close,
 .image-lightbox__nav {
-  position: absolute;
   z-index: 2;
   display: grid;
   place-items: center;
@@ -380,8 +442,9 @@ body.has-modal {
   background: rgba(8, 18, 30, 0.78);
   color: #fff;
   cursor: pointer;
+  opacity: 0.72;
   backdrop-filter: blur(8px);
-  transition: background 160ms ease, transform 160ms ease;
+  transition: background 160ms ease, opacity 160ms ease, transform 160ms ease;
 }
 
 .image-lightbox__nav[hidden] {
@@ -391,51 +454,33 @@ body.has-modal {
 .image-lightbox__close:hover,
 .image-lightbox__nav:hover,
 .image-lightbox__close:focus-visible,
-.image-lightbox__nav:focus-visible {
+.image-lightbox__nav:focus-visible,
+.image-lightbox__close:active,
+.image-lightbox__nav:active {
   background: rgba(63, 130, 196, 0.92);
+  opacity: 1;
   transform: scale(1.05);
   outline: 2px solid #fff;
   outline-offset: 2px;
 }
 
 .image-lightbox__close {
-  top: 0;
-  right: 0;
-  width: 46px;
-  height: 46px;
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   font-size: 26px;
-  transform: translate(50%, -50%);
-}
-
-.image-lightbox__close:hover,
-.image-lightbox__close:focus-visible {
-  transform: translate(50%, -50%) scale(1.05);
 }
 
 .image-lightbox__nav {
-  top: 50%;
-  width: 50px;
-  height: 58px;
-  border-radius: 16px;
+  position: relative;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  border-radius: 50%;
   font-size: 28px;
-}
-
-.image-lightbox__nav--prev {
-  left: 14px;
-  transform: translateY(-50%);
-}
-
-.image-lightbox__nav--next {
-  right: 14px;
-  transform: translateY(-50%);
-}
-
-.image-lightbox__nav--prev:hover,
-.image-lightbox__nav--prev:focus-visible,
-.image-lightbox__nav--next:hover,
-.image-lightbox__nav--next:focus-visible {
-  transform: translateY(-50%) scale(1.05);
 }
 
 .image-lightbox__footer {
@@ -455,38 +500,35 @@ body.has-modal {
 
 @media (max-width: 640px) {
   .image-lightbox {
-    padding: 16px;
+    padding: max(64px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
   }
 
-  .image-lightbox__image {
-    max-width: calc(100vw - 32px);
-    max-height: 76vh;
+  .image-lightbox__panel {
+    width: 100%;
+    max-height: calc(100vh - 76px);
+    max-height: calc(100dvh - 76px);
   }
 
-  .image-lightbox__close {
-    right: 8px;
-    transform: translateY(-45%);
+  .image-lightbox__viewer {
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    gap: 4px;
   }
 
-  .image-lightbox__close:hover,
-  .image-lightbox__close:focus-visible {
-    transform: translateY(-45%) scale(1.05);
+  .image-lightbox__stage {
+    height: min(70vh, calc(100vh - 150px));
+    height: min(70dvh, calc(100dvh - 150px));
+    padding: 8px;
   }
 
   .image-lightbox__nav {
     width: 44px;
-    height: 52px;
-  }
-
-  .image-lightbox__nav--prev {
-    left: 8px;
-  }
-
-  .image-lightbox__nav--next {
-    right: 8px;
+    height: 44px;
+    font-size: 24px;
   }
 
   .image-lightbox__footer {
+    gap: 8px;
+    margin-top: 0;
     font-size: 0.82rem;
   }
 }

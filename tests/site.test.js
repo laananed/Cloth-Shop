@@ -68,6 +68,12 @@ import {
   validateRegistration,
 } from '../src/account-store.js';
 import * as accountStore from '../src/account-store.js';
+import {
+  createImageLightboxState,
+  normalizeLightboxImages,
+  resolveLightboxIndex,
+  wrapLightboxIndex,
+} from '../src/image-lightbox.js';
 
 function sliceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -83,6 +89,68 @@ function assertNoMojibake(source, fileName) {
     assert.ok(!source.includes(fragment), `${fileName} should not contain mojibake fragment: ${fragment}`);
   }
 }
+
+test('[LIGHTBOX-12-1] image normalization removes invalid duplicates and keeps the main image first without mutation', () => {
+  const product = {
+    image_url: '/uploads/main.png',
+    images: [
+      null,
+      { image_url: '  ' },
+      { image_url: '/uploads/detail.png', sort_order: 2 },
+      { image_url: '/uploads/main.png', is_main: 1, sort_order: 1 },
+      { image_url: '/uploads/detail.png', sort_order: 3 },
+      undefined,
+    ],
+  };
+  const snapshot = structuredClone(product);
+
+  const images = normalizeLightboxImages(product, 'http://127.0.0.1:8050');
+
+  assert.deepEqual(images.map((image) => image.image_url), [
+    'http://127.0.0.1:8050/uploads/main.png',
+    'http://127.0.0.1:8050/uploads/detail.png',
+  ]);
+  assert.deepEqual(product, snapshot);
+});
+
+test('[LIGHTBOX-12-2] image normalization accepts a single fallback image and rejects an empty gallery', () => {
+  assert.deepEqual(
+    normalizeLightboxImages({ image: './assets/products/one.png' }),
+    [{ id: null, image_url: './assets/products/one.png', is_main: 1, sort_order: 0 }],
+  );
+  assert.deepEqual(normalizeLightboxImages({ images: [null, '', {}] }), []);
+});
+
+test('[LIGHTBOX-12-3] selected indexes resolve safely and circular navigation never produces NaN', () => {
+  const images = [{ image_url: 'a' }, { image_url: 'b' }, { image_url: 'c' }];
+
+  assert.equal(resolveLightboxIndex(images, 'b'), 1);
+  assert.equal(resolveLightboxIndex(images, 'missing'), 0);
+  assert.equal(wrapLightboxIndex(3, -1), 2);
+  assert.equal(wrapLightboxIndex(3, 3), 0);
+  assert.equal(wrapLightboxIndex(1, 99), 0);
+  assert.equal(wrapLightboxIndex(0, 99), 0);
+});
+
+test('[LIGHTBOX-12-4] unified lightbox state replaces gallery context and starts in a loading state', () => {
+  const sourceElement = { focus() {} };
+  const state = createImageLightboxState({
+    product: {
+      name: '海雾长裙',
+      images: [{ image_url: 'first.webp' }, { image_url: 'second.webp' }],
+    },
+    selectedUrl: 'second.webp',
+    sourceElement,
+  });
+
+  assert.equal(state.isOpen, true);
+  assert.equal(state.context, '海雾长裙');
+  assert.equal(state.index, 1);
+  assert.equal(state.loading, true);
+  assert.equal(state.error, false);
+  assert.equal(state.sourceElement, sourceElement);
+  assert.equal(createImageLightboxState({ product: { images: [] } }).isOpen, false);
+});
 
 test('site copy keeps only the brand title and the approved hero slogan', () => {
   const copy = getSiteCopy();
@@ -272,26 +340,39 @@ test('purchase modal supports product image galleries without changing purchase 
   assert.ok(styles.includes('.purchase-modal__gallery-button.is-active'));
 });
 
-test('purchase image lightbox exposes one accessible fullscreen shell with responsive contain styling', () => {
+test('[LIGHTBOX-12-5] lightbox exposes one accessible dialog with stage loading error and live counter hooks', () => {
   const html = readFileSync('index.html', 'utf8');
+
+  assert.match(html, /<div(?=[^>]*data-image-lightbox)(?=[^>]*hidden)(?=[^>]*aria-hidden="true")(?=[^>]*role="dialog")(?=[^>]*aria-modal="true")(?=[^>]*tabindex="-1")[^>]*>/);
+  assert.ok(html.includes('data-image-lightbox-backdrop'));
+  assert.ok(html.includes('data-image-lightbox-dialog'));
+  assert.ok(html.includes('data-image-lightbox-stage'));
+  assert.match(html, /data-image-lightbox-loading[^>]*hidden[^>]*>\s*图片加载中…/);
+  assert.match(html, /data-image-lightbox-error[^>]*hidden[^>]*>\s*图片加载失败/);
+  assert.match(html, /data-image-lightbox-image[^>]+alt=""/);
+  assert.match(html, /data-image-lightbox-close[^>]+aria-label="关闭图片预览"/);
+  assert.match(html, /data-image-lightbox-prev[^>]+aria-label="上一张图片"/);
+  assert.match(html, /data-image-lightbox-next[^>]+aria-label="下一张图片"/);
+  assert.match(html, /data-image-lightbox-counter[^>]+aria-live="polite"/);
+  assert.ok(html.includes('data-image-lightbox-hint'));
+  assert.equal((html.match(/data-image-lightbox(?:\s|=)/g) || []).length, 1);
+  assert.doesNotMatch(sliceBetween(html, 'data-image-lightbox', '</div>\n    </div>'), /data-product-state-stamp|data-favorite|data-cart|data-purchase-price/);
+});
+
+test('[LIGHTBOX-12-6] lightbox styling uses a safe dynamic viewport checkerboard stage and non-overlapping controls', () => {
   const styles = readFileSync('src/styles.css', 'utf8');
 
-  assert.match(html, /<div(?=[^>]*data-image-lightbox)(?=[^>]*hidden)(?=[^>]*aria-hidden="true")[^>]*>/);
-  assert.ok(html.includes('data-image-lightbox-backdrop'));
-  assert.match(html, /data-image-lightbox-image[^>]+alt=""/);
-  assert.match(html, /data-image-lightbox-close[^>]+aria-label=/);
-  assert.match(html, /data-image-lightbox-prev[^>]+aria-label=/);
-  assert.match(html, /data-image-lightbox-next[^>]+aria-label=/);
-  assert.ok(html.includes('data-image-lightbox-counter'));
-  assert.ok(html.includes('data-image-lightbox-hint'));
-  assert.ok(html.includes('← → 切换图片 · Esc 退出预览'));
-  assert.equal((html.match(/data-image-lightbox(?:\s|=)/g) || []).length, 1);
   assert.match(styles, /\.image-lightbox\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;[\s\S]*?z-index:\s*(?:[6-9]\d|\d{3,});/);
-  assert.match(styles, /\.image-lightbox__image\s*\{[\s\S]*?max-width:\s*90vw;[\s\S]*?max-height:\s*82vh;[\s\S]*?object-fit:\s*contain;/);
+  assert.match(styles, /\.image-lightbox\s*\{[\s\S]*?height:\s*100vh;[\s\S]*?height:\s*100dvh;[\s\S]*?background:\s*rgba\(5,\s*10,\s*20,\s*0\.88\);/);
+  assert.match(styles, /\.image-lightbox__stage\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);[\s\S]*?grid-template-rows:\s*minmax\(0,\s*1fr\);[\s\S]*?linear-gradient[\s\S]*?background-size:\s*16px 16px;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(styles, /\.image-lightbox__viewer\s*\{[\s\S]*?grid-template-columns:\s*56px minmax\(0,\s*1fr\) 56px;/);
+  assert.match(styles, /\.image-lightbox__image\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*100%;[\s\S]*?max-width:\s*100%;[\s\S]*?max-height:\s*100%;[\s\S]*?object-fit:\s*contain;/);
+  assert.match(styles, /body\.has-lightbox\s*\{[\s\S]*?overflow:\s*hidden;/);
+  assert.match(styles, /@media \(max-width:\s*640px\)[\s\S]*?\.image-lightbox__viewer\s*\{[\s\S]*?grid-template-columns:\s*44px minmax\(0,\s*1fr\) 44px;/);
   assert.match(styles, /\.purchase-modal__image\s*\{[\s\S]*?cursor:\s*zoom-in;/);
 });
 
-test('purchase image lightbox reuses product images and preserves purchase state while cycling', () => {
+test('[LIGHTBOX-12-7] lightbox owns one state object with race-safe loading preloading focus and cleanup', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const lightboxLogic = sliceBetween(
     mainJs,
@@ -309,24 +390,42 @@ test('purchase image lightbox reuses product images and preserves purchase state
     'function renderImageLightbox()',
   );
 
-  assert.ok(lightboxLogic.includes('getProductImages(activePurchaseProduct)'));
-  assert.ok(lightboxLogic.includes('activePurchaseImageUrl'));
-  assert.ok(lightboxLogic.includes('findIndex'));
-  assert.ok(lightboxLogic.includes('(imageLightboxIndex + step + imageLightboxImages.length) % imageLightboxImages.length'));
-  assert.ok(lightboxLogic.includes('activePurchaseImageUrl = imageLightboxImages[imageLightboxIndex].image_url'));
-  assert.ok(lightboxLogic.includes('renderPurchaseModal();'));
-  assert.ok(lightboxLogic.includes('imageLightboxImages.length <= 1'));
+  assert.ok(mainJs.includes("from './image-lightbox.js?v=20260715a'"));
+  assert.ok(mainJs.includes('let lightboxState = createImageLightboxState();'));
+  assert.ok(lightboxLogic.includes('createImageLightboxState'));
+  assert.ok(lightboxLogic.includes('wrapLightboxIndex'));
+  assert.ok(lightboxLogic.includes('lightboxState.requestId'));
+  assert.ok(lightboxLogic.includes('new Image()'));
+  assert.ok(lightboxLogic.includes('preloadAdjacentLightboxImages'));
+  assert.ok(lightboxLogic.includes("document.body.classList.add('has-lightbox')"));
+  assert.ok(lightboxLogic.includes("document.body.classList.remove('has-lightbox')"));
+  assert.ok(lightboxLogic.includes('setLightboxBackgroundInert'));
+  assert.ok(lightboxLogic.includes('restoreLightboxFocus'));
+  assert.ok(lightboxLogic.includes("setFeedback(purchaseFeedback, '暂无可预览图片'"));
   assert.ok(closePurchaseLogic.includes('closeImageLightbox();'));
-  assert.ok(mainJs.includes("purchaseImage.addEventListener('click', openImageLightbox)"));
+  assert.ok(mainJs.includes("purchaseImage.addEventListener('click', (event) => openImageLightbox(event.currentTarget))"));
+  assert.ok(mainJs.includes("purchaseImage.addEventListener('keydown'"));
   assert.ok(mainJs.includes('event.target === event.currentTarget'));
-  assert.ok(keydownLogic.includes('imageLightboxOpen'));
+  assert.ok(keydownLogic.includes('lightboxState.isOpen'));
   assert.ok(keydownLogic.includes("event.key === 'Escape'"));
   assert.ok(keydownLogic.includes("event.key === 'ArrowLeft'"));
   assert.ok(keydownLogic.includes("event.key === 'ArrowRight'"));
+  assert.ok(keydownLogic.includes("event.key === 'Tab'"));
+  assert.ok(keydownLogic.includes('trapImageLightboxFocus'));
   assert.equal((mainJs.match(/window\.addEventListener\('keydown'/g) || []).length, 1);
   assert.doesNotMatch(lightboxLogic, /openPurchaseModal\(|activePurchaseSkuId\s*=|activePurchaseQuantity\s*=|activePurchaseAddressId\s*=|activePurchasePaymentMethod\s*=/);
   assert.doesNotMatch(lightboxLogic, /window\.open\(/);
   assert.equal((mainJs.match(/function getProductImages\(/g) || []).length, 1);
+});
+
+test('[LIGHTBOX-12-8] lightbox keeps layered close behavior and excludes product state stamps', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const keydownLogic = sliceBetween(mainJs, "window.addEventListener('keydown', (event) => {", "if ('scrollRestoration' in window.history)");
+  const lightboxLogic = sliceBetween(mainJs, 'function renderImageLightbox()', 'function setPurchaseQuantity(nextQuantity)');
+
+  assert.ok(keydownLogic.indexOf('lightboxState.isOpen') < keydownLogic.indexOf("purchaseModal?.classList.contains('is-open')"));
+  assert.match(keydownLogic, /closeImageLightbox\(\);\s*return;/);
+  assert.doesNotMatch(lightboxLogic, /renderProductStateStamp|purchaseStateStamp|data-product-state-stamp/);
 });
 test('cart and buy route through the shared sku flow while favorites toggle directly', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');

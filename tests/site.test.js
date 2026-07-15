@@ -2897,3 +2897,147 @@ test('[BUYER-REMARK-8] shared user and admin order details safely render multili
   assert.match(styles, /\.order-detail__buyer-remark\s*\{[\s\S]*white-space:\s*pre-wrap;/);
 });
 
+test('[CART-CHECKOUT-10-1] selected-cart order model normalizes the optional buyer remark', () => {
+  const script = String.raw`
+import json
+from pydantic import ValidationError
+from app.main import OrderFromSelectedCartRequest
+
+base = {"user_id": 2, "address_id": 3, "cart_item_ids": [11]}
+values = {}
+for name, value in {
+    "missing": ...,
+    "null": None,
+    "blank": "  \n ",
+    "trimmed": "  \u8bf7\u5206\u5f00\u5305\u88c5\n\u7b2c\u4e8c\u884c  ",
+    "five_hundred": "\u6d4b" * 500,
+}.items():
+    payload = dict(base)
+    if value is not ...:
+        payload["buyer_remark"] = value
+    values[name] = OrderFromSelectedCartRequest(**payload).buyer_remark
+
+try:
+    OrderFromSelectedCartRequest(**base, buyer_remark="\u6d4b" * 501)
+except ValidationError:
+    values["five_hundred_one_rejected"] = True
+else:
+    values["five_hundred_one_rejected"] = False
+
+print(json.dumps(values, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    missing: null,
+    null: null,
+    blank: null,
+    trimmed: '请分开包装\n第二行',
+    five_hundred: '测'.repeat(500),
+    five_hundred_one_rejected: true,
+  });
+});
+
+test('[CART-CHECKOUT-10-2] idempotent migration adds a compatible selected-cart remark procedure', () => {
+  const migrationPath = 'sql语句/08_购物车选中项备注下单增量迁移.sql';
+  assert.equal(existsSync(migrationPath), true, `${migrationPath} should exist`);
+
+  const migration = readFileSync(migrationPath, 'utf8');
+  assert.match(migration, /CREATE PROCEDURE sp_create_order_from_selected_cart_items_with_remark/i);
+  assert.match(migration, /IN p_cart_item_ids JSON[\s\S]*IN p_buyer_remark VARCHAR\(500\)/i);
+  assert.match(migration, /INSERT INTO order_main\([\s\S]*buyer_remark[\s\S]*VALUES\([\s\S]*v_buyer_remark/i);
+  assert.match(migration, /DECLARE EXIT HANDLER FOR SQLEXCEPTION[\s\S]*ROLLBACK[\s\S]*RESIGNAL/i);
+  assert.match(migration, /INSERT IGNORE INTO tmp_selected_cart_item/i);
+  assert.match(migration, /DELETE ci[\s\S]*JOIN tmp_selected_cart_item/i);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|TRUNCATE|DROP\s+DATABASE/i);
+  assert.doesNotMatch(migration, /DROP PROCEDURE IF EXISTS sp_create_order_from_selected_cart_items\s*(?:;|\$\$)/i);
+});
+
+test('[CART-CHECKOUT-10-3] selected-cart API sends remark to the compatible procedure and keeps pay unchanged', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const selectedRoute = sliceBetween(backend, '@app.post("/orders/from-cart-selected")', '@app.post("/orders/pay")');
+  const payRoute = sliceBetween(backend, '@app.post("/orders/pay")', '@app.post("/orders/direct")');
+  const legacyModel = sliceBetween(backend, 'class OrderFromCartRequest(BaseModel):', 'class OrderFromSelectedCartRequest(BaseModel):');
+  const payModel = sliceBetween(backend, 'class PayOrderRequest(BaseModel):', 'class AddressAddRequest(BaseModel):');
+
+  assert.ok(selectedRoute.includes('CALL sp_create_order_from_selected_cart_items_with_remark'));
+  assert.ok(selectedRoute.includes('req.buyer_remark'));
+  assert.match(selectedRoute, /SELECT[\s\S]*buyer_remark,[\s\S]*FROM v_order_summary/);
+  assert.doesNotMatch(legacyModel, /buyer_remark/);
+  assert.doesNotMatch(payModel, /buyer_remark/);
+  assert.doesNotMatch(payRoute, /req\.buyer_remark/);
+});
+
+test('[CART-CHECKOUT-10-4] cart renders order-first checkout and owns an in-memory counted remark', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderBody = sliceBetween(mainJs, 'function renderCartSummary(', 'function getValidCartSelectionIds(');
+  const createBody = sliceBetween(mainJs, 'async function createOrderFromSelectedCartFromApi(', 'function getSelectedCartItemIds(');
+
+  assert.ok(mainJs.includes('const cartCheckoutState ='));
+  assert.ok(mainJs.includes('buyerRemark'));
+  assert.ok(mainJs.includes('checkoutStep'));
+  assert.ok(renderBody.includes('data-cart-checkout-remark'));
+  assert.ok(renderBody.includes('data-cart-checkout-remark-count'));
+  assert.match(renderBody, /maxlength="500"/);
+  assert.ok(renderBody.includes("? '正在下单…' : '下单'"));
+  assert.ok(renderBody.includes('请先勾选要下单的商品'));
+  assert.ok(createBody.includes('buyer_remark:'));
+  assert.doesNotMatch(createBody, /pay_method|pay_password/);
+});
+
+test('[CART-CHECKOUT-10-5] payment UI appears only after order creation and never recreates the order', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderBody = sliceBetween(mainJs, 'function renderCartSummary(', 'function getValidCartSelectionIds(');
+  const submitBody = sliceBetween(mainJs, 'async function submitCartCheckout()', 'function formatOrderStatus(');
+  const payBody = sliceBetween(mainJs, 'async function submitCreatedCartOrderPayment()', 'function formatOrderStatus(');
+
+  assert.ok(renderBody.includes("cartCheckoutState.checkoutStep === 'payment'"));
+  assert.ok(renderBody.includes('选择支付方式'));
+  assert.ok(renderBody.includes('输入支付密码'));
+  assert.ok(renderBody.includes('稍后支付'));
+  assert.ok(submitBody.includes('createOrderFromSelectedCartFromApi'));
+  assert.doesNotMatch(submitBody, /payOrderWithPasswordPrompt|promptPaymentMethod/);
+  assert.ok(payBody.includes('payOrderFromApi'));
+  assert.doesNotMatch(payBody, /createOrderFromSelectedCartFromApi|from-cart-selected/);
+});
+
+test('[CART-CHECKOUT-10-6] cart checkout state clears only at successful or explicit session boundaries', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const closeBody = sliceBetween(mainJs, 'function closeSidebar()', 'function getActiveSidebarScrollContainer()');
+  const submitBody = sliceBetween(mainJs, 'async function submitCartCheckout()', 'function formatOrderStatus(');
+  const deleteBody = sliceBetween(mainJs, 'async function deleteCartItemFromApi(', 'function renderFavoritesShelf(');
+
+  assert.ok(closeBody.includes("resetCartCheckoutState('cart')"));
+  assert.ok(submitBody.includes("cartCheckoutState.checkoutStep = 'payment'"));
+  assert.ok(submitBody.includes('cartCheckoutState.buyerRemark ='));
+  assert.ok(deleteBody.includes('selectedCartItemIds'));
+  assert.ok(mainJs.includes('正在下单…'));
+  assert.ok(mainJs.includes('订单已创建，可在我的订单中继续支付'));
+});
+
+test('[CART-CHECKOUT-10-7] select-all targets only checkoutable rows and creation locks cart controls', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderBody = sliceBetween(mainJs, 'function renderCartSummary(', 'function getValidCartSelectionIds(');
+  const selectAllBody = sliceBetween(mainJs, 'function toggleAllCheckoutableCartItems(', 'function updateCartQuantity(');
+  const shelfBody = sliceBetween(mainJs, 'function renderCartShelf(', 'function renderCartSummary(');
+
+  assert.ok(renderBody.includes('data-cart-select-all'));
+  assert.ok(selectAllBody.includes('isCartItemCheckoutable(item)'));
+  assert.ok(selectAllBody.includes('saveStoredCartSelections'));
+  assert.ok(shelfBody.includes('cartCheckoutState.isCreatingOrder'));
+  assert.ok(mainJs.includes('请先添加或选择收货地址'));
+});
+
+test('[CART-CHECKOUT-10-8] expected payment rejection stays out of browser error logs', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const payBody = sliceBetween(mainJs, 'async function submitCreatedCartOrderPayment()', 'function deferCreatedCartOrderPayment()');
+
+  assert.ok(payBody.includes("console.warn('购物车订单支付失败：', error)"));
+  assert.doesNotMatch(payBody, /console\.error\(['"]购物车订单支付失败/);
+});
+

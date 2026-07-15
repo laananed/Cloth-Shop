@@ -174,10 +174,25 @@ let activePurchaseAddressId = CURRENT_ADDRESS_ID;
 let activePurchaseAction = 'buy';
 let activePurchaseBuyerRemark = '';
 let isPurchaseSubmitting = false;
-let activeCartAddressId = CURRENT_ADDRESS_ID;
-let activeCartPaymentMethod = 'alipay';
 let dbAddressList = [];
-let isCartCheckoutSubmitting = false;
+const cartCheckoutState = {
+  selectedCartItemIds: [],
+  selectedAddressId: CURRENT_ADDRESS_ID,
+  buyerRemark: '',
+  createdOrderId: null,
+  createdOrderNo: '',
+  createdOrderAmount: 0,
+  createdOrderStatus: '',
+  createdOrderRemark: null,
+  createdOrderAddress: '',
+  checkoutStep: 'cart',
+  selectedPayMethod: '',
+  payPassword: '',
+  isCreatingOrder: false,
+  isPaying: false,
+  errorMessage: '',
+  successMessage: '',
+};
 let isCartQuantityUpdating = false;
 const cancellingOrderIds = new Set();
 const refundingOrderIds = new Set();
@@ -470,13 +485,34 @@ function getPaymentMethodLabel(method) {
 
 function setCartPaymentMethod(method) {
   const isAllowed = purchasePaymentMethods.some((item) => item.value === method);
-  activeCartPaymentMethod = isAllowed ? method : 'alipay';
+  cartCheckoutState.selectedPayMethod = isAllowed ? method : '';
+  cartCheckoutState.payPassword = '';
+  cartCheckoutState.errorMessage = '';
   renderSidebar();
 }
 
 function setCartAddress(addressId) {
-  activeCartAddressId = Number(addressId);
+  cartCheckoutState.selectedAddressId = Number(addressId);
+  cartCheckoutState.errorMessage = '';
   renderSidebar();
+}
+
+function resetCartCheckoutState(step = 'cart') {
+  cartCheckoutState.selectedCartItemIds = [];
+  cartCheckoutState.buyerRemark = '';
+  cartCheckoutState.createdOrderId = null;
+  cartCheckoutState.createdOrderNo = '';
+  cartCheckoutState.createdOrderAmount = 0;
+  cartCheckoutState.createdOrderStatus = '';
+  cartCheckoutState.createdOrderRemark = null;
+  cartCheckoutState.createdOrderAddress = '';
+  cartCheckoutState.checkoutStep = step;
+  cartCheckoutState.selectedPayMethod = '';
+  cartCheckoutState.payPassword = '';
+  cartCheckoutState.isCreatingOrder = false;
+  cartCheckoutState.isPaying = false;
+  cartCheckoutState.errorMessage = '';
+  cartCheckoutState.successMessage = '';
 }
 
 const sidebarMeta = {
@@ -942,8 +978,8 @@ async function loadAddressesFromApi(userId = CURRENT_USER_ID) {
       activePurchaseAddressId = Number(defaultAddress.id);
     }
 
-    if (!dbAddressList.some((address) => Number(address.id) === Number(activeCartAddressId))) {
-      activeCartAddressId = Number(defaultAddress.id);
+    if (!dbAddressList.some((address) => Number(address.id) === Number(cartCheckoutState.selectedAddressId))) {
+      cartCheckoutState.selectedAddressId = Number(defaultAddress.id);
     }
   }
 
@@ -1049,10 +1085,10 @@ async function deleteAddressFromApi(addressId) {
 
   if (defaultAddress) {
     activePurchaseAddressId = Number(defaultAddress.id);
-    activeCartAddressId = Number(defaultAddress.id);
+    cartCheckoutState.selectedAddressId = Number(defaultAddress.id);
   } else {
     activePurchaseAddressId = CURRENT_ADDRESS_ID;
-    activeCartAddressId = CURRENT_ADDRESS_ID;
+    cartCheckoutState.selectedAddressId = CURRENT_ADDRESS_ID;
   }
 
   console.log("删除收货地址成功：", result);
@@ -1086,11 +1122,11 @@ function getActivePurchaseAddressId() {
 }
 
 function getActiveCartAddressId() {
-  const selectedAddress = getDbAddressById(activeCartAddressId) || getDefaultDbAddress();
-  return selectedAddress ? Number(selectedAddress.id) : CURRENT_ADDRESS_ID;
+  const selectedAddress = getDbAddressById(cartCheckoutState.selectedAddressId) || getDefaultDbAddress();
+  return selectedAddress ? Number(selectedAddress.id) : null;
 }
 
-function renderDbAddressButtons(activeAddressId, dataAttribute) {
+function renderDbAddressButtons(activeAddressId, dataAttribute, disabled = false) {
   if (!dbAddressList.length) {
     return '<p class="purchase-empty">暂无数据库收货地址，请先在数据库 user_address 表中添加地址。</p>';
   }
@@ -1104,6 +1140,7 @@ function renderDbAddressButtons(activeAddressId, dataAttribute) {
           type="button"
           class="db-address-option ${isActive ? 'is-active' : ''}"
           ${dataAttribute}="${address.id}"
+          ${disabled ? 'disabled' : ''}
         >
           <strong>${escapeHtml(address.recipient_name || '未命名收货人')}</strong>
           <span>${escapeHtml(address.phone || '')}</span>
@@ -1430,7 +1467,8 @@ async function createOrderFromCartFromApi() {
   return orderResult;
 }
 
-async function createOrderFromSelectedCartFromApi(cartItemIds) {
+async function createOrderFromSelectedCartFromApi(cartItemIds, buyerRemark = null) {
+  const normalizedBuyerRemark = String(buyerRemark || '').trim();
   const response = await fetch(`${API_BASE_URL}/orders/from-cart-selected`, {
     method: "POST",
     headers: {
@@ -1440,6 +1478,7 @@ async function createOrderFromSelectedCartFromApi(cartItemIds) {
       user_id: CURRENT_USER_ID,
       address_id: getActiveCartAddressId(),
       cart_item_ids: cartItemIds,
+      buyer_remark: normalizedBuyerRemark || null,
     }),
   });
 
@@ -1462,81 +1501,157 @@ function getSelectedCartItemIds(cart, selectedIds) {
 }
 
 async function submitCartCheckout() {
-  if (isCartCheckoutSubmitting) {
+  if (cartCheckoutState.isCreatingOrder || cartCheckoutState.checkoutStep !== 'cart') {
     return;
   }
 
-  const cart = getStoredCart(storage);
-  const selectedIds = getStoredCartSelections(storage);
-  const selectedCartItemIds = getSelectedCartItemIds(cart, selectedIds);
-  const selectedCartItems = cart.filter((item) => selectedIds.includes(item.id));
-  const invalidCartItems = getInvalidCartItems(selectedCartItems);
+  const selectedIdsSnapshot = [...cartCheckoutState.selectedCartItemIds];
+  const buyerRemarkSnapshot = cartCheckoutState.buyerRemark;
+  const addressIdSnapshot = getActiveCartAddressId();
 
-  if (invalidCartItems.length) {
-    const itemNames = invalidCartItems
-      .map((item) => `${item.name}（${getCartItemInvalidReason(item)}）`)
-      .join("、");
-    setFeedback(
-      sidebarCartFeedback,
-      `提交订单失败：以下商品暂不能结算：${itemNames}`,
-      true
+  try {
+    cartCheckoutState.isCreatingOrder = true;
+    cartCheckoutState.errorMessage = '';
+    cartCheckoutState.successMessage = '';
+    renderSidebar();
+
+    await syncCartFromApi(CURRENT_USER_ID);
+
+    const cart = getStoredCart(storage);
+    const validSelectedIds = getValidCartSelectionIds(cart, selectedIdsSnapshot);
+    cartCheckoutState.selectedCartItemIds = validSelectedIds;
+    saveStoredCartSelections(storage, validSelectedIds);
+
+    const selectedCartItems = cart.filter((item) => validSelectedIds.includes(item.id));
+    const invalidCartItems = getInvalidCartItems(selectedCartItems);
+    const selectedCartItemIds = getSelectedCartItemIds(cart, validSelectedIds);
+
+    if (invalidCartItems.length) {
+      const itemNames = invalidCartItems
+        .map((item) => `${item.name}（${getCartItemInvalidReason(item)}）`)
+        .join('、');
+      throw new Error(`以下商品暂不能结算：${itemNames}`);
+    }
+
+    if (!selectedCartItemIds.length) {
+      throw new Error('请先勾选要下单的商品');
+    }
+
+    if (!addressIdSnapshot || !dbAddressList.some((address) => Number(address.id) === Number(addressIdSnapshot))) {
+      throw new Error('请先添加或选择收货地址');
+    }
+
+    cartCheckoutState.selectedAddressId = Number(addressIdSnapshot);
+    const orderResult = await createOrderFromSelectedCartFromApi(
+      [...selectedCartItemIds],
+      buyerRemarkSnapshot,
     );
+
+    const orderSummary = orderResult.order_summary || {};
+    const firstOrderItem = Array.isArray(orderResult.order_items) ? orderResult.order_items[0] : null;
+
+    console.log("购物车选中商品提交订单成功：", orderResult);
+
+    cartCheckoutState.createdOrderId = Number(orderResult.order_id);
+    cartCheckoutState.createdOrderNo = orderResult.order_no || '未知订单号';
+    cartCheckoutState.createdOrderAmount = Number(orderSummary.total_amount || 0);
+    cartCheckoutState.createdOrderStatus = orderSummary.status || 'PENDING_PAYMENT';
+    cartCheckoutState.createdOrderRemark = orderSummary.buyer_remark || null;
+    cartCheckoutState.createdOrderAddress = firstOrderItem
+      ? `${firstOrderItem.recipient_name || ''} ${firstOrderItem.phone || ''} ${firstOrderItem.address_detail || ''}`.trim()
+      : formatDbAddress(getDbAddressById(addressIdSnapshot));
+    cartCheckoutState.checkoutStep = 'payment';
+    cartCheckoutState.selectedPayMethod = '';
+    cartCheckoutState.payPassword = '';
+    cartCheckoutState.buyerRemark = '';
+    cartCheckoutState.selectedCartItemIds = [];
+    cartCheckoutState.successMessage = '订单已创建，请选择支付方式';
+    saveStoredCartSelections(storage, []);
+    await syncCartFromApi(CURRENT_USER_ID);
+    await refreshOrdersFromApi();
+  } catch (error) {
+    console.error("购物车创建订单失败：", error);
+    cartCheckoutState.errorMessage = `下单失败：${error.message}`;
+    cartCheckoutState.buyerRemark = buyerRemarkSnapshot;
+    cartCheckoutState.selectedAddressId = addressIdSnapshot || cartCheckoutState.selectedAddressId;
+
+    try {
+      const cart = await syncCartFromApi(CURRENT_USER_ID);
+      const validSelectedIds = getValidCartSelectionIds(cart, selectedIdsSnapshot);
+      cartCheckoutState.selectedCartItemIds = validSelectedIds;
+      saveStoredCartSelections(storage, validSelectedIds);
+    } catch (syncError) {
+      console.error('下单失败后同步购物车失败：', syncError);
+    }
+  } finally {
+    cartCheckoutState.isCreatingOrder = false;
+    renderSidebar();
+  }
+}
+
+async function submitCreatedCartOrderPayment() {
+  if (
+    cartCheckoutState.checkoutStep !== 'payment'
+    || cartCheckoutState.isPaying
+    || !cartCheckoutState.createdOrderId
+  ) {
     return;
   }
 
-  if (!selectedCartItemIds.length) {
-    setFeedback(sidebarCartFeedback, "请先勾选要提交订单的商品。", true);
+  if (!cartCheckoutState.selectedPayMethod) {
+    cartCheckoutState.errorMessage = '请先选择支付方式';
+    renderSidebar();
+    return;
+  }
+
+  if (!/^\d{6}$/.test(cartCheckoutState.payPassword)) {
+    cartCheckoutState.errorMessage = '支付密码必须是 6 位数字';
+    renderSidebar();
     return;
   }
 
   try {
-    isCartCheckoutSubmitting = true;
+    cartCheckoutState.isPaying = true;
+    cartCheckoutState.errorMessage = '';
+    cartCheckoutState.successMessage = '';
     renderSidebar();
 
-    setFeedback(sidebarCartFeedback, "正在从数据库购物车中创建待支付订单，请稍候...");
-
-    const orderResult = await createOrderFromSelectedCartFromApi(selectedCartItemIds);
-
-    const orderNo = orderResult.order_no || "未知订单号";
-
-    console.log("购物车选中商品提交订单成功：", orderResult);
-
-    setFeedback(
-  sidebarCartFeedback,
-  `选中商品订单已提交！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}，地址ID：${getActiveCartAddressId()}，当前状态：待支付。`
-);
-
-    await syncCartFromApi(CURRENT_USER_ID);
-    saveStoredCartSelections(storage, []);
-    renderSidebar();
-
-    const payResult = await payOrderWithPasswordPrompt(
-      orderResult.order_id,
-      activeCartPaymentMethod,
-      sidebarCartFeedback
+    await payOrderFromApi(
+      cartCheckoutState.createdOrderId,
+      cartCheckoutState.selectedPayMethod,
+      cartCheckoutState.payPassword,
     );
 
-    if (payResult.paid) {
-      setFeedback(
-        sidebarCartFeedback,
-        `选中商品支付成功！订单号：${orderNo}，支付方式：${getPaymentMethodLabel(activeCartPaymentMethod)}。`
-      );
+    const paidOrderNo = cartCheckoutState.createdOrderNo;
+    resetCartCheckoutState('cart');
+    cartCheckoutState.successMessage = `订单 ${paidOrderNo} 支付成功`;
+    saveStoredCartSelections(storage, []);
 
-      await loadProductsFromApi();
-    }
+    await Promise.all([
+      syncCartFromApi(CURRENT_USER_ID),
+      loadProductsFromApi(),
+      refreshOrdersFromApi(),
+    ]);
 
-    await refreshOrdersFromApi();
-
-    setTimeout(() => {
-      openSidebar("orders");
-    }, 800);
+    openSidebar('orders');
   } catch (error) {
-    console.error("购物车提交订单或支付失败：", error);
-    setFeedback(sidebarCartFeedback, `购物车提交订单或支付失败：${error.message}`, true);
+    console.warn('购物车订单支付失败：', error);
+    cartCheckoutState.errorMessage = `支付失败：${error.message}`;
+    cartCheckoutState.payPassword = '';
   } finally {
-    isCartCheckoutSubmitting = false;
+    cartCheckoutState.isPaying = false;
     renderSidebar();
   }
+}
+
+function deferCreatedCartOrderPayment() {
+  if (!cartCheckoutState.createdOrderId) {
+    return;
+  }
+
+  resetCartCheckoutState('cart');
+  cartCheckoutState.successMessage = '订单已创建，可在我的订单中继续支付';
+  renderSidebar();
 }
 
 function formatOrderStatus(status) {
@@ -3248,6 +3363,13 @@ function openSidebar(section = 'account') {
 }
 
 function closeSidebar() {
+  if (activeSidebarSection === 'cart' && !cartCheckoutState.isCreatingOrder) {
+    const hadCreatedOrder = Boolean(cartCheckoutState.createdOrderId);
+    resetCartCheckoutState('cart');
+    if (hadCreatedOrder) {
+      cartCheckoutState.successMessage = '订单已创建，可在我的订单中继续支付';
+    }
+  }
   sidebar.classList.remove('is-open');
   sidebar.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('has-sidebar');
@@ -3391,6 +3513,10 @@ function isCartItemSelected(selectedIds, itemId) {
 }
 
 function toggleCartSelection(itemId) {
+  if (cartCheckoutState.isCreatingOrder || cartCheckoutState.checkoutStep !== 'cart') {
+    return cartCheckoutState.selectedCartItemIds;
+  }
+
   const selectedIds = getStoredCartSelections(storage);
   const cart = getStoredCart(storage);
   const item = cart.find((cartItem) => cartItem.id === itemId);
@@ -3404,6 +3530,28 @@ function toggleCartSelection(itemId) {
     ? selectedIds.filter((id) => id !== itemId)
     : [...selectedIds, itemId];
 
+  saveStoredCartSelections(storage, nextSelectedIds);
+  cartCheckoutState.selectedCartItemIds = nextSelectedIds;
+  cartCheckoutState.errorMessage = '';
+  return nextSelectedIds;
+}
+
+function toggleAllCheckoutableCartItems() {
+  if (cartCheckoutState.isCreatingOrder || cartCheckoutState.checkoutStep !== 'cart') {
+    return cartCheckoutState.selectedCartItemIds;
+  }
+
+  const cart = getStoredCart(storage);
+  const checkoutableIds = cart
+    .filter((item) => isCartItemCheckoutable(item))
+    .map((item) => item.id);
+  const selectedIds = getValidCartSelectionIds(cart, getStoredCartSelections(storage));
+  const hasSelectedAll = checkoutableIds.length > 0
+    && checkoutableIds.every((id) => selectedIds.includes(id));
+  const nextSelectedIds = hasSelectedAll ? [] : checkoutableIds;
+
+  cartCheckoutState.selectedCartItemIds = nextSelectedIds;
+  cartCheckoutState.errorMessage = '';
   saveStoredCartSelections(storage, nextSelectedIds);
   return nextSelectedIds;
 }
@@ -3428,7 +3576,7 @@ function updateCartQuantity(itemId, delta) {
 }
 
 async function updateCartQuantityToApi(itemId, delta) {
-  if (isCartQuantityUpdating) {
+  if (isCartQuantityUpdating || cartCheckoutState.isCreatingOrder || cartCheckoutState.checkoutStep !== 'cart') {
     return;
   }
 
@@ -3501,6 +3649,10 @@ async function updateCartQuantityToApi(itemId, delta) {
 }
 
 async function deleteCartItemFromApi(itemId) {
+  if (cartCheckoutState.isCreatingOrder || cartCheckoutState.checkoutStep !== 'cart') {
+    return;
+  }
+
   const cart = getStoredCart(storage);
   const item = cart.find((cartItem) => cartItem.id === itemId);
 
@@ -3548,6 +3700,8 @@ async function deleteCartItemFromApi(itemId) {
       storage,
       selectedIds.filter((selectedId) => selectedId !== itemId)
     );
+    cartCheckoutState.selectedCartItemIds = cartCheckoutState.selectedCartItemIds
+      .filter((selectedId) => selectedId !== itemId);
 
     await syncCartFromApi(CURRENT_USER_ID);
     renderSidebar();
@@ -3580,6 +3734,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
       const invalidReason = getCartItemInvalidReason(item);
       const isInvalid = Boolean(invalidReason);
       const canIncrease = !isInvalid && availableStock > 0 && quantity < availableStock;
+      const controlsLocked = cartCheckoutState.isCreatingOrder || cartCheckoutState.checkoutStep !== 'cart';
 
       return `
         <article class="cart-item ${isSelected ? 'is-selected' : ''} ${isInvalid ? 'cart-item--invalid' : ''}" data-cart-item-id="${item.id}">
@@ -3589,7 +3744,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
             data-cart-select-id="${item.id}"
             aria-label="${isInvalid ? invalidReason : (isSelected ? '取消选择' : '选择商品')}"
             aria-pressed="${isSelected ? 'true' : 'false'}"
-            ${isInvalid ? 'disabled' : ''}
+            ${isInvalid || controlsLocked ? 'disabled' : ''}
           >
             <span class="cart-item__select-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -3614,6 +3769,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                   type="button"
                   data-cart-delete-id="${item.id}"
                   aria-label="删除购物车商品"
+                  ${controlsLocked ? 'disabled' : ''}
                 >
                   删除
                 </button>
@@ -3626,7 +3782,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
               <div class="cart-item__quantity-zone">
                 <span class="cart-item__quantity-label">x${quantity}</span>
                 <div class="cart-item__stepper">
-                  <button class="cart-item__stepper-button" type="button" data-cart-quantity-step="-1" data-cart-item-id="${item.id}" aria-label="减少数量">-</button>
+                  <button class="cart-item__stepper-button" type="button" data-cart-quantity-step="-1" data-cart-item-id="${item.id}" aria-label="减少数量" ${controlsLocked ? 'disabled' : ''}>-</button>
                   <span class="cart-item__quantity-value">${quantity}</span>
                   <button
                     class="cart-item__stepper-button"
@@ -3634,7 +3790,7 @@ function renderCartShelf(listElement, items, emptyState, selectedIds) {
                     data-cart-quantity-step="1"
                     data-cart-item-id="${item.id}"
                     aria-label="增加数量"
-                    ${canIncrease ? '' : 'disabled'}
+                    ${canIncrease && !controlsLocked ? '' : 'disabled'}
                   >
                     +
                   </button>
@@ -3659,60 +3815,137 @@ function renderCartSummary(cart, selectedIds) {
   const invalidItems = getInvalidCartItems(cartItems);
   const selectedTotals = getCartTotals(cartItems, safeSelectedIds);
   const allTotals = getCartTotals(cartItems, null);
-  const paymentLabel = getPaymentMethodLabel(activeCartPaymentMethod);
   const activeAddressId = getActiveCartAddressId();
   const activeAddress = getDbAddressById(activeAddressId) || getDefaultDbAddress();
   const hasSelectedItems = selectedTotals.totalQuantity > 0;
+  const checkoutableItems = cartItems.filter((item) => isCartItemCheckoutable(item));
+  const hasSelectedAll = checkoutableItems.length > 0
+    && checkoutableItems.every((item) => safeSelectedIds.includes(item.id));
+  const isPaymentStep = cartCheckoutState.checkoutStep === 'payment';
+  const canCreateOrder = hasSelectedItems
+    && Boolean(activeAddress)
+    && !cartCheckoutState.isCreatingOrder;
+  const feedbackHtml = `
+    ${cartCheckoutState.errorMessage ? `<p class="cart-checkout-feedback is-error">${escapeHtml(cartCheckoutState.errorMessage)}</p>` : ''}
+    ${cartCheckoutState.successMessage ? `<p class="cart-checkout-feedback is-success">${escapeHtml(cartCheckoutState.successMessage)}</p>` : ''}
+  `;
+
+  if (isPaymentStep) {
+    cartSummary.innerHTML = `
+      <div class="cart-summary__checkout-panel cart-payment-step">
+        <div class="cart-payment-step__heading">
+          <span>订单已创建</span>
+          <h3>选择支付方式</h3>
+        </div>
+        <dl class="cart-payment-step__order">
+          <div><dt>订单号</dt><dd>${escapeHtml(cartCheckoutState.createdOrderNo)}</dd></div>
+          <div><dt>订单金额</dt><dd>${formatCartMoney(cartCheckoutState.createdOrderAmount)}</dd></div>
+          <div><dt>订单状态</dt><dd>${escapeHtml(formatOrderStatus(cartCheckoutState.createdOrderStatus))}</dd></div>
+          <div><dt>收货地址</dt><dd>${escapeHtml(cartCheckoutState.createdOrderAddress || '以订单记录为准')}</dd></div>
+          <div><dt>买家备注</dt><dd>${escapeHtml(cartCheckoutState.createdOrderRemark || '无')}</dd></div>
+        </dl>
+        <div class="cart-summary__payment" aria-label="选择支付方式">
+          <span>选择支付方式</span>
+          <div class="cart-summary__payment-options">
+            ${purchasePaymentMethods
+              .map(
+                (method) => `
+                  <button
+                    type="button"
+                    class="cart-summary__payment-button ${method.value === cartCheckoutState.selectedPayMethod ? 'is-active' : ''}"
+                    data-cart-payment-method="${method.value}"
+                    ${cartCheckoutState.isPaying ? 'disabled' : ''}
+                  >
+                    ${method.label}
+                  </button>
+                `,
+              )
+              .join('')}
+          </div>
+        </div>
+        ${cartCheckoutState.selectedPayMethod ? `
+          <label class="cart-payment-step__password">
+            <span>输入支付密码</span>
+            <input
+              type="password"
+              inputmode="numeric"
+              autocomplete="off"
+              maxlength="6"
+              value="${escapeHtml(cartCheckoutState.payPassword)}"
+              data-cart-pay-password
+              ${cartCheckoutState.isPaying ? 'disabled' : ''}
+            />
+            <small>请输入 6 位支付密码</small>
+          </label>
+        ` : ''}
+        ${feedbackHtml}
+        <div class="cart-payment-step__actions">
+          <button
+            class="cart-summary__checkout"
+            type="button"
+            data-cart-confirm-payment
+            ${cartCheckoutState.selectedPayMethod && !cartCheckoutState.isPaying ? '' : 'disabled'}
+          >${cartCheckoutState.isPaying ? '正在支付…' : '确认支付'}</button>
+          <button
+            class="cart-payment-step__later"
+            type="button"
+            data-cart-pay-later
+            ${cartCheckoutState.isPaying ? 'disabled' : ''}
+          >稍后支付</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
 
   cartSummary.innerHTML = `
     <div class="cart-summary__checkout-panel">
       <div class="cart-summary__meta">
-        <span>购物车共 ${allTotals.totalQuantity} 件，已选 ${selectedTotals.totalQuantity} 件</span>
+        <span>购物车共 ${allTotals.totalQuantity} 件，已选 ${selectedTotals.distinctItems} 种 / ${selectedTotals.totalQuantity} 件</span>
         <strong>${formatCartMoney(selectedTotals.totalAmount)}</strong>
       </div>
+      <button
+        class="cart-summary__select-all"
+        type="button"
+        data-cart-select-all
+        aria-pressed="${hasSelectedAll}"
+        ${checkoutableItems.length && !cartCheckoutState.isCreatingOrder ? '' : 'disabled'}
+      >${hasSelectedAll ? '取消全选' : '全选可结算商品'}</button>
       ${invalidItems.length ? `<p class="cart-summary__warning">购物车中有 ${invalidItems.length} 件无效商品，请先处理后再结算。</p>` : ''}
 
      <div class="cart-summary__address">
         <span>收货地址</span>
         <strong>${activeAddress ? escapeHtml(activeAddress.recipient_name || '未命名收货人') : '暂无地址'}</strong>
-        <small>${activeAddress ? escapeHtml(formatDbAddress(activeAddress)) : '请先在数据库 user_address 表中添加地址。'}</small>
+        <small>${activeAddress ? escapeHtml(formatDbAddress(activeAddress)) : '请先添加或选择收货地址'}</small>
         <div class="cart-summary__address-options">
-          ${renderDbAddressButtons(activeAddressId, "data-cart-address-id")}
+          ${renderDbAddressButtons(activeAddressId, "data-cart-address-id", cartCheckoutState.isCreatingOrder)}
         </div>
+        <button type="button" class="cart-summary__address-manage" data-cart-manage-address>管理收货地址</button>
       </div>
 
-      <div class="cart-summary__payment">
-        <span>支付方式</span>
-        <div class="cart-summary__payment-options">
-          ${purchasePaymentMethods
-            .map(
-              (method) => `
-                <button
-                  type="button"
-                  class="cart-summary__payment-button ${method.value === activeCartPaymentMethod ? 'is-active' : ''}"
-                  data-cart-payment-method="${method.value}"
-                >
-                  ${method.label}
-                </button>
-              `,
-            )
-            .join('')}
-        </div>
-      </div>
+      <label class="cart-summary__remark">
+        <span>买家备注（选填）</span>
+        <textarea
+          maxlength="500"
+          rows="4"
+          placeholder="可填写商品偏好、配送说明等，最多 500 字"
+          data-cart-checkout-remark
+          ${cartCheckoutState.isCreatingOrder ? 'disabled' : ''}
+        >${escapeHtml(cartCheckoutState.buyerRemark)}</textarea>
+        <small data-cart-checkout-remark-count>${cartCheckoutState.buyerRemark.length} / 500</small>
+      </label>
+
+      ${feedbackHtml}
+      ${!hasSelectedItems ? '<p class="cart-summary__hint">请先勾选要下单的商品</p>' : ''}
+      ${!activeAddress ? '<p class="cart-summary__hint">请先添加或选择收货地址</p>' : ''}
 
       <button
         class="cart-summary__checkout"
         type="button"
         data-cart-checkout
-        ${hasSelectedItems && !isCartCheckoutSubmitting ? '' : 'disabled'}
+        ${canCreateOrder ? '' : 'disabled'}
       >
-        ${
-          isCartCheckoutSubmitting
-            ? '结算中...'
-            : hasSelectedItems
-              ? `使用${paymentLabel}提交已选商品订单`
-              : '请先勾选商品'
-        }
+        ${cartCheckoutState.isCreatingOrder ? '正在下单…' : '下单'}
       </button>
     </div>
   `;
@@ -3736,6 +3969,10 @@ function renderCommerceSidebarContent() {
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
   const validSelectedIds = getValidCartSelectionIds(cart, selectedIds);
+
+  if (cartCheckoutState.checkoutStep === 'cart') {
+    cartCheckoutState.selectedCartItemIds = validSelectedIds;
+  }
 
   renderCartShelf(cartList, cart, '暂无购物车', validSelectedIds);
   renderCartSummary(cart, validSelectedIds);
@@ -6579,6 +6816,19 @@ if (cartList) {
 
 if (cartSummary) {
   cartSummary.addEventListener("click", (event) => {
+    const manageAddressButton = event.target.closest('[data-cart-manage-address]');
+    if (manageAddressButton) {
+      openSidebar('address');
+      return;
+    }
+
+    const selectAllButton = event.target.closest('[data-cart-select-all]');
+    if (selectAllButton) {
+      toggleAllCheckoutableCartItems();
+      renderSidebar();
+      return;
+    }
+
     const addressButton = event.target.closest("[data-cart-address-id]");
     if (addressButton) {
       setCartAddress(addressButton.dataset.cartAddressId);
@@ -6590,12 +6840,44 @@ if (cartSummary) {
       return;
     }
 
+    const confirmPaymentButton = event.target.closest('[data-cart-confirm-payment]');
+    if (confirmPaymentButton) {
+      submitCreatedCartOrderPayment();
+      return;
+    }
+
+    const payLaterButton = event.target.closest('[data-cart-pay-later]');
+    if (payLaterButton) {
+      deferCreatedCartOrderPayment();
+      return;
+    }
+
     const checkoutButton = event.target.closest("[data-cart-checkout]");
     if (!checkoutButton) {
       return;
     }
 
     submitCartCheckout();
+  });
+
+  cartSummary.addEventListener('input', (event) => {
+    const remarkInput = event.target.closest('[data-cart-checkout-remark]');
+    if (remarkInput) {
+      cartCheckoutState.buyerRemark = String(remarkInput.value || '').slice(0, 500);
+      const count = cartSummary.querySelector('[data-cart-checkout-remark-count]');
+      if (count) {
+        count.textContent = `${cartCheckoutState.buyerRemark.length} / 500`;
+      }
+      return;
+    }
+
+    const passwordInput = event.target.closest('[data-cart-pay-password]');
+    if (passwordInput) {
+      cartCheckoutState.payPassword = String(passwordInput.value || '').replace(/\D/g, '').slice(0, 6);
+      if (passwordInput.value !== cartCheckoutState.payPassword) {
+        passwordInput.value = cartCheckoutState.payPassword;
+      }
+    }
   });
 }
 
@@ -6814,7 +7096,7 @@ if (sidebarAddressForm) {
       const newAddressId = result.address_id;
 
       activePurchaseAddressId = Number(newAddressId);
-      activeCartAddressId = Number(newAddressId);
+      cartCheckoutState.selectedAddressId = Number(newAddressId);
 
       sidebarAddressForm.reset();
 
@@ -6847,7 +7129,7 @@ if (sidebarAddressList) {
         await setDefaultAddressToApi(addressId);
 
         activePurchaseAddressId = addressId;
-        activeCartAddressId = addressId;
+        cartCheckoutState.selectedAddressId = addressId;
 
         setFeedback(sidebarAddressFeedback, '默认地址已更新。');
 

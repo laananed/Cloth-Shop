@@ -2,15 +2,15 @@
 
 - 文档生成日期：2026-07-15
 - 当前分支：`master`
-- 当前 commit：`f56ae87`
+- 当前 commit：`bc4b0ca`
 - 项目技术栈：原生 HTML/CSS/JavaScript ES Module + FastAPI + PyMySQL + MySQL 8.0.28
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 共 151 项，151 项通过；`src/main.js`、`src/account-store.js`、`src/content.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
-- 文档基线：审计起始 commit 为 `f56ae87`（`feat: 增加收藏购物车图标状态与徽章`）；本文档包含当前工作区待提交的阶段 9 立即购买买家备注闭环
+- 当前自动测试结果：`npm.cmd test` 共 159 项，159 项通过；`src/main.js`、`src/account-store.js`、`src/content.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
+- 文档基线：审计起始 commit 为 `bc4b0ca`（`feat: 增加立即购买买家备注`）；本文档包含当前工作区待提交的阶段 10 购物车下单与支付闭环
 
-> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—8 的既有验收保持不变；阶段 9 已完成订单备注迁移幂等、立即购买 API、用户/管理员查询、库存回滚、桌面端/390px 浏览器和精确数据清理验收；未执行的项目会明确标注。
+> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—9 的既有验收保持不变；阶段 10 已完成 08 迁移幂等、购物车选中项备注下单、支付失败/稍后支付、桌面端/390px 浏览器和精确数据清理验收；未执行的项目会明确标注。
 
 ## 1. 项目概述
 
@@ -57,8 +57,9 @@ Cloth-Shop/
 │  ├─ 04_测试数据与验证.sql           # 测试数据、业务流程演示和一致性查询
 │  ├─ 05_账号与支付密码初始化.sql     # 支付密码字段/测试用户与管理员初始化
 │  ├─ 06_商品描述增量迁移.sql         # product.description 与商品详情视图增量
-│  └─ 07_订单买家备注增量迁移.sql     # order_main.buyer_remark、订单视图与兼容过程增量
-├─ tests/site.test.js                 # 151 项 Node.js 行为与源码结构测试
+│  ├─ 07_订单买家备注增量迁移.sql     # order_main.buyer_remark、订单视图与立即购买兼容过程
+│  └─ 08_购物车选中项备注下单增量迁移.sql # 购物车选中项备注下单兼容过程
+├─ tests/site.test.js                 # 159 项 Node.js 行为与源码结构测试
 ├─ start_dev.ps1                      # 双服务启动、端口等待和浏览器打开逻辑
 ├─ start_dev.bat                      # Windows 一键启动入口
 ├─ package.json                       # `node --test tests/site.test.js`
@@ -100,7 +101,7 @@ flowchart LR
 | SKU 选择 | 商品卡 `data-product-sku-id`、共用弹窗 `data-purchase-sku-options` | `getSellableProductSkus()`、`resolveInitialSkuSelection()`、`selectSkuDimension()`、`setPurchaseSku()`、`setPurchaseDimension()`；商品级缓存为 `selectedSkuByProductId` | SKU 随 `GET /products` 返回 | `product_sku`、`inventory` |
 | 收藏 | 商品卡、个人中心收藏卡片、共用只读详情弹窗 | `upsertFavorite()`、`renderFavoriteProductItems()`、`renderFavoritesShelf()`、`openPurchaseModal(product, "details")` | 当前未实现收藏 API；详情只复用已加载商品数据，不发新请求 | `localStorage: blue-song-favorites` |
 | 加入购物车 | 共用购买弹窗 | `addCartToApi()`、`syncCartFromApi()` | `POST /cart/add`、`GET /cart/{user_id}` | `cart`、`cart_item`、`product_sku`、`inventory` |
-| 购物车结算 | 个人中心购物车 | `submitCartCheckout()`、`createOrderFromSelectedCartFromApi()` | `POST /orders/from-cart-selected` | `cart_item`、`order_main`、`order_item`、`inventory`、`inventory_log` |
+| 购物车结算 | 个人中心购物车 | `cartCheckoutState`、`submitCartCheckout()`、`submitCreatedCartOrderPayment()`；勾选、地址、备注、下单、支付和稍后支付分步处理 | `POST /orders/from-cart-selected` 后按需调用 `POST /orders/pay` | `cart_item`、`order_main.buyer_remark`、`order_item`、`inventory`、`inventory_log`、`payment_record` |
 | 直接购买 | 共用购买弹窗；仅立即购买显示备注输入 | `createDirectOrderFromApi()`、`submitPurchaseOrder()`；备注在 SKU/数量/图片切换时保留，关闭或创建成功后清空 | `POST /orders/direct` 的可选 `buyer_remark` | `order_main.buyer_remark`、`order_item`、`inventory`、`inventory_log` |
 | 地址管理 | 个人中心地址面板 | `loadAddressesFromApi()`、`addAddressToApi()`、`setDefaultAddressToApi()`、`deleteAddressFromApi()` | `GET /addresses/user/{user_id}`、`POST /addresses/add`、`/set-default`、`/delete` | `user_address` |
 | 订单记录 | 个人中心订单面板 | `loadOrdersFromApi()`、`renderApiOrders()`、`showOrderDetail()`；详情显示买家备注或“无” | `GET /orders/user/{user_id}`、`GET /orders/{order_id}` | `v_order_summary`、`v_user_order_detail`、支付/状态/库存日志 |
@@ -178,7 +179,7 @@ flowchart LR
 | 方法 | 路径 | 作用 | 权限 | 主要数据库对象 |
 |---|---|---|---|---|
 | POST | `/orders/from-cart` | 整个购物车创建待支付订单 | 未做用户令牌校验 | `sp_create_order_from_cart`、订单/购物车/库存表 |
-| POST | `/orders/from-cart-selected` | 仅用选中购物车项创建订单 | 未做用户令牌校验 | `sp_create_order_from_selected_cart_items`、订单/购物车/库存表 |
+| POST | `/orders/from-cart-selected` | 仅用选中购物车项创建待支付订单；`buyer_remark` 可空、去首尾空白、纯空白转 `NULL`、最多 500 字 | 未做用户令牌校验 | `sp_create_order_from_selected_cart_items_with_remark`、订单/购物车/库存表；旧过程继续保留 |
 | POST | `/orders/direct` | 校验 SKU 与可选 `buyer_remark`（去首尾空白、空值转 `NULL`、最多 500 字）后创建待支付订单 | 未做用户令牌校验 | `sp_create_direct_order_with_remark`、`order_main`、`order_item`、`inventory` |
 | POST | `/orders/pay` | 校验订单归属和 6 位支付密码后支付 | 未做用户令牌校验 | `user`、`sp_pay_order`、`payment_record`、`inventory`、`product_sales_stat` |
 | POST | `/orders/cancel` | 取消待支付订单并释放锁定库存 | 未做用户令牌校验 | `sp_cancel_order`、`order_main`、`inventory`、日志表 |
@@ -292,7 +293,8 @@ erDiagram
 |---|---|---|
 | `sp_add_to_cart` | 创建购物车或累加同 SKU 数量 | 加入购物车 |
 | `sp_create_order_from_cart` | 整车下单、锁定库存、生成明细、清空购物车 | 购物车结算 |
-| `sp_create_order_from_selected_cart_items` | 只结算选中购物车项 | 当前前台购物车结算 |
+| `sp_create_order_from_selected_cart_items` | 只结算选中购物车项 | 保留给旧调用方兼容，当前前台不再调用 |
+| `sp_create_order_from_selected_cart_items_with_remark` | 去重选中项、校验归属/状态/库存，在同一事务写备注、订单明细、库存锁定/日志并只删除选中购物车项 | 当前前台购物车结算；旧过程兼容保留 |
 | `sp_create_direct_order` | 不经过购物车直接创建待支付订单 | 立即购买 |
 | `sp_create_direct_order_with_remark` | 在同一事务写入可空买家备注并创建待支付订单；保留旧过程兼容其他调用方 | 当前立即购买 API |
 | `sp_pay_order` | 支付订单、消耗锁定库存、写支付记录 | 支付、销量 |
@@ -321,6 +323,7 @@ erDiagram
 5. `sql语句/05_账号与支付密码初始化.sql`：补充支付密码哈希字段，初始化测试用户支付密码与管理员账号。
 6. `sql语句/06_商品描述增量迁移.sql`：幂等增加 `product.description`，并覆盖 `v_product_detail` 以透传商品介绍。
 7. `sql语句/07_订单买家备注增量迁移.sql`：幂等增加 `order_main.buyer_remark`，覆盖订单列表/详情视图，并创建兼容的 `sp_create_direct_order_with_remark`。
+8. `sql语句/08_购物车选中项备注下单增量迁移.sql`：不改字段和视图，幂等创建 `sp_create_order_from_selected_cart_items_with_remark`，旧选中项过程继续存在。
 
 从零初始化时必须按以上顺序执行。已存在数据库只需按编号执行尚未应用的 `06`、`07` 增量；`04` 当前是固定规模演示数据（16 商品、32 SKU、8 订单等），不是大量销售压力数据。
 
@@ -404,26 +407,30 @@ sequenceDiagram
 sequenceDiagram
     actor User as 用户
     participant UI as 购物车侧栏
-    participant JS as submitCartCheckout()
-    participant API as POST /orders/from-cart-selected
-    participant SP as sp_create_order_from_selected_cart_items
+    participant JS as cartCheckoutState
+    participant Create as POST /orders/from-cart-selected
+    participant SP as sp_create_order_from_selected_cart_items_with_remark
+    participant Pay as POST /orders/pay
     participant DB as MySQL 事务
 
-    User->>UI: 勾选有效购物车项、地址和支付方式
-    UI->>JS: 提交 cart_item_ids
-    JS->>API: user_id + address_id + cart_item_ids
-    API->>SP: CALL，传入选中项 JSON
+    User->>UI: 勾选有效购物车项、选择地址、填写可选备注
+    UI->>JS: 点击“下单”并锁定本次选中项快照
+    JS->>Create: user_id + address_id + cart_item_ids + buyer_remark
+    Create->>SP: CALL，传入选中项 JSON 和备注
     SP->>DB: 锁定购物车项、SKU 与库存
     DB->>DB: 校验归属、状态、库存和地址
-    DB->>DB: 创建 order_main/order_item
+    DB->>DB: 创建 PENDING_PAYMENT 订单并同事务写备注
     DB->>DB: available_stock 转 locked_stock，写 inventory_log
-    DB->>DB: 删除已结算 cart_item
-    API->>DB: commit；异常 rollback
-    API-->>JS: order_id、order_no、汇总、明细、库存流水
-    JS->>JS: 重新同步购物车并提示支付密码
+    DB->>DB: 只删除选中 cart_item，未选项保留
+    Create-->>JS: order_id、order_no、汇总、明细、库存流水
+    JS-->>UI: 显示支付方式；初始不默认选中
+    User->>UI: 选择支付方式后输入 6 位密码
+    JS->>Pay: user_id + 已有 order_id + pay_method + pay_password
+    Pay->>DB: 支付已有订单，不创建第二个订单
+    Pay-->>JS: 成功后刷新订单、购物车、徽章和商品卡状态
 ```
 
-`POST /orders/from-cart` 及 `createOrderFromCartFromApi()` 仍存在，但当前 UI 使用选中项接口。
+当前购物车固定流程为“勾选商品 → 下单 → 选择支付方式 → 输入支付密码”。创建订单前不渲染支付方式或密码；支付失败保留订单 ID、支付方式和 `PENDING_PAYMENT` 状态，清空密码后允许重试；“稍后支付”只关闭当前支付步骤，订单继续在购买记录中可支付或取消。下单失败会重新同步购物车并保留仍有效的勾选、地址和备注。`POST /orders/from-cart` 及 `createOrderFromCartFromApi()` 仍存在，但当前 UI 使用选中项接口。
 
 ### 9.4 直接购买与支付
 
@@ -593,7 +600,7 @@ sequenceDiagram
 - **支付**：支付校验订单归属和 6 位支付密码，调用 `sp_pay_order`，在事务中释放锁定库存、写支付记录并联动销量。
 - **退款**：管理员同意退款的库存恢复、支付记录、销量回滚和状态更新位于同一事务；拒绝退款从状态日志恢复申请前状态。
 - **退款申请**：`RefundOrderRequest` 定义 `user_id`、`order_id`、`remark`；`refund_order()` 按订单归属锁定 `order_main`，只允许 `PAID` 或 `SHIPPED` 进入 `REFUND_REQUESTED`，并保留明确的非法状态错误与事务回滚。
-- **立即购买备注**：`DirectOrderRequest.buyer_remark` 最多 500 字，首尾空白归一化；`sp_create_direct_order_with_remark` 在库存锁定和订单创建事务内写入，订单创建成功后即清空弹窗状态，即使后续支付取消也保留已落库备注；购物车结算模型和过程未改变。
+- **订单买家备注**：`DirectOrderRequest.buyer_remark` 和 `OrderFromSelectedCartRequest.buyer_remark` 均最多 500 字并归一化首尾空白；立即购买使用 `sp_create_direct_order_with_remark`，购物车使用 `sp_create_order_from_selected_cart_items_with_remark`，都在库存锁定和订单创建事务内写入同一 `order_main.buyer_remark` 字段。购物车备注只保存在当前页面内存，关闭购物车或下单成功后清空，不写 `localStorage`，不进入加购或支付请求。
 - **事务与回滚**：PyMySQL 关闭自动提交；商品/图片/SKU/订单/支付/退款/库存/状态写操作显式 `commit()`，异常路径 `rollback()`。商品图片在数据库事务失败时清理本批新文件，但图片逻辑删除不会清理磁盘文件。
 - **操作审计限制**：`operation_log` 有表结构和测试数据，却没有后端读写/API/页面；管理员接口返回的部分 `action_type` 也没有落库。
 
@@ -603,7 +610,7 @@ sequenceDiagram
 
 | 命令 | 结果 |
 |---|---|
-| `npm.cmd test` | 151/151 通过，0 失败、0 跳过、0 TODO |
+| `npm.cmd test` | 159/159 通过，0 失败、0 跳过、0 TODO |
 | `node --check src/account-store.js` | 通过 |
 | `node --check src/main.js` | 通过 |
 | `node --check src/content.js` | 通过 |
@@ -620,6 +627,7 @@ sequenceDiagram
 | 阶段 7 收藏卡片/详情浏览器验收 | 实时商品卡片、图片与详情双入口、5 图切换和灯箱、介绍空值文案、下架状态、详情控件隔离、两级 Esc、删除同步、桌面与 390px 无横向溢出通过；详情打开未产生新资源请求，控制台 0 error；临时收藏已恢复，未写购物车、订单或数据库 |
 | 阶段 8 状态与徽章浏览器验收 | 收藏红色填充、取消与收藏夹移除同步、刷新恢复、数据库购物车商品级黄色状态、禁用状态优先、收藏/购物车徽章和真实 ARIA 总数通过；真实购物车总量 16→17→16 并恢复，390px 页面与侧栏无横向溢出，控制台 0 error；未创建订单、未改商品/SKU/库存 |
 | 阶段 9 买家备注迁移/API/浏览器验收 | `07` 连续执行 2 次成功；500 字通过、501 字返回 422；订单 73 的创建响应、数据库、用户/管理员列表与详情均保留中文多行备注，取消后库存 43/1→44/0；订单 74 在用户/管理员详情中换行展示；桌面和 390px 无横向溢出、切换 SKU/数量/地址/支付/图片仍保留、关闭重开清空、购物车/详情模式隐藏，控制台 0 error。订单 71—74 及关联记录已精确清理，最终业务计数和 SKU 9 库存恢复到验证前 |
+| 阶段 10 购物车下单/API/浏览器验收 | `08` 连续执行 2 次成功，新旧选中项过程共存且业务表计数不变；缺失/空/500 字备注通过模型，501 字和空 ID 列表返回 422，非法/跨用户 ID 返回 400，重复 ID 仅生成 1 条明细。API 订单 75 和浏览器订单 76、77 均为待支付，错误密码不重建订单，稍后支付保留购买记录和多行备注；桌面与 390px 无横向溢出，错误密码界面可重试且复测标签页控制台 0 error。所有测试订单、购物车项和关联记录已精确清理，SKU 9 库存恢复 44/0，销量和原购物车快照不变。真实支付成功未执行；未做并发/故障注入。 |
 | 浏览器自动操作新增商品 SKU 表单 | 2 色×3 尺码生成 6 行且均为 50；人工改为 35 后新增尺码，旧值保留、新行 50；库存可改为 0；未提交商品，控制台 0 错误 |
 | 浏览器自动操作统一图片管理弹窗 | 34 张商品卡各只有一个“管理图片”入口；旧入口为 0；弹窗商品/图片/主图/空上传状态正确；关闭后切换商品无状态串用；1280px 与 390px 均无横向溢出；控制台 0 错误；未真实上传或删除 |
 
@@ -629,20 +637,20 @@ sequenceDiagram
 - 覆盖销量排名、可售优先排序、地址迁移/本地存储、商品级收藏规范化/去重/幂等迁移/切换、收藏唯一商品计数、购物车商品级聚合、购物车非负整数总件数、`99+` 格式化、图标/徽章 DOM 与统一刷新契约、收藏卡片实时数据优先/快照兜底/不可用状态、详情模式控件隔离与 SKU 缓存保护、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用、有效/失效显式 SKU 恢复、唯一可售 SKU 自动选择、多 SKU 未选、商品级缓存同步和 ES Module 缓存版本契约，以及后台图片唯一入口、商品介绍迁移/接口/安全展示/编辑弹窗契约。
 - 读取 `index.html`、`admin.html`、`src/main.js`、`src/styles.css`、后端 Python、SQL、README 和启动脚本，断言路由字符串、`data-*` 钩子、字段、CORS、端口、图片、认证、订单、买家备注和 SKU 结构。
 
-151 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
+159 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
 
 ### 尚未覆盖或本轮未执行
 
 - **自动化 HTTP 冒烟测试**：尚未纳入常驻测试套件；阶段 4 使用本地临时脚本覆盖商品介绍状态矩阵并在结束后恢复数据。
-- **真实 API 测试范围**：商品介绍既有覆盖保持不变；阶段 9 覆盖立即购买备注的创建、500/501 字边界、用户/管理员列表与详情、取消及字段保留；尚未覆盖令牌过期、数据库故障注入和其他接口的完整状态矩阵。
-- **真实数据库测试**：阶段 4 既有覆盖保持不变；阶段 9 已验证迁移双次执行、字段/视图/新旧过程共存、同事务写入、库存锁定/释放与测试数据精确恢复；未执行故障注入回滚或并发测试。
-- **浏览器测试**：测试套件未内置浏览器框架；阶段 4—8 的既有浏览器回归保持不变。阶段 9 已用本地浏览器覆盖立即购买备注的可见性、500 字限制、跨控件/图片切换保留、关闭重开清空、购物车/只读详情隔离、用户/管理员订单详情换行显示及桌面/390px 布局，控制台 0 error；真实测试订单已精确清理。
+- **真实 API 测试范围**：商品介绍与阶段 9 立即购买既有覆盖保持不变；阶段 10 覆盖购物车备注 500/501 字、空/非法/跨用户/重复 ID、选中项创建、错误密码、取消、备注持久化、未选项保留和精确恢复；尚未覆盖令牌过期、数据库故障注入和所有接口的完整状态矩阵。
+- **真实数据库测试**：阶段 4 与阶段 9 既有覆盖保持不变；阶段 10 已验证 08 双次执行、新旧过程共存、同事务写备注、库存锁定/释放、重复 ID 去重和测试数据精确恢复；未执行故障注入回滚或并发压力测试。
+- **浏览器测试**：测试套件未内置浏览器框架；阶段 4—9 的既有浏览器回归保持不变。阶段 10 已覆盖购物车无选择禁用、有效/无效项、地址/备注/数量重绘保留、下单后支付步骤、错误密码重试、稍后支付、购买记录备注、桌面/390px 和无横向溢出，复测标签页控制台 0 error；测试订单和购物车项已精确清理。
 - **退款回归**：已覆盖请求模型字段、退款路由不读取 SKU 字段、不调用购买校验、订单归属锁、允许状态、状态更新、提交/回滚、业务错误保留以及前端订单级请求体。
 
 ## 13. 本地启动流程
 
 1. 启动 MySQL 8.0，并确认将使用 `frieren_cloth_shop_db`。
-2. 按第 8.4 节顺序执行 `sql语句/` 下 `01`～`07`。`04` 会清空并重建测试数据，只能用于测试库；已有数据库只执行尚未应用的增量脚本。
+2. 按第 8.4 节顺序执行 `sql语句/` 下 `01`～`08`。`04` 会清空并重建测试数据，只能用于测试库；已有数据库只执行尚未应用的增量脚本。
 3. 在 `backend/.env` 配置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`；不要提交或公开该文件。
 4. 若虚拟环境不存在，在仓库根目录执行 `python -m venv backend/.venv`。
 5. 安装依赖：`backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt`。
@@ -662,7 +670,7 @@ sequenceDiagram
 | `backend/app/main.py` | 单文件包含 38 个路由、模型、上传、鉴权、SQL 和事务 | Pydantic 模型、前端请求、SQL 对象、状态机、提交/回滚、错误码和上传清理 |
 | `src/styles.css` | 前后台共用且大量状态类依赖 JS | 响应式布局、隐藏/活动状态、弹窗、侧栏、管理面板和测试中的选择器断言 |
 | `tests/site.test.js` | 同时覆盖纯函数与大量源码字符串契约 | 修改路径、函数名、字段、端口、文案、`data-*` 或 SQL 时区分行为测试与结构断言 |
-| `sql语句/01-07` | 表、视图、过程、触发器、测试数据、账号初始化、商品介绍和订单备注增量按序耦合 | 增量迁移、外键/索引、最终覆盖视图、过程兼容、测试数据与 README 执行顺序 |
+| `sql语句/01-08` | 表、视图、过程、触发器、测试数据、账号初始化、商品介绍和订单备注增量按序耦合 | 增量迁移、外键/索引、最终覆盖视图、过程兼容、测试数据与 README 执行顺序 |
 
 禁止因文件体积大而整体重写。跨层功能应按“页面 → `data-*` → `main.js` → API → Pydantic → SQL/过程/事务 → 响应 → 重渲染”逐段验证。
 
@@ -677,20 +685,20 @@ sequenceDiagram
 - **收藏夹卡片与只读详情**：收藏侧栏展示主图、商品名、分类、介绍摘要、价格、图片提示和详情/删除操作；实时商品详情可查看完整介绍、销售状态、SKU 概要与多图灯箱，下架商品仍可只读查看。历史快照在无实时商品时保留并禁用详情；详情不触发请求、不选择 SKU、不修改购物车/订单，关闭后收藏侧栏保持原位。数据库、SQL 与后端接口无变化。
 - **收藏/购物车状态与导航徽章**：商品级收藏爱心使用红色填充和稳定的 class/data/ARIA 状态；商品任意 SKU 存在于数据库购物车时，商品卡购物车图标按商品级聚合显示暖黄色，禁用商品仍保留数据状态并优先呈现不可操作视觉。收藏徽章按唯一商品数、购物车徽章按全部购物车行 `quantity` 总和计算，0 隐藏、100 以上显示 `99+`，初始化、收藏变更、加购、改量、删除和结算后的数据库回读均统一刷新；后端同步失败保留缓存。数据库、SQL、后端和 API 无变化。
 - **多图片**：多图上传、数据库图片列表、主图兼容、前台缩略图/大图和逻辑删除链路齐全；后台商品卡只保留“管理图片”入口，统一弹窗承担已有图片查看、新图片选择与本地预览、单项移除、清空、确认上传和删除。
-- **购物车与下单**：数据库购物车增删改、选中项结算、直接购买、待支付订单、取消订单和库存锁定/释放链路齐全。
+- **购物车与下单**：数据库购物车增删改、有效项勾选/全选、地址、内存备注、选中项下单、待支付订单、选择支付方式、密码支付/失败重试、稍后支付和库存锁定/释放链路齐全；创建订单与支付是两个独立请求，未选项继续留在购物车。
 - **立即购买买家备注**：仅立即购买弹窗可选填最多 500 字备注，切换规格等操作保留、关闭或订单创建成功后清空；后端归一化并由兼容存储过程同事务落库，用户端和管理端订单列表/详情统一透传和展示，购物车结算不受影响。
 - **后台订单**：订单列表/详情、发货、取消发货、状态日志和库存流水展示链路齐全。
 - **销量**：支付累计、退款回滚和后台统计代码链路齐全。
 - **退款申请与审核**：订单级申请、归属与状态校验、`REFUND_REQUESTED` 状态日志、重复申请拦截、后台同意/拒绝及退款一致性处理链路齐全；本轮已用专用订单完成真实 MySQL/API 的支付后申请与管理员同意验证。
 
-以上结论来自当前代码、SQL、自动测试及定向运行验证；阶段 9 买家备注已完成真实数据库、API、用户/管理员浏览器和数据清理验收，阶段 4—8 与退款的既有验收记录保持不变，其他浏览器交互仍未完整验收。
+以上结论来自当前代码、SQL、自动测试及定向运行验证；阶段 10 购物车下单已完成真实数据库、API、用户浏览器和数据清理验收，阶段 4—9 与退款的既有验收记录保持不变，其他浏览器交互仍未完整验收。
 
 ### 基本完成但需要真实业务验收
 
-- **支付**：支付密码、订单归属、支付记录、库存和销量链路存在，需要在真实 MySQL 中验证成功、错误密码、重复支付和事务回滚。
+- **支付**：阶段 10 已真实验证购物车订单错误密码保持待支付且不会重建订单；真实支付成功、重复支付和故障注入回滚仍需专项验收。
 - **图片文件一致性**：新增失败能清理本批文件，但逻辑删除不删磁盘文件，需要验收长期文件治理。
 - **管理员认证**：登录、恢复、退出和主要 401/403 清理存在，需要验证异常包装为 500 的接口和令牌过期行为。
-- **SQL 初始化与业务过程**：阶段 9 已真实执行 `07` 两次并验证幂等；`04` 的全量演示数据重建本轮未执行。
+- **SQL 初始化与业务过程**：阶段 9 已真实执行 `07` 两次，阶段 10 已真实执行 `08` 两次并验证幂等；`04` 的全量演示数据重建本轮未执行。
 
 ### 尚未完成
 
@@ -699,10 +707,10 @@ sequenceDiagram
 - 没有订单“完成/确认收货”API；仅存在 `COMPLETED` 显示文案。
 - 没有手动设置任意商品图片为主图的接口。
 - 收藏仍只存在于浏览器 localStorage，尚未实现数据库收藏与跨设备同步。
-- 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；当前真实数据库验证另覆盖阶段 9 立即购买买家备注，测试订单均已清理。
-- 购物车结算尚未支持买家备注；这是阶段 9 明确保留给后续阶段的范围，不应复用立即购买请求模型时误带备注。
+- 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；阶段 9/10 的真实数据库和浏览器验证使用定向临时验收，测试订单均已清理。
 - `04` 只有固定规模测试数据，不是大量销售、压力或容量测试数据。
 - 当前仓库没有完成可直接交付的课程报告、PPT 和讲解视频闭环。
+- 阶段 11 功能尚未实现；本轮未扩展支付方式、支付网关、订单合并、管理员备注编辑或跨设备购物车备注草稿。
 
 ### 可以延后优化
 

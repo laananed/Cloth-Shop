@@ -268,6 +268,20 @@ class OrderFromSelectedCartRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
     address_id: int = Field(..., gt=0, description="收货地址ID")
     cart_item_ids: list[int] = Field(..., min_length=1, description="要结算的购物车明细ID列表")
+    buyer_remark: str | None = Field(
+        None,
+        max_length=BUYER_REMARK_MAX_LENGTH,
+        description="订单级买家备注（选填，最多500个字符）",
+    )
+
+    @field_validator("buyer_remark", mode="before")
+    @classmethod
+    def normalize_buyer_remark(cls, value):
+        if value is None or not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        return normalized or None
 
 class PayOrderRequest(BaseModel):
     user_id: int = Field(..., gt=0, description="用户ID")
@@ -2008,7 +2022,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
 def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
     """
     从购物车中选中的商品创建订单。
-    调用存储过程 sp_create_order_from_selected_cart_items。
+    调用兼容存储过程 sp_create_order_from_selected_cart_items_with_remark。
     """
     try:
         with get_db() as conn:
@@ -2016,7 +2030,8 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        CALL sp_create_order_from_selected_cart_items(
+                        CALL sp_create_order_from_selected_cart_items_with_remark(
+                            %s,
                             %s,
                             %s,
                             %s,
@@ -2027,7 +2042,8 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
                         (
                             req.user_id,
                             req.address_id,
-                            json.dumps(req.cart_item_ids)
+                            json.dumps(req.cart_item_ids),
+                            req.buyer_remark,
                         )
                     )
 

@@ -6,6 +6,8 @@
 -- 恢复说明：本迁移不改写业务数据；如需回退应用，请先保留字段，避免丢失介绍。
 -- ============================================================
 
+USE frieren_cloth_shop_db;
+
 SET @description_column_exists := (
     SELECT COUNT(*)
     FROM information_schema.columns

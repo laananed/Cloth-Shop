@@ -1,6 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 test('one-click launcher prefers the cloned backend virtual environment', () => {
@@ -21,6 +22,62 @@ test('frontend startup port stays aligned across launcher cors and readme', () =
   assert.ok(backend.includes('"http://localhost:5900"'));
   assert.ok(readme.includes('python -m http.server 5900'));
   assert.ok(readme.includes('http://127.0.0.1:5900/index.html'));
+});
+
+test('[FINAL-AUDIT-17-1] backend requirements declare multipart form support used by FastAPI routes', () => {
+  const requirements = readFileSync('backend/requirements.txt', 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim().toLowerCase())
+    .filter(Boolean);
+
+  assert.ok(requirements.some((line) => line === 'python-multipart' || line.startsWith('python-multipart==')));
+});
+
+test('[FINAL-AUDIT-17-2] demo seed replaces trigger-generated order logs before inserting fixed history ids', () => {
+  const seedSql = readFileSync('sql语句/04_测试数据与验证.sql', 'utf8');
+  const orderInsertAt = seedSql.indexOf('INSERT INTO order_main');
+  const statusLogInsertAt = seedSql.indexOf('INSERT INTO order_status_log', orderInsertAt);
+  const between = seedSql.slice(orderInsertAt, statusLogInsertAt);
+
+  assert.ok(orderInsertAt >= 0 && statusLogInsertAt > orderInsertAt);
+  assert.match(between, /DELETE FROM order_status_log;[\s\S]*ALTER TABLE order_status_log AUTO_INCREMENT = 1;/);
+});
+
+test('[FINAL-AUDIT-17-3] each incremental migration selects the documented database when run independently', () => {
+  const migrationFiles = readdirSync('sql语句');
+  for (const migrationNumber of ['06', '07', '08', '09', '10']) {
+    const migrationPath = migrationFiles.find((name) => name.startsWith(`${migrationNumber}_`) && name.endsWith('.sql'));
+    assert.ok(migrationPath, `missing migration ${migrationNumber}`);
+
+    const migration = readFileSync(`sql语句/${migrationPath}`, 'utf8');
+    assert.match(migration, /USE\s+frieren_cloth_shop_db\s*;/i, `migration ${migrationNumber} must select the database`);
+  }
+});
+
+test('[FINAL-AUDIT-17-4] SQL manifest covers every numbered script with its current byte size and hash', () => {
+  const manifest = readFileSync('sql语句/MANIFEST_SHA256.txt', 'utf8');
+  const manifestRows = new Map(
+    manifest.split(/\r?\n/).slice(1).filter((line) => /^\d{2}_/.test(line)).map((line) => {
+      const [name, bytes, hash] = line.split('\t');
+      return [name, { bytes: Number(bytes), hash }];
+    }),
+  );
+  const sqlFiles = readdirSync('sql语句').filter((name) => /^\d{2}_.+\.sql$/.test(name)).sort();
+
+  assert.equal(manifestRows.size, sqlFiles.length);
+  for (const name of sqlFiles) {
+    const content = Buffer.from(readFileSync(`sql语句/${name}`, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
+    assert.deepEqual(manifestRows.get(name), {
+      bytes: content.byteLength,
+      hash: createHash('sha256').update(content).digest('hex'),
+    });
+  }
+});
+
+test('[FINAL-AUDIT-17-5] runtime product uploads are ignored without untracking committed assets', () => {
+  const gitignore = readFileSync('.gitignore', 'utf8');
+
+  assert.match(gitignore, /^backend\/uploads\/$/m);
 });
 
 import {

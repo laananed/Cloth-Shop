@@ -23,6 +23,9 @@ coverage/
 # Logs
 *.log
 
+# Runtime uploads (already tracked demo assets remain tracked)
+backend/uploads/
+
 # Local helper data
 .agents/
 .git-template/

@@ -316,6 +316,11 @@ VALUES
 -- 13. 订单状态日志
 -- =========================
 
+-- 03 已创建订单插入触发器；上面的固定订单会先自动生成一条当前状态日志。
+-- 本测试脚本需要写入完整的演示状态历史，因此先移除这些触发器临时日志。
+DELETE FROM order_status_log;
+ALTER TABLE order_status_log AUTO_INCREMENT = 1;
+
 INSERT INTO order_status_log
 (id, order_id, from_status, to_status, remark)
 VALUES

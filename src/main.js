@@ -33,12 +33,13 @@ import {
 import {
   buildSkuMatrix,
   getDimensionOptions,
-  getInitialSkuSelection,
   getMissingSkuCombinations,
+  getSellableProductSkus,
   isStructuredProduct,
   normalizeDimensionValues,
+  resolveInitialSkuSelection,
   selectSkuDimension,
-} from './sku-utils.js?v=20260710a';
+} from './sku-utils.js?v=20260715a';
 
 const API_BASE_URL = "http://127.0.0.1:8050";
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000;
@@ -100,6 +101,7 @@ const purchaseQuantityValue = document.querySelector('[data-purchase-quantity-va
 const purchaseQuantityDecrease = document.querySelector('[data-purchase-quantity-decrease]');
 const purchaseQuantityIncrease = document.querySelector('[data-purchase-quantity-increase]');
 const purchasePaymentOptions = document.querySelector('[data-purchase-payment-options]');
+const purchasePaymentTitle = document.querySelector('[data-purchase-payment-title]');
 const purchaseSkuOptions = document.querySelector('[data-purchase-sku-options]');
 const purchaseTotal = document.querySelector('[data-purchase-total]');
 const purchaseSubmit = document.querySelector('[data-purchase-submit]');
@@ -107,7 +109,6 @@ const purchaseFeedback = document.querySelector('[data-purchase-feedback]');
 const purchaseEyebrow = document.querySelector('.purchase-modal__eyebrow');
 const purchaseAddressSection = purchaseAddressList?.closest('.purchase-modal__section') || null;
 const purchaseQuantitySection = purchaseQuantityValue?.closest('.purchase-modal__section') || null;
-const purchasePaymentSection = purchasePaymentOptions?.closest('.purchase-modal__section') || null;
 const purchaseTotalSection = purchaseTotal?.closest('.purchase-modal__total') || null;
 
 const sidebar = document.querySelector('[data-sidebar]');
@@ -729,50 +730,20 @@ async function loadProductsFromApi() {
 
 const selectedSkuByProductId = new Map();
 
-function getDefaultSku(product) {
-  if (Array.isArray(product?.skuList) && product.skuList.length) {
-    return product.skuList[0];
-  }
-
-  if (product?.skuId) {
-    return {
-      skuId: product.skuId,
-      skuName: '默认规格',
-      price: product.price,
-      availableStock: product.availableStock || 0,
-    };
-  }
-
-  return null;
-}
-
 function getProductSkuList(product) {
   return Array.isArray(product?.skuList) ? product.skuList : [];
 }
 
-function hasExplicitSelectedSku(product) {
-  return selectedSkuByProductId.has(product?.id);
-}
-
 function getExplicitSelectedSku(product) {
-  const skuList = getProductSkuList(product);
   const selectedSkuId = selectedSkuByProductId.get(product?.id);
+  const selectedSku = getSellableProductSkus(product)
+    .find((sku) => Number(sku.skuId) === Number(selectedSkuId)) || null;
 
-  return skuList.find((sku) => Number(sku.skuId) === Number(selectedSkuId)) || null;
-}
+  if (!selectedSku && product?.id) {
+    selectedSkuByProductId.delete(product.id);
+  }
 
-function getActionSelectedSku(product) {
-  return getExplicitSelectedSku(product);
-}
-
-function getSelectedSku(product) {
-  const skuList = getProductSkuList(product);
-  const selectedSkuId = selectedSkuByProductId.get(product?.id);
-
-  return (
-    skuList.find((sku) => Number(sku.skuId) === Number(selectedSkuId)) ||
-    getDefaultSku(product)
-  );
+  return selectedSku;
 }
 
 
@@ -849,7 +820,15 @@ function getInvalidCartItems(cartItems) {
 }
 
 function setSelectedSku(productId, skuId) {
-  selectedSkuByProductId.set(productId, Number(skuId));
+  const product = productsById.get(productId);
+  const selectedSku = getSellableProductSkus(product)
+    .find((sku) => Number(sku.skuId) === Number(skuId)) || null;
+
+  if (selectedSku) {
+    selectedSkuByProductId.set(productId, Number(selectedSku.skuId));
+  } else {
+    selectedSkuByProductId.delete(productId);
+  }
   updateView();
 }
 
@@ -859,9 +838,7 @@ function getPurchaseSelectedSku(product) {
 }
 
 function getAvailableProductSkuList(product) {
-  return getProductSkuList(product).filter((sku) => {
-    return isOnSale(sku.skuStatus || sku.status || "ON_SALE") && Number(sku.availableStock || 0) > 0;
-  });
+  return getSellableProductSkus(product);
 }
 
 function canOpenProductActionModal(product) {
@@ -2747,8 +2724,12 @@ function renderPurchaseModal() {
     purchaseQuantitySection.hidden = !actionConfig.showQuantity;
   }
 
-  if (purchasePaymentSection) {
-    purchasePaymentSection.hidden = !actionConfig.showPayment;
+  if (purchasePaymentOptions) {
+    purchasePaymentOptions.hidden = !actionConfig.showPayment;
+  }
+
+  if (purchasePaymentTitle) {
+    purchasePaymentTitle.hidden = !actionConfig.showPayment;
   }
 
   if (purchaseTotalSection) {
@@ -2805,15 +2786,17 @@ async function openPurchaseModal(product, action = 'buy') {
   activePurchaseProduct = product;
   activePurchaseImageUrl = getProductMainImage(product);
   activePurchaseAction = getPurchaseActionConfig(action).key;
-  activePurchaseSkuId = null;
-  activePurchaseColor = null;
-  activePurchaseSize = null;
-  if (isStructuredProduct(product)) {
-    const initialSelection = getInitialSkuSelection(product);
-    activePurchaseColor = initialSelection.color;
-    activePurchaseSize = initialSelection.size;
-    activePurchaseSkuId = initialSelection.skuId;
+  const cachedSkuId = selectedSkuByProductId.get(product?.id);
+  const initialSelection = resolveInitialSkuSelection(product, cachedSkuId);
+  activePurchaseColor = initialSelection.color;
+  activePurchaseSize = initialSelection.size;
+  activePurchaseSkuId = initialSelection.skuId;
+  if (initialSelection.skuId) {
+    selectedSkuByProductId.set(product.id, Number(initialSelection.skuId));
+  } else {
+    selectedSkuByProductId.delete(product.id);
   }
+  updateView();
   activePurchaseQuantity = 1;
   activePurchasePaymentMethod = 'alipay';
 
@@ -2943,10 +2926,18 @@ function setPurchaseQuantity(nextQuantity) {
 }
 
 function setPurchaseSku(skuId) {
-  activePurchaseSkuId = Number(skuId);
+  const selectedSku = getSellableProductSkus(activePurchaseProduct)
+    .find((sku) => Number(sku.skuId) === Number(skuId)) || null;
+  activePurchaseSkuId = selectedSku ? Number(selectedSku.skuId) : null;
 
-  if (activePurchaseProduct) {
-    selectedSkuByProductId.set(activePurchaseProduct.id, Number(skuId));
+  if (activePurchaseProduct && selectedSku) {
+    selectedSkuByProductId.set(activePurchaseProduct.id, Number(selectedSku.skuId));
+    activePurchaseQuantity = Math.min(
+      Math.max(1, Number(activePurchaseQuantity) || 1),
+      Math.max(1, getSkuAvailableStock(selectedSku)),
+    );
+  } else if (activePurchaseProduct) {
+    selectedSkuByProductId.delete(activePurchaseProduct.id);
   }
 
   renderPurchaseModal();
@@ -2975,6 +2966,8 @@ function setPurchaseDimension(dimension, value) {
       Math.max(1, Number(activePurchaseQuantity) || 1),
       Math.max(1, getSkuAvailableStock(selectedSku)),
     );
+  } else if (activePurchaseProduct) {
+    selectedSkuByProductId.delete(activePurchaseProduct.id);
   }
 
   renderPurchaseModal();

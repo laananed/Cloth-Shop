@@ -237,7 +237,7 @@ test('purchase modal source keeps product selection before derived state', () =>
   const productStateIndex = renderBody.indexOf('getProductDisplayState(product)');
   const selectedSkuOnSaleIndex = renderBody.indexOf('selectedSkuOnSale');
   const addressToggleIndex = renderBody.indexOf('purchaseAddressSection.hidden = !actionConfig.showAddress;');
-  const paymentToggleIndex = renderBody.indexOf('purchasePaymentSection.hidden = !actionConfig.showPayment;');
+  const paymentToggleIndex = renderBody.indexOf('purchasePaymentOptions.hidden = !actionConfig.showPayment;');
 
   assert.ok(productIndex >= 0);
   assert.ok(selectedSkuIndex >= 0);
@@ -345,7 +345,7 @@ test('purchase modal routes actions through the shared selection flow', () => {
   assert.ok(mainJs.includes('getPurchaseActionConfig'));
   assert.ok(mainJs.includes('canOpenProductActionModal'));
   assert.ok(mainJs.includes('purchaseAddressSection.hidden = !actionConfig.showAddress;'));
-  assert.ok(mainJs.includes('purchasePaymentSection.hidden = !actionConfig.showPayment;'));
+  assert.ok(mainJs.includes('purchasePaymentOptions.hidden = !actionConfig.showPayment;'));
   assert.ok(mainJs.includes('purchaseTotalSection.hidden = !actionConfig.showTotal;'));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
@@ -2026,6 +2026,108 @@ test('[SKU-4] legacy sku products keep the previous specification flow', async (
   assert.ok(mainJs.includes('data-purchase-sku-id'));
   assert.ok(mainJs.includes("sku.skuName || '默认规格'"));
   assert.doesNotMatch(lightboxBody, /activePurchase(Color|Size|SkuId|Quantity|AddressId|PaymentMethod)\s*=/);
+});
+
+test('[SKU-SYNC-1] purchase initialization restores a valid explicit sku and its dimensions', async () => {
+  const { resolveInitialSkuSelection } = await import('../src/sku-utils.js');
+  const product = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuId: 401, color: '白色', size: 'S', skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 5 },
+      { skuId: 402, color: '黑色', size: 'M', skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 3 },
+    ],
+  };
+
+  assert.deepEqual(resolveInitialSkuSelection(product, 402), {
+    color: '黑色',
+    size: 'M',
+    skuId: 402,
+  });
+});
+
+test('[SKU-SYNC-2] purchase initialization auto-selects only one sellable sku', async () => {
+  const { resolveInitialSkuSelection } = await import('../src/sku-utils.js');
+  const product = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuId: 411, skuStatus: 'OFF_SALE', skuIsDeleted: 0, availableStock: 8 },
+      { skuId: 412, skuStatus: 'ON_SALE', skuIsDeleted: 1, availableStock: 8 },
+      { skuId: 413, skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 0 },
+      { skuId: 414, skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 2 },
+    ],
+  };
+
+  assert.deepEqual(resolveInitialSkuSelection(product, 411), {
+    color: null,
+    size: null,
+    skuId: 414,
+  });
+});
+
+test('[SKU-SYNC-3] purchase initialization keeps multiple sellable skus unselected', async () => {
+  const { resolveInitialSkuSelection } = await import('../src/sku-utils.js');
+  const product = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuId: 421, skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 2 },
+      { skuId: 422, skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 4 },
+    ],
+  };
+
+  assert.deepEqual(resolveInitialSkuSelection(product), {
+    color: null,
+    size: null,
+    skuId: null,
+  });
+});
+
+test('[SKU-SYNC-4] product and sku sale state both gate reusable selections', async () => {
+  const { getSellableProductSkus, resolveInitialSkuSelection } = await import('../src/sku-utils.js');
+  const product = {
+    productStatus: 'OFF_SALE',
+    skuList: [
+      { skuId: 431, skuStatus: 'ON_SALE', skuIsDeleted: 0, availableStock: 5 },
+    ],
+  };
+
+  assert.deepEqual(getSellableProductSkus(product), []);
+  assert.deepEqual(resolveInitialSkuSelection(product, 431), {
+    color: null,
+    size: null,
+    skuId: null,
+  });
+});
+
+test('[SKU-SYNC-5] modal initialization and dimension changes keep the product cache synchronized', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const openModalBody = sliceBetween(mainJs, 'async function openPurchaseModal(product, action = \'buy\') {', 'function closePurchaseModal() {');
+  const dimensionBody = sliceBetween(mainJs, 'function setPurchaseDimension(dimension, value) {', 'function setPurchasePaymentMethod(method) {');
+  const skuBody = sliceBetween(mainJs, 'function setPurchaseSku(skuId) {', 'function setPurchaseDimension(dimension, value) {');
+
+  assert.ok(openModalBody.includes('resolveInitialSkuSelection(product, cachedSkuId)'));
+  assert.ok(openModalBody.includes('selectedSkuByProductId.delete(product.id)'));
+  assert.ok(openModalBody.includes('updateView();'));
+  assert.ok(dimensionBody.includes('selectedSkuByProductId.delete(activePurchaseProduct.id)'));
+  assert.ok(skuBody.includes('activePurchaseQuantity = Math.min('));
+});
+
+test('[SKU-SYNC-6] storefront cache-busts the sku utility module after selection exports change', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const html = readFileSync('index.html', 'utf8');
+
+  assert.ok(mainJs.includes("from './sku-utils.js?v=20260715a'"));
+  assert.ok(html.includes('./src/main.js?v=20260715b'));
+});
+
+test('[SKU-SYNC-7] cart and favorite modals hide payment controls without hiding sku controls', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const html = readFileSync('index.html', 'utf8');
+  const renderBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+
+  assert.ok(html.includes('data-purchase-payment-title'));
+  assert.ok(renderBody.includes('purchasePaymentTitle.hidden = !actionConfig.showPayment;'));
+  assert.ok(renderBody.includes('purchasePaymentOptions.hidden = !actionConfig.showPayment;'));
+  assert.ok(!mainJs.includes("purchasePaymentOptions?.closest('.purchase-modal__section')"));
 });
 
 test('[SKU-5] admin product cards expose a sku manager', () => {

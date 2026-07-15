@@ -87,6 +87,10 @@ function isDeletedSku(sku) {
   return Number(sku?.skuIsDeleted ?? sku?.sku_is_deleted ?? 0) === 1;
 }
 
+function isDeletedProduct(product) {
+  return Number(product?.productIsDeleted ?? product?.product_is_deleted ?? product?.is_deleted ?? 0) === 1;
+}
+
 function isSaleStatus(value, fallbackOnSale) {
   if (fallbackOnSale === 0 || fallbackOnSale === false || fallbackOnSale === '0') return false;
   return String(value || 'ON_SALE').trim().toUpperCase() === 'ON_SALE';
@@ -104,12 +108,16 @@ export function isStructuredProduct(product) {
 export function isStructuredSkuSellable(product, sku) {
   const productOnSale = isSaleStatus(product?.productStatus || product?.status, product?.on_sale);
   const skuOnSale = isSaleStatus(sku?.skuStatus || sku?.status, sku?.on_sale);
-  return productOnSale && !isDeletedSku(sku) && skuOnSale && Number(sku?.availableStock ?? sku?.stock ?? 0) > 0;
+  return !isDeletedProduct(product) && productOnSale && !isDeletedSku(sku) && skuOnSale && Number(sku?.availableStock ?? sku?.stock ?? 0) > 0;
+}
+
+export function getSellableProductSkus(product) {
+  return getProductSkuList(product).filter((sku) => isStructuredSkuSellable(product, sku));
 }
 
 export function getSellableStructuredSkus(product) {
   if (!isStructuredProduct(product)) return [];
-  return getProductSkuList(product).filter((sku) => isStructuredSkuSellable(product, sku));
+  return getSellableProductSkus(product);
 }
 
 export function getDimensionOptions(product, selection = {}, dimension) {
@@ -167,6 +175,22 @@ export function getInitialSkuSelection(product) {
   if (colors.length === 1) selection = selectSkuDimension(product, selection, 'color', colors[0].value);
   if (sizes.length === 1) selection = selectSkuDimension(product, selection, 'size', sizes[0].value);
   return selection;
+}
+
+export function resolveInitialSkuSelection(product, explicitSkuId = null) {
+  const sellableSkus = getSellableProductSkus(product);
+  const explicitSku = sellableSkus.find((sku) => Number(sku.skuId ?? sku.id) === Number(explicitSkuId)) || null;
+  const selectedSku = explicitSku || (sellableSkus.length === 1 ? sellableSkus[0] : null);
+
+  if (!selectedSku) {
+    return { color: null, size: null, skuId: null };
+  }
+
+  return {
+    color: isStructuredSku(selectedSku) ? String(selectedSku.color).trim() : null,
+    size: isStructuredSku(selectedSku) ? String(selectedSku.size).trim() : null,
+    skuId: Number(selectedSku.skuId ?? selectedSku.id),
+  };
 }
 
 export function getMissingSkuCombinations(existingRows, colorsValue, sizesValue, defaults = {}) {

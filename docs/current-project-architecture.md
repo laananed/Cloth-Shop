@@ -2,15 +2,15 @@
 
 - 文档生成日期：2026-07-15
 - 当前分支：`master`
-- 当前 commit：`2933539`
+- 当前 commit：`3a0c8bf`
 - 项目技术栈：原生 HTML/CSS/JavaScript ES Module + FastAPI + PyMySQL + MySQL 8.0.28
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 共 117 项，117 项通过；`src/main.js` 语法检查和后端 Python 编译检查均通过
-- 文档基线：审计起始 commit 为 `2933539`（`feat: 合并后台商品图片管理入口`）；本文档包含当前工作区待提交的阶段 4 商品介绍闭环
+- 当前自动测试结果：`npm.cmd test` 共 124 项，124 项通过；`src/main.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
+- 文档基线：审计起始 commit 为 `3a0c8bf`（`feat: 完善商品介绍数据闭环`）；本文档包含当前工作区待提交的阶段 5 商品 SKU 选择状态同步修复
 
-> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4 已在本地 MySQL 8.0.28 重复执行商品介绍迁移，并完成定向 HTTP 与浏览器验收；未执行的项目会明确标注。
+> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4 已在本地 MySQL 8.0.28 重复执行商品介绍迁移并完成定向 HTTP 与浏览器验收；阶段 5 已完成 SKU 选择纯函数、桌面端和 390px 浏览器验收，但未执行购物车或订单写入；未执行的项目会明确标注。
 
 ## 1. 项目概述
 
@@ -96,7 +96,7 @@ flowchart LR
 | 商品搜索 | `data-product-search` | `getProductSearchText()`、`filteredProducts()` | 无；浏览器内过滤 | API 商品内存集合 |
 | 商品排序 | 商品网格 | `compareProductsForCustomer()`、`getSalesRankMap()` | 无；浏览器内排序 | `product_sales_stat` 的 API 映射 |
 | 多图预览 | 购买弹窗与 `data-image-lightbox` | `getProductImages()`、`renderImageLightbox()`、`showImageLightboxStep()` | 图片随 `GET /products` 返回 | `product_image`、兼容字段 `product.image_url` |
-| SKU 选择 | `data-purchase-sku-options` | `getDimensionOptions()`、`selectSkuDimension()`、`setPurchaseDimension()` | SKU 随 `GET /products` 返回 | `product_sku`、`inventory` |
+| SKU 选择 | 商品卡 `data-product-sku-id`、共用弹窗 `data-purchase-sku-options` | `getSellableProductSkus()`、`resolveInitialSkuSelection()`、`selectSkuDimension()`、`setPurchaseSku()`、`setPurchaseDimension()`；商品级缓存为 `selectedSkuByProductId` | SKU 随 `GET /products` 返回 | `product_sku`、`inventory` |
 | 收藏 | 共用购买弹窗、个人中心收藏面板 | `upsertFavorite()`、`renderProductShelf()` | 当前未实现收藏 API | `localStorage: blue-song-favorites` |
 | 加入购物车 | 共用购买弹窗 | `addCartToApi()`、`syncCartFromApi()` | `POST /cart/add`、`GET /cart/{user_id}` | `cart`、`cart_item`、`product_sku`、`inventory` |
 | 购物车结算 | 个人中心购物车 | `submitCartCheckout()`、`createOrderFromSelectedCartFromApi()` | `POST /orders/from-cart-selected` | `cart_item`、`order_main`、`order_item`、`inventory`、`inventory_log` |
@@ -107,7 +107,7 @@ flowchart LR
 | 取消订单 | 待支付订单操作 | `cancelOrderFromApi()`、`handleCancelOrder()` | `POST /orders/cancel` | `order_main`、`order_status_log`、`inventory`、`inventory_log` |
 | 退款申请 | 已支付/已发货订单操作 | `refundOrderFromApi()`、`handleRefundOrder()` | `POST /orders/refund` | `order_main`、`order_status_log`；订单级请求只发送 `user_id`、`order_id`、`remark` |
 
-重要页面契约包括 `data-product-id`、`data-product-sku-id`、`data-purchase-color`、`data-purchase-size`、`data-purchase-address-id`、`data-cart-select-id`、`data-cart-checkout`、`data-order-detail-id`、`data-order-pay-id`、`data-order-cancel-id` 和 `data-order-refund-id`。修改标记名必须同步检查 `index.html`、`src/main.js` 与 `tests/site.test.js`。
+重要页面契约包括 `data-product-id`、`data-product-sku-id`、`data-purchase-color`、`data-purchase-size`、`data-purchase-payment-title`、`data-purchase-address-id`、`data-cart-select-id`、`data-cart-checkout`、`data-order-detail-id`、`data-order-pay-id`、`data-order-cancel-id` 和 `data-order-refund-id`。修改标记名必须同步检查 `index.html`、`src/main.js` 与 `tests/site.test.js`。
 
 ## 6. 后台模块
 
@@ -345,9 +345,15 @@ sequenceDiagram
     API-->>JS: 商品行 + images
     JS->>JS: convertApiProducts() 按 product_id 合并 SKU
     JS-->>Page: 渲染商品、价格、库存、销量和多图
-    User->>Page: 选择颜色与尺码
-    Page->>JS: selectSkuDimension()
-    JS-->>Page: 锁定真实 sku_id，更新价格、库存和按钮状态
+    User->>Page: 在商品卡选择 SKU 或打开任一操作弹窗
+    Page->>JS: 写入 selectedSkuByProductId / openPurchaseModal()
+    JS->>JS: resolveInitialSkuSelection() 校验商品、SKU、删除状态、在售状态和库存
+    JS->>JS: 有效显式选择优先；唯一可售 SKU 自动选择；多个可售 SKU 保持未选
+    User->>Page: 选择普通 SKU 或颜色与尺码
+    Page->>JS: setPurchaseSku() / selectSkuDimension()
+    JS-->>Page: 锁定真实 sku_id，同步商品卡、价格、库存、数量上限和按钮状态
+    Page->>JS: submitPurchaseOrder()
+    JS->>JS: 购物车、收藏、直接购买复用弹窗当前精确 SKU
 ```
 
 ### 9.2 购物车结算
@@ -531,6 +537,8 @@ sequenceDiagram
 
 已迁移到数据库的主要业务包括商品/SKU/库存、购物车增删改、地址、订单、支付、后台商品、后台订单与销量统计。仍属本地或兼容逻辑的包括普通用户登录/注册资料、收藏、购物车勾选项、数据库购物车的 UI 快照、静态商品视觉兜底、旧后台 mock 商品/订单辅助。
 
+`selectedSkuByProductId` 是页面会话内的商品级 SKU 选择缓存，不写入 `localStorage`。商品卡和共用操作弹窗都读写这一个缓存：有效显式选择会恢复；失效、下架、删除、售罄或不属于当前商品的选择会被丢弃；唯一可售 SKU 会自动写入缓存；多个可售 SKU 且没有显式选择时保持未选。结构化 SKU 恢复时同时恢复 `color`、`size` 与真实 `skuId`，不同商品按 `product.id` 隔离。
+
 ## 11. 权限与数据一致性
 
 - **管理员登录和令牌**：`POST /admin/login` 通过邮箱、MySQL `SHA2` 密码和 `is_admin` 校验；令牌是 `admin_user_id:expires_at:HMAC-SHA256` 的 URL-safe Base64，默认 8 小时。密钥当前硬编码在后端源码中。
@@ -552,7 +560,7 @@ sequenceDiagram
 
 | 命令 | 结果 |
 |---|---|
-| `npm.cmd test` | 117/117 通过，0 失败、0 跳过、0 TODO |
+| `npm.cmd test` | 124/124 通过，0 失败、0 跳过、0 TODO |
 | `node --check src/main.js` | 通过 |
 | `node --check src/sku-utils.js` | 通过 |
 | `node --check src/product-ordering.js` | 通过 |
@@ -562,23 +570,24 @@ sequenceDiagram
 | 本地 MySQL 迁移 | `06_商品描述增量迁移.sql` 连续执行 2 次成功；字段为可空 `TEXT`，视图包含 `description`，商品/SKU/库存数量保持 41/89/89 |
 | 本地 API 冒烟 | 公共/后台查询、未登录 401、中文多行修改、超长 422、不存在与已删除 404、清空和回读均通过 |
 | 浏览器定向验收 | 后台新增表单、介绍编辑/提交中锁、重新打开、前台展示/搜索、清空、图片管理、购买弹窗、桌面与 390px 窄屏通过；控制台 0 error |
+| 阶段 5 SKU 浏览器验收 | 普通多 SKU 未选、弹窗切换并回写商品卡、购物车/收藏/立即购买入口恢复同一 SKU、单 SKU 自动选择、商品 A/B 隔离、支付控件按动作显示、桌面与 390px 无横向溢出通过；全新前后台标签页控制台 0 error；未提交购物车、收藏或订单 |
 | 浏览器自动操作新增商品 SKU 表单 | 2 色×3 尺码生成 6 行且均为 50；人工改为 35 后新增尺码，旧值保留、新行 50；库存可改为 0；未提交商品，控制台 0 错误 |
 | 浏览器自动操作统一图片管理弹窗 | 34 张商品卡各只有一个“管理图片”入口；旧入口为 0；弹窗商品/图片/主图/空上传状态正确；关闭后切换商品无状态串用；1280px 与 390px 均无横向溢出；控制台 0 错误；未真实上传或删除 |
 
 ### 已覆盖模块
 
 - 直接执行 `content.js`、`ranking.js`、`product-ordering.js`、`account-store.js`、`sku-utils.js` 的纯函数行为。
-- 覆盖销量排名、可售优先排序、地址迁移/本地存储、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用，以及后台图片唯一入口、商品介绍迁移/接口/安全展示/编辑弹窗契约。
+- 覆盖销量排名、可售优先排序、地址迁移/本地存储、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用、有效/失效显式 SKU 恢复、唯一可售 SKU 自动选择、多 SKU 未选、商品级缓存同步和 ES Module 缓存版本契约，以及后台图片唯一入口、商品介绍迁移/接口/安全展示/编辑弹窗契约。
 - 读取 `index.html`、`admin.html`、`src/main.js`、`src/styles.css`、后端 Python、SQL、README 和启动脚本，断言路由字符串、`data-*` 钩子、字段、CORS、端口、图片、认证、订单和 SKU 结构。
 
-117 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
+124 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
 
 ### 尚未覆盖或本轮未执行
 
 - **自动化 HTTP 冒烟测试**：尚未纳入常驻测试套件；阶段 4 使用本地临时脚本覆盖商品介绍状态矩阵并在结束后恢复数据。
 - **真实 API 测试范围**：商品介绍已覆盖 200、401、404、422、清空与回读；尚未覆盖令牌过期、数据库故障注入和其他接口的完整状态矩阵。
 - **真实数据库测试**：阶段 4 已连接本地 MySQL 8.0.28，验证迁移幂等、字段/视图、中文多行、`NULL`、数量不变和数据恢复；未执行故障注入回滚或并发测试。
-- **浏览器测试**：测试套件未内置浏览器框架；阶段 4 通过本地浏览器控制完成商品介绍新增表单、编辑、前台展示、搜索、清空、恢复与响应式回归。真实图片上传和删除仍未执行，以免污染已有图片。
+- **浏览器测试**：测试套件未内置浏览器框架；阶段 4 通过本地浏览器控制完成商品介绍新增表单、编辑、前台展示、搜索、清空、恢复与响应式回归；阶段 5 完成普通多 SKU、单 SKU、三入口恢复、跨商品隔离与 390px 响应式验收。当前本地库没有“全部有效 SKU 均带颜色/尺码且可购买”的结构化商品，因此结构化恢复只执行了纯函数行为测试；未执行真实购物车/订单写入和网络请求拦截。
 - **退款回归**：已覆盖请求模型字段、退款路由不读取 SKU 字段、不调用购买校验、订单归属锁、允许状态、状态更新、提交/回滚、业务错误保留以及前端订单级请求体。
 
 ## 13. 本地启动流程
@@ -614,13 +623,14 @@ sequenceDiagram
 
 - **商品介绍**：新建商品可选填介绍，`product.description` 持久化，商品列表与后台库存接口透传，前台安全展示并保留换行，后台独立弹窗可查看、修改、清空和刷新；空内容统一保存为 `NULL`。
 - **复杂 SKU**：颜色×尺码生成、真实 SKU ID、价格/库存/状态选择、后台增删改和逻辑删除链路齐全；新建商品的新组合默认库存为 50，矩阵重建保留已有编辑值，已有商品新增缺失组合仍默认 0。
+- **前台 SKU 选择同步**：商品卡与共用操作弹窗共享商品级有效 SKU；有效显式选择优先恢复，唯一可售 SKU 自动选择，多 SKU 无显式选择保持未选，失效缓存被清理；普通 SKU 与结构化颜色/尺码最终都解析为真实 `skuId`，购物车、收藏和直接购买复用弹窗当前选择。本阶段未改变后端接口、数据库结构或三种操作的其他业务语义。
 - **多图片**：多图上传、数据库图片列表、主图兼容、前台缩略图/大图和逻辑删除链路齐全；后台商品卡只保留“管理图片”入口，统一弹窗承担已有图片查看、新图片选择与本地预览、单项移除、清空、确认上传和删除。
 - **购物车与下单**：数据库购物车增删改、选中项结算、直接购买、待支付订单、取消订单和库存锁定/释放链路齐全。
 - **后台订单**：订单列表/详情、发货、取消发货、状态日志和库存流水展示链路齐全。
 - **销量**：支付累计、退款回滚和后台统计代码链路齐全。
 - **退款申请与审核**：订单级申请、归属与状态校验、`REFUND_REQUESTED` 状态日志、重复申请拦截、后台同意/拒绝及退款一致性处理链路齐全；本轮已用专用订单完成真实 MySQL/API 的支付后申请与管理员同意验证。
 
-以上结论来自当前代码、SQL、自动测试及定向运行验证；商品介绍已完成真实数据库、API 和浏览器验收，退款申请和管理员同意分支沿用既有真实验收记录，其他浏览器交互仍未完整验收。
+以上结论来自当前代码、SQL、自动测试及定向运行验证；商品介绍已完成真实数据库、API 和浏览器验收，前台 SKU 同步已完成纯函数与定向浏览器验收，退款申请和管理员同意分支沿用既有真实验收记录，其他浏览器交互仍未完整验收。
 
 ### 基本完成但需要真实业务验收
 
@@ -635,7 +645,7 @@ sequenceDiagram
 - `operation_log` 没有运行时写入、查询 API 或后台页面，不能作为管理员审计闭环。
 - 没有订单“完成/确认收货”API；仅存在 `COMPLETED` 显示文案。
 - 没有手动设置任意商品图片为主图的接口。
-- 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；当前真实数据库验证覆盖既有退款场景和阶段 4 商品介绍场景。
+- 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；当前真实数据库验证覆盖既有退款场景和阶段 4 商品介绍场景，阶段 5 未写入购物车、收藏或订单数据。
 - `04` 只有固定规模测试数据，不是大量销售、压力或容量测试数据。
 - 当前仓库没有完成可直接交付的课程报告、PPT 和讲解视频闭环。
 

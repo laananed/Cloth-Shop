@@ -63,15 +63,21 @@ import {
 } from './category-utils.js?v=20260715a';
 import {
   ALL_TAG_KEY,
+  MAX_BATCH_PRODUCTS,
   createStaticProductTags,
   createStaticTagsFromProducts,
   deriveApiTagsFromProducts,
   filterProductsByTag,
+  getBatchSelectAllState,
   getVisibleProductTags,
   normalizeApiTags,
+  reconcileBatchProductSelection,
+  reconcileBatchTagSelection,
   normalizeProductTags,
   resolveActiveTagKey,
-} from './tag-utils.js?v=20260715a';
+  toggleBatchProductSelection,
+  toggleVisibleBatchProductSelection,
+} from './tag-utils.js?v=20260715c';
 
 const API_BASE_URL = "http://127.0.0.1:8050";
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000;
@@ -389,6 +395,9 @@ async function adminFetch(url, options = {}) {
     error.status = response.status;
     error.detail = result?.detail || error.message;
     error.product_count = Number(result?.product_count || 0);
+    for (const field of ['conflict_product_ids', 'invalid_product_ids', 'invalid_tag_ids']) {
+      error[field] = Array.isArray(result?.[field]) ? result[field] : [];
+    }
     throw error;
   }
 
@@ -4560,6 +4569,16 @@ function initAdminPage() {
   const adminProductSearchInput = shell.querySelector('[data-admin-product-search]');
   const adminProductSearchClear = shell.querySelector('[data-admin-product-search-clear]');
   const productFilterBar = shell.querySelector('[data-admin-product-filter-bar]');
+  const productBatchToolbar = shell.querySelector('[data-admin-product-batch-toolbar]');
+  const productBatchSelectAll = shell.querySelector('[data-admin-product-batch-select-all]');
+  const productBatchSelectedCount = shell.querySelector('[data-admin-product-batch-selected-count]');
+  const productBatchOperation = shell.querySelector('[data-admin-product-batch-operation]');
+  const productBatchTagFieldset = productBatchToolbar?.querySelector('.admin-product-batch-toolbar__tags');
+  const productBatchTagOptions = shell.querySelector('[data-admin-product-batch-tag-options]');
+  const productBatchTagCount = shell.querySelector('[data-admin-product-batch-tag-count]');
+  const productBatchApply = shell.querySelector('[data-admin-product-batch-apply]');
+  const productBatchClearSelection = shell.querySelector('[data-admin-product-batch-clear-selection]');
+  const productBatchFeedback = shell.querySelector('[data-admin-product-batch-feedback]');
   const productForm = shell.querySelector('[data-admin-product-form]');
   const productFeedback = shell.querySelector('[data-admin-product-feedback]');
   const productManageFeedback = shell.querySelector('[data-admin-product-manage-feedback]');
@@ -4660,6 +4679,15 @@ function initAdminPage() {
   ];
   let activeAdminProductFilter = 'ALL';
   let activeAdminProductSearchKeyword = "";
+  const adminProductTagBatchState = {
+    selectedProductIds: new Set(),
+    operation: 'ADD',
+    selectedTagIds: new Set(),
+    isSubmitting: false,
+    feedback: '',
+    feedbackIsError: false,
+    filterIdentity: 'ALL|',
+  };
 
   function renderAdminSkuMatrix() {
     if (!adminSkuMatrix) {
@@ -4831,6 +4859,9 @@ function initAdminPage() {
     adminTagCatalogState = 'idle';
     pendingAdminCategoryIds.clear();
     pendingAdminTagIds.clear();
+    clearAdminProductTagBatchState({ resetOperation: true });
+    adminProductTagBatchState.isSubmitting = false;
+    adminProductTagBatchState.filterIdentity = getAdminProductTagBatchFilterIdentity('ALL', '');
     refreshAdminProductCategorySelect();
     renderAdminProductTagOptions();
     if (tagList) tagList.innerHTML = '<div class="admin-empty">请先登录管理员账号</div>';
@@ -4936,6 +4967,177 @@ function initAdminPage() {
     if (adminProductSearchClear) {
       adminProductSearchClear.hidden = !String(activeAdminProductSearchKeyword || "").trim();
     }
+  }
+
+  function getAdminProductTagBatchFilterIdentity(
+    filterValue = activeAdminProductFilter,
+    searchValue = activeAdminProductSearchKeyword,
+  ) {
+    return `${String(filterValue || 'ALL').toUpperCase()}|${String(searchValue || '').trim().toLowerCase()}`;
+  }
+
+  function clearAdminProductTagBatchState({ resetOperation = false, preserveFeedback = false } = {}) {
+    adminProductTagBatchState.selectedProductIds.clear();
+    adminProductTagBatchState.selectedTagIds.clear();
+    if (resetOperation) {
+      adminProductTagBatchState.operation = 'ADD';
+    }
+    if (!preserveFeedback) {
+      adminProductTagBatchState.feedback = '';
+      adminProductTagBatchState.feedbackIsError = false;
+    }
+  }
+
+  function clearAdminProductTagBatchSelectionForFilterChange(filterValue, searchValue) {
+    const nextIdentity = getAdminProductTagBatchFilterIdentity(filterValue, searchValue);
+    if (adminProductTagBatchState.filterIdentity !== nextIdentity) {
+      adminProductTagBatchState.selectedProductIds.clear();
+      adminProductTagBatchState.filterIdentity = nextIdentity;
+      adminProductTagBatchState.feedback = '';
+      adminProductTagBatchState.feedbackIsError = false;
+    }
+  }
+
+  function reconcileAdminProductTagBatchState(allRows = []) {
+    const validProductIds = (Array.isArray(allRows) ? allRows : [])
+      .map((row) => Number(row?.productId))
+      .filter((productId) => Number.isInteger(productId) && productId > 0);
+    adminProductTagBatchState.selectedProductIds = reconcileBatchProductSelection(
+      adminProductTagBatchState.selectedProductIds,
+      validProductIds,
+    );
+
+    adminProductTagBatchState.selectedTagIds = reconcileBatchTagSelection(
+      adminProductTagBatchState.selectedTagIds,
+      getActiveAdminTags().map((tag) => tag.tagId),
+      adminTagCatalogState === 'ready',
+    );
+    if (adminProductTagBatchState.operation === 'CLEAR') {
+      adminProductTagBatchState.selectedTagIds.clear();
+    }
+  }
+
+  function getVisibleAdminProductBatchRows() {
+    const rows = Array.isArray(renderedProducts?.rows) ? renderedProducts.rows : [];
+    return getFilteredAdminProductRows(rows);
+  }
+
+  function renderAdminProductTagBatchToolbar(filteredRows = []) {
+    if (!productBatchToolbar) return;
+    const visibleProductIds = filteredRows
+      .map((row) => Number(row?.productId))
+      .filter((productId) => Number.isInteger(productId) && productId > 0);
+    const selectionState = getBatchSelectAllState(
+      adminProductTagBatchState.selectedProductIds,
+      visibleProductIds,
+    );
+    const activeTags = getActiveAdminTags();
+    const selectedTagCount = adminProductTagBatchState.selectedTagIds.size;
+    const isClear = adminProductTagBatchState.operation === 'CLEAR';
+    const tagCatalogReady = adminTagCatalogState === 'ready';
+    const isLoggedIn = Boolean(getStoredAdminSession()?.adminToken);
+
+    if (productBatchSelectAll) {
+      productBatchSelectAll.checked = selectionState.checked;
+      productBatchSelectAll.indeterminate = selectionState.indeterminate;
+      productBatchSelectAll.disabled = adminProductTagBatchState.isSubmitting || visibleProductIds.length === 0;
+    }
+    if (productBatchSelectedCount) {
+      productBatchSelectedCount.textContent = `已选 ${adminProductTagBatchState.selectedProductIds.size} 个商品`;
+    }
+    if (productBatchClearSelection) {
+      productBatchClearSelection.disabled = adminProductTagBatchState.isSubmitting
+        || adminProductTagBatchState.selectedProductIds.size === 0;
+    }
+    if (productBatchOperation) {
+      productBatchOperation.value = adminProductTagBatchState.operation;
+      productBatchOperation.disabled = adminProductTagBatchState.isSubmitting || !isLoggedIn;
+    }
+    if (productBatchTagFieldset) {
+      productBatchTagFieldset.hidden = isClear;
+      productBatchTagFieldset.disabled = isClear || adminProductTagBatchState.isSubmitting || !tagCatalogReady;
+    }
+    if (productBatchTagOptions) {
+      if (!tagCatalogReady) {
+        productBatchTagOptions.innerHTML = `<span class="admin-field__hint">${adminTagCatalogState === 'error' ? '标签目录加载失败，暂不能批量提交。' : '标签目录正在加载，请稍候。'}</span>`;
+      } else if (!activeTags.length) {
+        productBatchTagOptions.innerHTML = '<span class="admin-field__hint">暂无可用标签</span>';
+      } else {
+        productBatchTagOptions.innerHTML = activeTags.map((tag) => {
+          const checked = adminProductTagBatchState.selectedTagIds.has(tag.tagId);
+          const disabled = adminProductTagBatchState.isSubmitting || (!checked && selectedTagCount >= 5);
+          return `
+            <label class="admin-product-tag-option">
+              <input type="checkbox" value="${tag.tagId}" data-admin-product-batch-tag-option ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} />
+              <span>${escapeHtml(tag.name)}</span>
+            </label>
+          `;
+        }).join('');
+      }
+    }
+    if (productBatchTagCount) {
+      productBatchTagCount.textContent = `已选择 ${selectedTagCount} / 5`;
+    }
+
+    const requiresTags = !isClear;
+    const submitDisabled = !isLoggedIn
+      || adminProductTagBatchState.isSubmitting
+      || adminProductTagBatchState.selectedProductIds.size === 0
+      || adminProductTagBatchState.selectedProductIds.size > MAX_BATCH_PRODUCTS
+      || !adminProductTagBatchState.operation
+      || (requiresTags && selectedTagCount === 0)
+      || selectedTagCount > 5
+      || (isClear && selectedTagCount > 0)
+      || !tagCatalogReady;
+    if (productBatchApply) {
+      productBatchApply.disabled = submitDisabled;
+      productBatchApply.textContent = adminProductTagBatchState.isSubmitting ? '正在批量处理…' : '执行批量操作';
+    }
+    if (productBatchFeedback) {
+      setFeedback(
+        productBatchFeedback,
+        adminProductTagBatchState.feedback,
+        adminProductTagBatchState.feedbackIsError,
+      );
+    }
+  }
+
+  function createAdminProductTagBatchSnapshot() {
+    return Object.freeze({
+      product_ids: Object.freeze([...adminProductTagBatchState.selectedProductIds].sort((left, right) => left - right)),
+      operation: adminProductTagBatchState.operation,
+      tag_ids: Object.freeze([...adminProductTagBatchState.selectedTagIds].sort((left, right) => left - right)),
+    });
+  }
+
+  function formatAdminProductTagBatchIds(ids, noun) {
+    const values = Array.isArray(ids) ? ids : [];
+    if (!values.length) return '';
+    const visible = values.slice(0, 10).join('、');
+    const remaining = values.length - 10;
+    return `${noun} ID：${visible}${remaining > 0 ? `，等 ${remaining} 个${noun}` : ''}`;
+  }
+
+  function formatAdminProductTagBatchError(error) {
+    const details = [error?.detail || error?.message || '批量操作失败'];
+    const conflictText = formatAdminProductTagBatchIds(error?.conflict_product_ids, '商品');
+    const invalidProductText = formatAdminProductTagBatchIds(error?.invalid_product_ids, '商品');
+    const invalidTagText = formatAdminProductTagBatchIds(error?.invalid_tag_ids, '标签');
+    [conflictText, invalidProductText, invalidTagText].filter(Boolean).forEach((item) => details.push(item));
+    return details.join('；');
+  }
+
+  function getAdminProductTagBatchConfirmation(operation, productCount) {
+    if (operation === 'REMOVE') {
+      return `将从 ${productCount} 个商品中移除所选标签，是否继续？`;
+    }
+    if (operation === 'REPLACE') {
+      return `将把 ${productCount} 个商品的标签完整替换为当前选择，原有其他标签会被移除，是否继续？`;
+    }
+    if (operation === 'CLEAR') {
+      return `将清空 ${productCount} 个商品的全部标签，是否继续？`;
+    }
+    return '';
   }
 
   function getAdminOrderDetailRow(orderId) {
@@ -5461,6 +5663,14 @@ async function loadAdminProductsFromApi() {
   return convertApiRowsToAdminProducts(result.data);
 }
 
+async function updateAdminProductTagsBatchToApi(snapshot) {
+  return adminFetch(`${API_BASE_URL}/admin/products/tags/batch`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snapshot),
+  });
+}
+
 async function loadAdminCategoriesFromApi() {
   const result = await adminFetch(`${API_BASE_URL}/admin/categories`);
   if (!result.success || !Array.isArray(result.data)) {
@@ -5656,7 +5866,7 @@ function renderAdminTags() {
   }).join('');
 }
 
-async function refreshAdminTagsFromApi() {
+async function refreshAdminTagsFromApi({ preserveExistingOnError = false } = {}) {
   adminTagCatalogState = 'loading';
   renderAdminProductTagOptions();
   renderProducts();
@@ -5666,8 +5876,11 @@ async function refreshAdminTagsFromApi() {
     adminTagCatalogState = 'ready';
     renderAdminTags();
     renderProducts();
+    return true;
   } catch (error) {
-    adminTags = [];
+    if (!preserveExistingOnError) {
+      adminTags = [];
+    }
     adminTagCatalogState = 'error';
     renderAdminProductTagOptions();
     renderProducts();
@@ -5675,10 +5888,11 @@ async function refreshAdminTagsFromApi() {
       clearStoredAdminSession();
       resetAdminDashboardState();
       renderAdminAuthState(error.detail || error.message);
-      return;
+      return false;
     }
     if (tagList) tagList.innerHTML = `<div class="admin-empty">加载标签失败：${escapeHtml(error.message)}</div>`;
     setFeedback(tagFeedback, `加载标签失败：${error.message}`, true);
+    return false;
   }
 }
 
@@ -5752,7 +5966,7 @@ async function refreshAdminCategoriesFromApi() {
   renderedProducts = renderAdminProductsView(products);
 }
 
-async function refreshAdminProductsFromApi() {
+async function refreshAdminProductsFromApi({ preserveExistingOnError = false } = {}) {
   try {
     products = await loadAdminProductsFromApi();
     renderedProducts = renderAdminInventoryProductsView(products);
@@ -5760,6 +5974,7 @@ async function refreshAdminProductsFromApi() {
     renderProducts();
 
     console.log("后台上架新品列表已切换为数据库库存数据：", products);
+    return true;
   } catch (error) {
     console.error("后台商品列表加载失败：", error);
 
@@ -5767,18 +5982,23 @@ async function refreshAdminProductsFromApi() {
       clearStoredAdminSession();
       resetAdminDashboardState();
       renderAdminAuthState(error.detail || error.message);
-      return;
+      return false;
     }
 
-    products = getStoredAdminProducts(storage);
-    renderedProducts = renderAdminProductsView(products);
-    renderProducts();
+    if (!preserveExistingOnError) {
+      products = getStoredAdminProducts(storage);
+      renderedProducts = renderAdminProductsView(products);
+      renderProducts();
+    }
 
     setFeedback(
       productManageFeedback || productFeedback,
-      `后台商品列表加载数据库失败，暂时显示本地模拟商品：${error.message}`,
+      preserveExistingOnError
+        ? `后台商品列表刷新失败，已保留当前数据：${error.message}`
+        : `后台商品列表加载数据库失败，暂时显示本地模拟商品：${error.message}`,
       true
     );
+    return false;
   }
 }
 
@@ -5854,6 +6074,10 @@ async function refreshAdminProductsFromApi() {
 
     updateAdminProductSearchClearState();
 
+    const filteredRows = getFilteredAdminProductRows(allRows);
+    reconcileAdminProductTagBatchState(allRows);
+    renderAdminProductTagBatchToolbar(filteredRows);
+
     if (!productList) {
       return;
     }
@@ -5862,8 +6086,6 @@ async function refreshAdminProductsFromApi() {
       productList.innerHTML = `<div class="admin-empty">${escapeHtml(renderedProducts?.emptyState || '暂无商品数据')}</div>`;
       return;
     }
-
-    const filteredRows = getFilteredAdminProductRows(allRows);
 
     if (!filteredRows.length) {
       const filterLabel = getAdminProductFilterLabel(activeAdminProductFilter);
@@ -5887,7 +6109,10 @@ async function refreshAdminProductsFromApi() {
         const selectedTagIds = new Set((Array.isArray(row.tags) ? row.tags : []).map((tag) => Number(tag.tagId)));
         const activeTagIds = new Set(getActiveAdminTags().map((tag) => tag.tagId));
         const hasUnknownSelectedTags = [...selectedTagIds].some((tagId) => !activeTagIds.has(tagId));
-        const canEditProductTags = adminTagCatalogState === 'ready' && !hasUnknownSelectedTags;
+        const canEditProductTags = adminTagCatalogState === 'ready'
+          && !hasUnknownSelectedTags
+          && !adminProductTagBatchState.isSubmitting;
+        const isBatchSelected = adminProductTagBatchState.selectedProductIds.has(Number(row.productId));
 
         return `
           <article class="admin-row admin-product-row" data-admin-product-id="${row.productId}">
@@ -5906,6 +6131,16 @@ async function refreshAdminProductsFromApi() {
               </div>
 
               <div class="admin-product-row__content">
+                <label class="admin-product-row__batch-selector">
+                  <input
+                    type="checkbox"
+                    data-admin-product-batch-select
+                    data-product-id="${row.productId}"
+                    ${isBatchSelected ? 'checked' : ''}
+                    ${adminProductTagBatchState.isSubmitting ? 'disabled' : ''}
+                  />
+                  <span>批量选择 ${escapeHtml(row.name)}</span>
+                </label>
                 <div class="admin-row__header">
                   <strong>${escapeHtml(row.name)}</strong>
                   <span>${escapeHtml(row.priceLabel)}</span>
@@ -5938,7 +6173,7 @@ async function refreshAdminProductsFromApi() {
                       : getActiveAdminTags().length
                       ? getActiveAdminTags().map((tag) => `
                           <label class="admin-product-tag-option">
-                            <input type="checkbox" value="${tag.tagId}" data-admin-product-tag-option="${row.productId}" ${selectedTagIds.has(tag.tagId) ? 'checked' : ''} />
+                            <input type="checkbox" value="${tag.tagId}" data-admin-product-tag-option="${row.productId}" ${selectedTagIds.has(tag.tagId) ? 'checked' : ''} ${adminProductTagBatchState.isSubmitting ? 'disabled' : ''} />
                             <span>${escapeHtml(tag.name)}</span>
                           </label>
                         `).join('')
@@ -6030,6 +6265,59 @@ async function refreshAdminProductsFromApi() {
         `;
       })
       .join('');
+  }
+
+  async function submitAdminProductTagBatch(triggerButton = productBatchApply) {
+    const snapshot = createAdminProductTagBatchSnapshot();
+    const productCount = snapshot.product_ids.length;
+    const requiresTags = snapshot.operation !== 'CLEAR';
+    if (!productCount || productCount > MAX_BATCH_PRODUCTS || (requiresTags && !snapshot.tag_ids.length)) {
+      adminProductTagBatchState.feedback = '请检查已选商品、操作类型和目标标签。';
+      adminProductTagBatchState.feedbackIsError = true;
+      renderAdminProductTagBatchToolbar(getVisibleAdminProductBatchRows());
+      return;
+    }
+
+    const confirmation = getAdminProductTagBatchConfirmation(snapshot.operation, productCount);
+    if (confirmation && !window.confirm(confirmation)) {
+      triggerButton?.focus();
+      return;
+    }
+
+    adminProductTagBatchState.isSubmitting = true;
+    adminProductTagBatchState.feedback = '正在批量处理…';
+    adminProductTagBatchState.feedbackIsError = false;
+    renderProducts();
+
+    try {
+      const result = await updateAdminProductTagsBatchToApi(snapshot);
+      clearAdminProductTagBatchState({ resetOperation: true });
+      adminProductTagBatchState.feedback = `已更新 ${result.changed_product_count} 个商品，${result.unchanged_product_count} 个商品无需修改`;
+      adminProductTagBatchState.feedbackIsError = false;
+      const productsRefreshed = await refreshAdminProductsFromApi({ preserveExistingOnError: true });
+      const tagsRefreshed = await refreshAdminTagsFromApi({ preserveExistingOnError: true });
+      if (!productsRefreshed || !tagsRefreshed) {
+        adminProductTagBatchState.feedback += '；数据刷新失败，请稍后重试';
+        adminProductTagBatchState.feedbackIsError = true;
+      }
+    } catch (error) {
+      adminProductTagBatchState.feedback = formatAdminProductTagBatchError(error);
+      adminProductTagBatchState.feedbackIsError = true;
+      const productsRefreshed = await refreshAdminProductsFromApi({ preserveExistingOnError: true });
+      const tagsRefreshed = await refreshAdminTagsFromApi({ preserveExistingOnError: true });
+      if (!productsRefreshed || !tagsRefreshed) {
+        adminProductTagBatchState.feedback += '；重新加载数据失败，已保留当前选择，请稍后重试';
+      }
+      reconcileAdminProductTagBatchState(Array.isArray(renderedProducts?.rows) ? renderedProducts.rows : []);
+    } finally {
+      adminProductTagBatchState.isSubmitting = false;
+      renderProducts();
+      if (productBatchFeedback?.textContent) {
+        productBatchFeedback.focus();
+      } else {
+        triggerButton?.focus();
+      }
+    }
   }
 
   function populateImageSelect() {
@@ -7231,6 +7519,10 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       }
 
       activeAdminProductFilter = nextFilter;
+      clearAdminProductTagBatchSelectionForFilterChange(
+        activeAdminProductFilter,
+        activeAdminProductSearchKeyword,
+      );
       renderProducts();
     });
   }
@@ -7238,6 +7530,10 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   if (adminProductSearchInput) {
     adminProductSearchInput.addEventListener("input", (event) => {
       activeAdminProductSearchKeyword = String(event.target.value || "");
+      clearAdminProductTagBatchSelectionForFilterChange(
+        activeAdminProductFilter,
+        activeAdminProductSearchKeyword,
+      );
       updateAdminProductSearchClearState();
       renderProducts();
     });
@@ -7246,6 +7542,10 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   if (adminProductSearchClear) {
     adminProductSearchClear.addEventListener("click", () => {
       activeAdminProductSearchKeyword = "";
+      clearAdminProductTagBatchSelectionForFilterChange(
+        activeAdminProductFilter,
+        activeAdminProductSearchKeyword,
+      );
 
       if (adminProductSearchInput) {
         adminProductSearchInput.value = "";
@@ -7255,6 +7555,74 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       renderProducts();
       adminProductSearchInput?.focus();
     });
+  }
+
+  if (productBatchSelectAll) {
+    productBatchSelectAll.addEventListener('change', () => {
+      if (adminProductTagBatchState.isSubmitting) return;
+      const visibleIds = getVisibleAdminProductBatchRows().map((row) => Number(row.productId));
+      const result = toggleVisibleBatchProductSelection(
+        adminProductTagBatchState.selectedProductIds,
+        visibleIds,
+      );
+      adminProductTagBatchState.selectedProductIds = result.selectedProductIds;
+      adminProductTagBatchState.feedback = result.truncated
+        ? '当前列表超过 100 个商品，已选择前 100 个。'
+        : '';
+      adminProductTagBatchState.feedbackIsError = false;
+      renderProducts();
+    });
+  }
+
+  if (productBatchClearSelection) {
+    productBatchClearSelection.addEventListener('click', () => {
+      if (adminProductTagBatchState.isSubmitting) return;
+      adminProductTagBatchState.selectedProductIds.clear();
+      adminProductTagBatchState.feedback = '';
+      adminProductTagBatchState.feedbackIsError = false;
+      renderProducts();
+    });
+  }
+
+  if (productBatchOperation) {
+    productBatchOperation.addEventListener('change', (event) => {
+      const operation = String(event.target.value || '').toUpperCase();
+      if (!['ADD', 'REMOVE', 'REPLACE', 'CLEAR'].includes(operation)) return;
+      adminProductTagBatchState.operation = operation;
+      if (operation === 'CLEAR') {
+        adminProductTagBatchState.selectedTagIds.clear();
+      }
+      adminProductTagBatchState.feedback = '';
+      adminProductTagBatchState.feedbackIsError = false;
+      renderAdminProductTagBatchToolbar(getVisibleAdminProductBatchRows());
+    });
+  }
+
+  if (productBatchTagOptions) {
+    productBatchTagOptions.addEventListener('change', (event) => {
+      const input = event.target.closest('[data-admin-product-batch-tag-option]');
+      if (!input || adminProductTagBatchState.isSubmitting || adminProductTagBatchState.operation === 'CLEAR') return;
+      const tagId = Number(input.value);
+      if (!Number.isInteger(tagId) || tagId <= 0) return;
+      if (input.checked && adminProductTagBatchState.selectedTagIds.size >= 5) {
+        input.checked = false;
+        adminProductTagBatchState.feedback = '一次最多选择 5 个标签。';
+        adminProductTagBatchState.feedbackIsError = true;
+      } else if (input.checked) {
+        adminProductTagBatchState.selectedTagIds.add(tagId);
+        adminProductTagBatchState.feedback = '';
+        adminProductTagBatchState.feedbackIsError = false;
+      } else {
+        adminProductTagBatchState.selectedTagIds.delete(tagId);
+        adminProductTagBatchState.feedback = '';
+        adminProductTagBatchState.feedbackIsError = false;
+      }
+      renderAdminProductTagBatchToolbar(getVisibleAdminProductBatchRows());
+    });
+  }
+
+  if (productBatchApply) {
+    productBatchApply.addEventListener('click', () => submitAdminProductTagBatch(productBatchApply));
   }
 
   if (ordersBody) {
@@ -7426,6 +7794,25 @@ async function deleteAdminProductImageToApi(productId, imageId) {
 
   if (productList) {
   productList.addEventListener('change', (event) => {
+    const batchSelect = event.target.closest('[data-admin-product-batch-select]');
+    if (batchSelect) {
+      const productId = Number(batchSelect.dataset.productId);
+      try {
+        adminProductTagBatchState.selectedProductIds = toggleBatchProductSelection(
+          adminProductTagBatchState.selectedProductIds,
+          productId,
+          batchSelect.checked,
+        );
+        adminProductTagBatchState.feedback = '';
+        adminProductTagBatchState.feedbackIsError = false;
+      } catch (error) {
+        batchSelect.checked = false;
+        adminProductTagBatchState.feedback = error.message;
+        adminProductTagBatchState.feedbackIsError = true;
+      }
+      renderAdminProductTagBatchToolbar(getVisibleAdminProductBatchRows());
+      return;
+    }
     const tagOption = event.target.closest('[data-admin-product-tag-option]');
     if (tagOption) {
       const productId = Number(tagOption.dataset.adminProductTagOption);

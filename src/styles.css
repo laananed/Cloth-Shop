@@ -180,7 +180,131 @@
   background: rgba(92, 130, 207, 0.14);
 }
 
+.admin-product-batch-toolbar {
+  position: sticky;
+  top: 12px;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(170px, 0.55fr) minmax(280px, 1.5fr) auto;
+  gap: 0.85rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid rgba(69, 103, 174, 0.25);
+  border-radius: 1rem;
+  background: rgba(248, 251, 255, 0.97);
+  box-shadow: 0 16px 38px rgba(57, 102, 146, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.admin-product-batch-toolbar__summary,
+.admin-product-batch-toolbar__operation,
+.admin-product-batch-toolbar__tags,
+.admin-product-batch-toolbar__actions {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.admin-product-batch-toolbar__summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.admin-product-batch-toolbar__summary > strong {
+  text-align: right;
+}
+
+.admin-product-batch-toolbar__summary > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.admin-product-batch-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-product-row__batch-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-product-batch-selector input,
+.admin-product-row__batch-selector input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--accent-strong);
+}
+
+.admin-product-batch-toolbar__operation select {
+  width: 100%;
+  min-height: 2.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(89, 111, 154, 0.25);
+  border-radius: 0.7rem;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.admin-product-batch-toolbar__tags {
+  margin: 0;
+  padding: 0.7rem;
+  border: 1px solid rgba(89, 111, 154, 0.18);
+  border-radius: 0.8rem;
+}
+
+.admin-product-batch-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.admin-product-batch-toolbar__actions .admin-submit {
+  width: auto;
+  white-space: nowrap;
+}
+
+.admin-product-batch-toolbar__feedback {
+  grid-column: 1 / -1;
+}
+
+.admin-product-row__batch-selector {
+  align-self: start;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(89, 111, 154, 0.2);
+  border-radius: 0.75rem;
+  background: rgba(248, 251, 255, 0.9);
+}
+
 @media (max-width: 720px) {
+  .admin-product-batch-toolbar {
+    position: static;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .admin-product-batch-toolbar__summary {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-product-batch-toolbar__summary > strong {
+    text-align: left;
+  }
+
+  .admin-product-batch-toolbar__summary > button,
+  .admin-product-batch-toolbar__actions .admin-submit {
+    width: 100%;
+  }
+
   .admin-tag-row {
     grid-template-columns: 1fr;
     align-items: stretch;

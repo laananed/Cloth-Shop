@@ -1,5 +1,99 @@
 export const ALL_TAG_KEY = 'all-tags';
 export const MAX_PRODUCT_TAGS = 5;
+export const MAX_BATCH_PRODUCTS = 100;
+
+function normalizePositiveIntegerIds(values, fieldName) {
+  const source = values instanceof Set ? [...values] : values;
+  if (!Array.isArray(source)) {
+    throw new TypeError(`${fieldName} 必须是数组或 Set`);
+  }
+
+  const seen = new Set();
+  const normalized = [];
+  source.forEach((value) => {
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new TypeError(`${fieldName} 只能包含正整数`);
+    }
+    if (!seen.has(value)) {
+      seen.add(value);
+      normalized.push(value);
+    }
+  });
+  return normalized;
+}
+
+export function normalizeBatchProductIds(values, max = MAX_BATCH_PRODUCTS) {
+  const source = values instanceof Set ? [...values] : values;
+  if (Array.isArray(source) && source.length > max) {
+    throw new RangeError(`一次最多选择 ${max} 个商品`);
+  }
+  return normalizePositiveIntegerIds(source, '商品 ID');
+}
+
+export function reconcileBatchProductSelection(selectedIds, validIds) {
+  const valid = new Set(normalizePositiveIntegerIds(validIds, '有效商品 ID'));
+  return new Set(normalizeBatchProductIds(selectedIds).filter((productId) => valid.has(productId)));
+}
+
+export function reconcileBatchTagSelection(selectedIds, validIds, catalogReady) {
+  const selected = new Set(normalizePositiveIntegerIds(selectedIds, '标签 ID'));
+  if (!catalogReady) {
+    return selected;
+  }
+  const valid = new Set(normalizePositiveIntegerIds(validIds, '有效标签 ID'));
+  return new Set([...selected].filter((tagId) => valid.has(tagId)));
+}
+
+export function toggleBatchProductSelection(selectedIds, productId, checked, max = MAX_BATCH_PRODUCTS) {
+  const next = new Set(normalizeBatchProductIds(selectedIds, max));
+  const [normalizedProductId] = normalizePositiveIntegerIds([productId], '商品 ID');
+  if (checked) {
+    if (!next.has(normalizedProductId) && next.size >= max) {
+      throw new RangeError(`一次最多选择 ${max} 个商品`);
+    }
+    next.add(normalizedProductId);
+  } else {
+    next.delete(normalizedProductId);
+  }
+  return next;
+}
+
+export function getBatchSelectAllState(selectedIds, visibleIds, max = MAX_BATCH_PRODUCTS) {
+  const selected = new Set(normalizeBatchProductIds(selectedIds, max));
+  const visible = normalizePositiveIntegerIds(visibleIds, '当前列表商品 ID');
+  const selectable = visible.slice(0, max);
+  const selectedVisibleCount = selectable.filter((productId) => selected.has(productId)).length;
+  const checked = selectable.length > 0 && selectedVisibleCount === selectable.length;
+  return {
+    checked,
+    indeterminate: selectedVisibleCount > 0 && !checked,
+    selectedVisibleCount,
+    selectableCount: selectable.length,
+    truncated: visible.length > max,
+  };
+}
+
+export function toggleVisibleBatchProductSelection(selectedIds, visibleIds, max = MAX_BATCH_PRODUCTS) {
+  const selected = new Set(normalizeBatchProductIds(selectedIds, max));
+  const visible = normalizePositiveIntegerIds(visibleIds, '当前列表商品 ID');
+  const selectable = visible.slice(0, max);
+  const selectionState = getBatchSelectAllState(selected, visible, max);
+
+  if (selectionState.checked) {
+    visible.forEach((productId) => selected.delete(productId));
+  } else {
+    selectable.forEach((productId) => {
+      if (selected.size < max || selected.has(productId)) {
+        selected.add(productId);
+      }
+    });
+  }
+
+  return {
+    selectedProductIds: selected,
+    truncated: visible.length > max,
+  };
+}
 
 export function normalizeTagName(value) {
   return String(value ?? '').trim();

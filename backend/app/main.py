@@ -2,13 +2,14 @@
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pathlib import Path
+from typing import Literal
 import json
 import base64
 import hashlib
 import hmac
 import time
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pymysql.err import IntegrityError, MySQLError
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import test_connection, get_db
@@ -46,6 +47,7 @@ ADMIN_TOKEN_TTL_SECONDS = 8 * 60 * 60
 PRODUCT_DESCRIPTION_MAX_LENGTH = 1000
 BUYER_REMARK_MAX_LENGTH = 500
 MAX_PRODUCT_TAGS = 5
+MAX_BATCH_PRODUCTS = 100
 
 
 def build_product_image_filename(original_filename: str) -> str:
@@ -395,6 +397,26 @@ def normalize_tag_ids(value) -> list[int]:
     return normalized
 
 
+def normalize_product_ids(value) -> list[int]:
+    if not isinstance(value, list):
+        raise ValueError("product_ids 必须是数组")
+    if len(value) > MAX_BATCH_PRODUCTS:
+        raise ValueError(f"一次最多选择 {MAX_BATCH_PRODUCTS} 个商品")
+
+    normalized = []
+    seen = set()
+    for item in value:
+        if type(item) is not int or item <= 0:
+            raise ValueError("product_ids 只能包含正整数")
+        if item not in seen:
+            seen.add(item)
+            normalized.append(item)
+
+    if not normalized:
+        raise ValueError("请至少选择 1 个商品")
+    return normalized
+
+
 def parse_tag_ids_json(value: str | None) -> list[int]:
     text = str(value or "").strip()
     if not text:
@@ -430,6 +452,39 @@ class AdminProductTagsUpdateRequest(BaseModel):
     @classmethod
     def validate_tag_ids(cls, value):
         return normalize_tag_ids(value)
+
+
+class AdminProductTagsBatchUpdateRequest(BaseModel):
+    product_ids: list[int]
+    operation: Literal["ADD", "REMOVE", "REPLACE", "CLEAR"]
+    tag_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("product_ids", mode="before")
+    @classmethod
+    def validate_product_ids(cls, value):
+        return normalize_product_ids(value)
+
+    @field_validator("tag_ids", mode="before")
+    @classmethod
+    def validate_tag_ids(cls, value):
+        return normalize_tag_ids(value)
+
+    @model_validator(mode="after")
+    def validate_operation_tags(self):
+        if self.operation == "CLEAR":
+            if self.tag_ids:
+                raise ValueError("CLEAR 操作不允许选择标签")
+        elif not self.tag_ids:
+            raise ValueError(f"{self.operation} 操作必须选择 1 至 {MAX_PRODUCT_TAGS} 个标签")
+        return self
+
+
+class ProductTagsBatchError(Exception):
+    def __init__(self, status_code: int, detail: str, **payload):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+        self.payload = payload
 
 
 class AdminProductCategoryUpdateRequest(BaseModel):
@@ -788,7 +843,7 @@ def attach_product_tags(conn, rows: list[dict]) -> list[dict]:
     return rows
 
 
-def validate_active_tag_ids(cursor, tag_ids: list[int]) -> list[int]:
+def validate_active_tag_ids(cursor, tag_ids: list[int], *, batch_error: bool = False) -> list[int]:
     normalized_ids = normalize_tag_ids(tag_ids)
     if not normalized_ids:
         return []
@@ -799,6 +854,7 @@ def validate_active_tag_ids(cursor, tag_ids: list[int]) -> list[int]:
         SELECT id, is_deleted
         FROM tag
         WHERE id IN ({placeholders})
+        ORDER BY id ASC
         FOR UPDATE
         """,
         normalized_ids
@@ -807,11 +863,137 @@ def validate_active_tag_ids(cursor, tag_ids: list[int]) -> list[int]:
     found = {int(row["id"]): int(row["is_deleted"]) for row in rows}
     missing_ids = [tag_id for tag_id in normalized_ids if tag_id not in found]
     deleted_ids = [tag_id for tag_id in normalized_ids if found.get(tag_id) == 1]
+    if batch_error and (missing_ids or deleted_ids):
+        invalid_tag_ids = sorted(missing_ids + deleted_ids)
+        raise ProductTagsBatchError(
+            404,
+            f"标签不存在或已删除：{invalid_tag_ids}",
+            invalid_tag_ids=invalid_tag_ids,
+        )
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"标签不存在：{missing_ids}")
     if deleted_ids:
         raise HTTPException(status_code=400, detail=f"标签已删除，请先恢复：{deleted_ids}")
     return normalized_ids
+
+
+def resolve_batch_product_tag_ids(
+    current_tag_ids: list[int],
+    operation: str,
+    requested_tag_ids: list[int],
+) -> list[int]:
+    current = {int(tag_id) for tag_id in current_tag_ids}
+    requested = set(normalize_tag_ids(list(requested_tag_ids)))
+    if operation == "ADD":
+        resolved = current | requested
+    elif operation == "REMOVE":
+        resolved = current - requested
+    elif operation == "REPLACE":
+        resolved = requested
+    elif operation == "CLEAR":
+        resolved = set()
+    else:
+        raise ValueError("不支持的批量标签操作")
+    return sorted(resolved)
+
+
+def apply_batch_product_tags(conn, req: AdminProductTagsBatchUpdateRequest) -> dict:
+    product_ids = sorted(req.product_ids)
+    requested_tag_ids = sorted(req.tag_ids)
+    product_placeholders = ", ".join(["%s"] * len(product_ids))
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT id
+            FROM product
+            WHERE id IN ({product_placeholders})
+              AND is_deleted = 0
+            ORDER BY id ASC
+            FOR UPDATE
+            """,
+            product_ids,
+        )
+        valid_product_ids = [int(row["id"]) for row in cursor.fetchall()]
+        invalid_product_ids = [product_id for product_id in product_ids if product_id not in valid_product_ids]
+        if invalid_product_ids:
+            raise ProductTagsBatchError(
+                404,
+                f"商品不存在或已删除：{invalid_product_ids}",
+                invalid_product_ids=invalid_product_ids,
+            )
+
+        if req.operation != "CLEAR":
+            validate_active_tag_ids(cursor, requested_tag_ids, batch_error=True)
+
+        cursor.execute(
+            f"""
+            SELECT product_id, tag_id
+            FROM product_tag pt
+            WHERE pt.product_id IN ({product_placeholders})
+            ORDER BY product_id ASC, tag_id ASC
+            FOR UPDATE
+            """,
+            product_ids,
+        )
+        current_rows = cursor.fetchall()
+
+        current_tag_ids = {product_id: [] for product_id in product_ids}
+        for row in current_rows:
+            product_id = int(row["product_id"])
+            tag_id = int(row["tag_id"])
+            current_tag_ids[product_id].append(tag_id)
+
+        before_tags = query_product_tags(conn, product_ids)
+
+        final_tag_ids = {
+            product_id: resolve_batch_product_tag_ids(
+                current_tag_ids[product_id],
+                req.operation,
+                requested_tag_ids,
+            )
+            for product_id in product_ids
+        }
+        conflict_product_ids = [
+            product_id
+            for product_id in product_ids
+            if len(final_tag_ids[product_id]) > MAX_PRODUCT_TAGS
+        ]
+        if conflict_product_ids:
+            raise ProductTagsBatchError(
+                409,
+                "批量添加后部分商品将超过 5 个标签",
+                conflict_product_ids=conflict_product_ids,
+            )
+
+        changed_product_ids = [
+            product_id
+            for product_id in product_ids
+            if sorted(current_tag_ids[product_id]) != final_tag_ids[product_id]
+        ]
+        if changed_product_ids:
+            changed_placeholders = ", ".join(["%s"] * len(changed_product_ids))
+            cursor.execute(
+                f"DELETE FROM product_tag WHERE product_id IN ({changed_placeholders})",
+                changed_product_ids,
+            )
+            final_rows = [
+                (product_id, tag_id)
+                for product_id in changed_product_ids
+                for tag_id in final_tag_ids[product_id]
+            ]
+            if final_rows:
+                cursor.executemany(
+                    "INSERT INTO product_tag(product_id, tag_id) VALUES(%s, %s)",
+                    final_rows,
+                )
+
+    return {
+        "operation": req.operation,
+        "product_ids": product_ids,
+        "changed_product_ids": changed_product_ids,
+        "before_tags": before_tags,
+    }
 
 
 @app.get("/tags")
@@ -1004,6 +1186,55 @@ def restore_admin_tag(tag_id: int, authorization: str | None = Header(None)):
         raise HTTPException(status_code=409, detail="标签名称已存在，无法恢复")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"恢复标签失败：{str(e)}")
+
+
+@app.patch("/admin/products/tags/batch")
+def update_admin_product_tags_batch(
+    req: AdminProductTagsBatchUpdateRequest,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                result = apply_batch_product_tags(conn, req)
+                after_tags = query_product_tags(conn, result["product_ids"])
+                changed_product_ids = set(result["changed_product_ids"])
+                data = [
+                    {
+                        "product_id": product_id,
+                        "changed": product_id in changed_product_ids,
+                        "before_tags": result["before_tags"].get(product_id, []),
+                        "after_tags": after_tags.get(product_id, []),
+                    }
+                    for product_id in result["product_ids"]
+                ]
+                response = {
+                    "success": True,
+                    "operation": result["operation"],
+                    "requested_product_count": len(result["product_ids"]),
+                    "changed_product_count": len(changed_product_ids),
+                    "unchanged_product_count": len(result["product_ids"]) - len(changed_product_ids),
+                    "data": data,
+                }
+                conn.commit()
+            except ProductTagsBatchError as exc:
+                conn.rollback()
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"success": False, "detail": exc.detail, **exc.payload},
+                )
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+        return jsonable_encoder(response)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量修改商品标签失败：{str(e)}")
 
 
 @app.patch("/admin/products/{product_id}/tags")

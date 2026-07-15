@@ -2116,7 +2116,7 @@ test('admin authentication source wiring is present', () => {
   assert.ok(html.includes('data-admin-logout'));
   assert.ok(html.includes('data-admin-shell'));
   assert.ok(html.includes('./src/styles.css?v=20260709-admin-auth-state'));
-  assert.ok(html.includes('./src/main.js?v=20260709-admin-auth-state'));
+  assert.ok(html.includes('./src/main.js?v=20260715-product-tags-batch'));
 
   assert.ok(mainJs.includes('ADMIN_SESSION_STORAGE_KEY'));
   assert.ok(mainJs.includes('getStoredAdminSession'));
@@ -3762,5 +3762,250 @@ test('[TAGS-14-12] tag UI uses compact responsive controls without changing defa
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.admin-tag-row/);
   assert.ok(mainJs.includes('const API_BASE_URL = "http://127.0.0.1:8050"'));
   assert.doesNotMatch(mainJs, /127\.0\.0\.1:8051/);
+});
+
+test('[TAGS-15-1] batch selection helpers normalize toggle reconcile and cap visible products at one hundred', async () => {
+  const {
+    getBatchSelectAllState,
+    normalizeBatchProductIds,
+    reconcileBatchProductSelection,
+    reconcileBatchTagSelection,
+    toggleBatchProductSelection,
+    toggleVisibleBatchProductSelection,
+  } = await import('../src/tag-utils.js');
+
+  assert.deepEqual(normalizeBatchProductIds([3, 1, 3, 2]), [3, 1, 2]);
+  assert.throws(() => normalizeBatchProductIds([true]), /正整数/);
+  assert.throws(() => normalizeBatchProductIds(['1']), /正整数/);
+  assert.throws(() => normalizeBatchProductIds(Array.from({ length: 101 }, (_, index) => index + 1)), /100/);
+
+  const selected = toggleBatchProductSelection(new Set([1]), 2, true);
+  assert.deepEqual([...selected], [1, 2]);
+  assert.deepEqual([...toggleBatchProductSelection(selected, 1, false)], [2]);
+  assert.deepEqual([...reconcileBatchProductSelection(new Set([1, 2, 9]), [1, 2, 3])], [1, 2]);
+  assert.deepEqual([...reconcileBatchTagSelection(new Set([1, 2]), [], false)], [1, 2]);
+  assert.deepEqual([...reconcileBatchTagSelection(new Set([1, 2]), [2, 3], true)], [2]);
+
+  const partialState = getBatchSelectAllState(new Set([1]), [1, 2, 3]);
+  assert.deepEqual(partialState, {
+    checked: false,
+    indeterminate: true,
+    selectedVisibleCount: 1,
+    selectableCount: 3,
+    truncated: false,
+  });
+
+  const selectedAll = toggleVisibleBatchProductSelection(new Set([1]), [1, 2, 3]);
+  assert.deepEqual([...selectedAll.selectedProductIds], [1, 2, 3]);
+  assert.equal(selectedAll.truncated, false);
+  assert.equal(getBatchSelectAllState(selectedAll.selectedProductIds, [1, 2, 3]).checked, true);
+  assert.deepEqual(
+    [...toggleVisibleBatchProductSelection(selectedAll.selectedProductIds, [1, 2, 3]).selectedProductIds],
+    [],
+  );
+
+  const capped = toggleVisibleBatchProductSelection(
+    new Set(),
+    Array.from({ length: 101 }, (_, index) => index + 1),
+  );
+  assert.equal(capped.selectedProductIds.size, 100);
+  assert.equal(capped.truncated, true);
+});
+
+test('[TAGS-15-2] batch request model enforces strict products operations and cross-field tag rules', () => {
+  const script = String.raw`
+import json
+from pydantic import ValidationError
+from app.main import AdminProductTagsBatchUpdateRequest
+
+result = {}
+for key, payload in {
+    "empty_products": {"product_ids": [], "operation": "ADD", "tag_ids": [1]},
+    "too_many_products": {"product_ids": list(range(1, 102)), "operation": "ADD", "tag_ids": [1]},
+    "boolean_product": {"product_ids": [True], "operation": "ADD", "tag_ids": [1]},
+    "string_product": {"product_ids": ["1"], "operation": "ADD", "tag_ids": [1]},
+    "invalid_operation": {"product_ids": [1], "operation": "add", "tag_ids": [1]},
+    "add_empty": {"product_ids": [1], "operation": "ADD", "tag_ids": []},
+    "remove_empty": {"product_ids": [1], "operation": "REMOVE", "tag_ids": []},
+    "replace_empty": {"product_ids": [1], "operation": "REPLACE", "tag_ids": []},
+    "clear_nonempty": {"product_ids": [1], "operation": "CLEAR", "tag_ids": [1]},
+    "six_tags": {"product_ids": [1], "operation": "ADD", "tag_ids": [1,2,3,4,5,6]},
+}.items():
+    try:
+        AdminProductTagsBatchUpdateRequest(**payload)
+    except ValidationError:
+        result[key] = True
+    else:
+        result[key] = False
+
+result["one_product"] = AdminProductTagsBatchUpdateRequest(product_ids=[3], operation="ADD", tag_ids=[2]).model_dump()
+result["hundred_products"] = len(AdminProductTagsBatchUpdateRequest(product_ids=list(range(1, 101)), operation="REMOVE", tag_ids=[2]).product_ids)
+result["deduplicated"] = AdminProductTagsBatchUpdateRequest(product_ids=[3,1,3], operation="REPLACE", tag_ids=[4,4,2]).model_dump()
+result["clear_default"] = AdminProductTagsBatchUpdateRequest(product_ids=[1], operation="CLEAR").model_dump()
+print(json.dumps(result, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout.trim());
+  for (const key of [
+    'empty_products', 'too_many_products', 'boolean_product', 'string_product', 'invalid_operation',
+    'add_empty', 'remove_empty', 'replace_empty', 'clear_nonempty', 'six_tags',
+  ]) {
+    assert.equal(payload[key], true, `${key} should be rejected`);
+  }
+  assert.deepEqual(payload.one_product, { product_ids: [3], operation: 'ADD', tag_ids: [2] });
+  assert.equal(payload.hundred_products, 100);
+  assert.deepEqual(payload.deduplicated, { product_ids: [3, 1], operation: 'REPLACE', tag_ids: [4, 2] });
+  assert.deepEqual(payload.clear_default, { product_ids: [1], operation: 'CLEAR', tag_ids: [] });
+});
+
+test('[TAGS-15-3] batch tag resolver implements add remove replace and clear idempotently', () => {
+  const script = String.raw`
+import json
+from app.main import resolve_batch_product_tag_ids
+
+result = {
+    "add": resolve_batch_product_tag_ids([1, 2], "ADD", [2, 3]),
+    "remove": resolve_batch_product_tag_ids([1, 2], "REMOVE", [2, 9]),
+    "replace": resolve_batch_product_tag_ids([1, 2], "REPLACE", [4, 3]),
+    "clear": resolve_batch_product_tag_ids([1, 2], "CLEAR", []),
+    "unchanged_add": resolve_batch_product_tag_ids([1, 2], "ADD", [1]),
+    "over_limit_remove": resolve_batch_product_tag_ids([1, 2, 3, 4, 5, 6], "REMOVE", [6]),
+    "over_limit_replace": resolve_batch_product_tag_ids([1, 2, 3, 4, 5, 6], "REPLACE", [4]),
+}
+print(json.dumps(result, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    add: [1, 2, 3],
+    remove: [1],
+    replace: [3, 4],
+    clear: [],
+    unchanged_add: [1, 2],
+    over_limit_remove: [1, 2, 3, 4, 5],
+    over_limit_replace: [4],
+  });
+});
+
+test('[TAGS-15-4] backend exposes one authenticated atomic batch route before the single-product route', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const batchStart = backend.indexOf('@app.patch("/admin/products/tags/batch")');
+  const singleStart = backend.indexOf('@app.patch("/admin/products/{product_id}/tags")');
+  assert.ok(batchStart > 0);
+  assert.ok(batchStart < singleStart, 'fixed batch route must precede the dynamic product route');
+  const batchRoute = backend.slice(batchStart, singleStart);
+
+  assert.ok(batchRoute.includes('require_admin_user(authorization)'));
+  assert.ok(batchRoute.includes('apply_batch_product_tags(conn, req)'));
+  assert.equal((batchRoute.match(/conn\.commit\(\)/g) || []).length, 1);
+  assert.ok(batchRoute.includes('conn.rollback()'));
+  assert.ok(batchRoute.includes('requested_product_count'));
+  assert.ok(batchRoute.includes('changed_product_count'));
+  assert.ok(batchRoute.includes('unchanged_product_count'));
+  assert.ok(batchRoute.includes('before_tags'));
+  assert.ok(batchRoute.includes('after_tags'));
+
+  const helperStart = backend.indexOf('def apply_batch_product_tags(');
+  const helper = backend.slice(helperStart, batchStart);
+  assert.ok(helper.includes('ORDER BY id ASC'));
+  assert.ok(helper.includes('ORDER BY product_id ASC, tag_id ASC'));
+  assert.ok(helper.includes('FOR UPDATE'));
+  assert.ok(helper.includes('executemany'));
+  assert.ok(helper.includes('conflict_product_ids'));
+  assert.ok(helper.includes('invalid_product_ids'));
+  assert.ok(backend.includes('invalid_tag_ids'));
+});
+
+test('[TAGS-15-4A] batch route executes commit rollback permissions and atomic error behavior', () => {
+  const result = spawnSync(
+    'backend\\.venv\\Scripts\\python.exe',
+    ['tests/product_tags_batch_unit.py'],
+    { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' } },
+  );
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /Ran 4 tests/);
+  assert.match(result.stderr, /OK/);
+});
+
+test('[TAGS-15-5] admin product panel exposes accessible visible-list batch controls', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const panel = sliceBetween(html, 'data-admin-panel="products"', 'data-admin-panel="categories"');
+  for (const hook of [
+    'data-admin-product-batch-toolbar',
+    'data-admin-product-batch-select-all',
+    'data-admin-product-batch-selected-count',
+    'data-admin-product-batch-operation',
+    'data-admin-product-batch-tag-options',
+    'data-admin-product-batch-apply',
+    'data-admin-product-batch-clear-selection',
+    'data-admin-product-batch-feedback',
+  ]) {
+    assert.ok(panel.includes(hook), `${hook} should exist`);
+  }
+  assert.ok(panel.includes('<fieldset'));
+  assert.ok(panel.includes('<legend'));
+  assert.ok(panel.includes('aria-live="polite"'));
+  for (const value of ['ADD', 'REMOVE', 'REPLACE', 'CLEAR']) {
+    assert.ok(panel.includes(`value="${value}"`));
+  }
+});
+
+test('[TAGS-15-6] admin frontend owns durable batch state and sends exactly one batch request', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const batchApi = sliceBetween(mainJs, 'async function updateAdminProductTagsBatchToApi(', 'async function loadAdminCategoriesFromApi(');
+
+  assert.ok(mainJs.includes('adminProductTagBatchState'));
+  assert.ok(mainJs.includes('selectedProductIds: new Set()'));
+  assert.ok(mainJs.includes("operation: 'ADD'"));
+  assert.ok(mainJs.includes('selectedTagIds: new Set()'));
+  assert.ok(mainJs.includes('filterIdentity'));
+  assert.ok(mainJs.includes('data-admin-product-batch-select'));
+  assert.ok(mainJs.includes('data-product-id'));
+  assert.ok(batchApi.includes('/admin/products/tags/batch'));
+  assert.equal((batchApi.match(/adminFetch\(/g) || []).length, 1);
+  assert.doesNotMatch(batchApi, /for\s*\(|Promise\.all|\/admin\/products\/\$\{productId\}\/tags/);
+  assert.ok(mainJs.includes("正在批量处理…"));
+  assert.ok(mainJs.includes('将从 ${productCount} 个商品中移除所选标签，是否继续？'));
+  assert.ok(mainJs.includes('将把 ${productCount} 个商品的标签完整替换为当前选择，原有其他标签会被移除，是否继续？'));
+  assert.ok(mainJs.includes('将清空 ${productCount} 个商品的全部标签，是否继续？'));
+  assert.ok(mainJs.includes('已更新 ${result.changed_product_count} 个商品，${result.unchanged_product_count} 个商品无需修改'));
+});
+
+test('[TAGS-15-7] batch failures retain selections while success logout and filter changes clear them', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const submit = sliceBetween(mainJs, 'async function submitAdminProductTagBatch(', 'function populateImageSelect(');
+  assert.ok(submit.includes('createAdminProductTagBatchSnapshot'));
+  assert.ok(submit.includes('await refreshAdminProductsFromApi({ preserveExistingOnError: true })'));
+  assert.ok(submit.includes('await refreshAdminTagsFromApi({ preserveExistingOnError: true })'));
+  assert.ok(submit.includes('已保留当前选择，请稍后重试'));
+  assert.ok(submit.includes('clearAdminProductTagBatchState'));
+  assert.ok(submit.includes('reconcileAdminProductTagBatchState'));
+  assert.ok(submit.indexOf('clearAdminProductTagBatchState') < submit.indexOf('catch (error)'));
+  assert.ok(submit.includes('formatAdminProductTagBatchError(error)'));
+  assert.ok(mainJs.includes("clearAdminProductTagBatchState({ resetOperation: true })"));
+  assert.ok(mainJs.includes('clearAdminProductTagBatchSelectionForFilterChange'));
+  assert.ok(mainJs.includes('reconcileBatchTagSelection('));
+  assert.ok(mainJs.includes('if (!preserveExistingOnError) {\n      products = getStoredAdminProducts(storage);'));
+  assert.ok(mainJs.includes('if (!preserveExistingOnError) {\n      adminTags = [];'));
+});
+
+test('[TAGS-15-8] batch toolbar and product selectors remain usable on desktop and narrow screens without SQL changes', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const sqlFiles = readFileSync('tests/site.test.js', 'utf8');
+  assert.match(styles, /\.admin-product-batch-toolbar\s*\{/);
+  assert.match(styles, /\.admin-product-batch-tag-options\s*\{/);
+  assert.match(styles, /\.admin-product-batch-selector\s*\{/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.admin-product-batch-toolbar/);
+  assert.doesNotMatch(styles, /overflow-x:\s*auto[^}]*admin-product-batch-tag-options/);
+  assert.equal(existsSync('sql语句/10_商品标签批量管理增量迁移.sql'), false);
+  assert.ok(sqlFiles.includes('[TAGS-14-4]'));
 });
 

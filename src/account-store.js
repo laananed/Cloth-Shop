@@ -684,6 +684,40 @@ export function buildPurchaseOrder({ product, quantity, paymentMethod, address }
   };
 }
 
+export function renderFavoriteProductItems(favorites, products, emptyState) {
+  const favoriteItems = Array.isArray(favorites) ? favorites : [];
+  const currentProducts = Array.isArray(products) ? products : [];
+
+  if (!favoriteItems.length) {
+    return {
+      emptyState,
+      items: [],
+    };
+  }
+
+  return {
+    emptyState: null,
+    items: favoriteItems.map((favorite) => {
+      const currentProduct = findCurrentFavoriteProduct(favorite, currentProducts);
+      const source = currentProduct || favorite || {};
+      const detail = String(source.detail || '').trim() || '暂无商品介绍';
+
+      return {
+        id: String(favorite?.id || ''),
+        productId: currentProduct?.productId ?? favorite?.productId ?? favorite?.id ?? '',
+        currentProductId: currentProduct?.id || '',
+        name: String(source.name || '未命名商品').trim(),
+        category: String(source.category || '商品').trim(),
+        image: String(source.image || '').trim(),
+        detail,
+        price: Number(source.price || 0),
+        badge: String(source.badge || '').trim(),
+        isAvailable: Boolean(currentProduct),
+      };
+    }),
+  };
+}
+
 export function renderOrderItems(orders) {
   if (!orders.length) {
     return {

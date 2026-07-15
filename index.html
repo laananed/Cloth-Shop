@@ -96,9 +96,16 @@
             <p data-purchase-category>商品信息</p>
             <h3 data-purchase-badge>精选</h3>
             <p data-purchase-sales>请选择商品</p>
+            <p data-purchase-status hidden></p>
+            <p data-purchase-sku-summary hidden></p>
             <strong class="purchase-modal__price" data-purchase-price>￥0</strong>
           </div>
         </div>
+
+        <section class="purchase-modal__section purchase-modal__description" data-purchase-description-section hidden>
+          <h3>商品介绍</h3>
+          <p data-purchase-description>暂无商品介绍</p>
+        </section>
 
         <section class="purchase-modal__section">
           <div class="purchase-modal__section-header">
@@ -119,7 +126,7 @@
           </div>
         </section>
 
-        <section class="purchase-modal__section">
+        <section class="purchase-modal__section" data-purchase-sku-section>
           <div class="purchase-modal__section-header">
             <div class="purchase-field purchase-field--sku">
               <span>商品规格</span>
@@ -342,7 +349,7 @@
       </footer>
     </main>
 
-    <script type="module" src="./src/main.js?v=20260715c"></script>
+    <script type="module" src="./src/main.js?v=20260715d"></script>
   </body>
 </html>
 

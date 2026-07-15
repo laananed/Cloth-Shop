@@ -21,7 +21,7 @@ import {
   isProductFavorited,
   renderAdminProductsView,
   renderAdminStatsView,
-  renderSavedProductItems,
+  renderFavoriteProductItems,
   saveStoredCart,
   saveStoredAdminProducts,
   saveStoredFavorites,
@@ -31,7 +31,7 @@ import {
   toggleProductFavorite,
   validateAddress,
   validateRegistration,
-} from './account-store.js?v=20260715b';
+} from './account-store.js?v=20260715c';
 import {
   buildSkuMatrix,
   getDimensionOptions,
@@ -62,6 +62,7 @@ const staticProducts = getProducts();
 let products = staticProducts;
 let salesRankMap = getSalesRankMap(products);
 let productsById = new Map(products.map((product) => [product.id, product]));
+let hasLoadedProductsFromApi = false;
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -90,6 +91,10 @@ const purchaseCategory = document.querySelector('[data-purchase-category]');
 const purchaseBadge = document.querySelector('[data-purchase-badge]');
 const purchasePrice = document.querySelector('[data-purchase-price]');
 const purchaseSales = document.querySelector('[data-purchase-sales]');
+const purchaseStatus = document.querySelector('[data-purchase-status]');
+const purchaseSkuSummary = document.querySelector('[data-purchase-sku-summary]');
+const purchaseDescription = document.querySelector('[data-purchase-description]');
+const purchaseDescriptionSection = document.querySelector('[data-purchase-description-section]');
 const purchaseImage = document.querySelector('[data-purchase-image]');
 const purchaseGallery = document.querySelector('[data-purchase-gallery]');
 const imageLightbox = document.querySelector('[data-image-lightbox]');
@@ -111,6 +116,7 @@ const purchaseFeedback = document.querySelector('[data-purchase-feedback]');
 const purchaseEyebrow = document.querySelector('.purchase-modal__eyebrow');
 const purchaseAddressSection = purchaseAddressList?.closest('.purchase-modal__section') || null;
 const purchaseQuantitySection = purchaseQuantityValue?.closest('.purchase-modal__section') || null;
+const purchaseSkuSection = document.querySelector('[data-purchase-sku-section]');
 const purchaseTotalSection = purchaseTotal?.closest('.purchase-modal__total') || null;
 
 const sidebar = document.querySelector('[data-sidebar]');
@@ -403,9 +409,12 @@ const purchaseActionConfigs = {
     submitLabel: (totalText) => `立即支付 ${totalText}`,
     pendingLabel: '正在创建待支付订单...',
     showAddress: true,
+    showSku: true,
     showQuantity: true,
     showPayment: true,
     showTotal: true,
+    showSubmit: true,
+    showDescription: false,
     openSidebar: 'orders',
   },
   cart: {
@@ -415,10 +424,28 @@ const purchaseActionConfigs = {
     submitLabel: () => '加入购物车',
     pendingLabel: '正在加入购物车...',
     showAddress: true,
+    showSku: true,
     showQuantity: true,
     showPayment: false,
     showTotal: true,
+    showSubmit: true,
+    showDescription: false,
     openSidebar: 'cart',
+  },
+  details: {
+    key: 'details',
+    label: '商品详情',
+    eyebrow: '商品详情',
+    submitLabel: () => '',
+    pendingLabel: '',
+    showAddress: false,
+    showSku: false,
+    showQuantity: false,
+    showPayment: false,
+    showTotal: false,
+    showSubmit: false,
+    showDescription: true,
+    openSidebar: '',
   },
 };
 
@@ -698,10 +725,12 @@ async function loadProductsFromApi() {
     }
 
     products = convertApiProducts(result.data);
+    hasLoadedProductsFromApi = true;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
 
     updateView();
+    renderSidebar();
 
     console.log("已使用后端数据库商品渲染页面：", {
       count: products.length,
@@ -712,9 +741,11 @@ async function loadProductsFromApi() {
 
     // 失败时保留原来的静态商品，页面不会空白
     products = staticProducts;
+    hasLoadedProductsFromApi = false;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
     updateView();
+    renderSidebar();
   }
 }
 
@@ -2527,7 +2558,9 @@ function renderPurchaseModal() {
   const productState = product
     ? getProductDisplayState(product)
     : { key: "UNSELECTED", label: "请选择商品", message: "", priority: 99 };
-  const displayPrice = Number(selectedSku?.price ?? product?.price ?? 0);
+  const displayPrice = actionConfig.showSku
+    ? Number(selectedSku?.price ?? product?.price ?? 0)
+    : Number(product?.price ?? 0);
   const availableStock = getSkuAvailableStock(selectedSku);
   const quantity = Math.min(
     Math.max(1, Number(activePurchaseQuantity) || 1),
@@ -2536,6 +2569,7 @@ function renderPurchaseModal() {
   const total = product ? displayPrice * quantity : 0;
   const selectedSkuOnSale = Boolean(selectedSku) && isOnSale(selectedSku.skuStatus || selectedSku.status || "ON_SALE");
   const canSubmitPurchase =
+    actionConfig.showSubmit &&
     Boolean(product) &&
     productState.key === "AVAILABLE" &&
     Boolean(selectedSku) &&
@@ -2564,13 +2598,36 @@ function renderPurchaseModal() {
   }
 
   if (purchasePrice) {
-    purchasePrice.textContent = selectedSku ? formatPrice(displayPrice) : '请选择规格';
+    purchasePrice.textContent = actionConfig.showSku && !selectedSku
+      ? '请选择规格'
+      : formatPrice(displayPrice);
   }
 
   if (purchaseSales) {
-    purchaseSales.textContent = selectedSku
-      ? `销量 ${product.sales}`
-      : '请选择商品规格后继续';
+    purchaseSales.textContent = actionConfig.key === 'details'
+      ? `销量 ${product?.sales ?? 0}`
+      : selectedSku
+        ? `销量 ${product.sales}`
+        : '请选择商品规格后继续';
+  }
+
+  if (purchaseStatus) {
+    purchaseStatus.hidden = actionConfig.key !== 'details';
+    purchaseStatus.textContent = `销售状态：${productState.label}`;
+  }
+
+  if (purchaseSkuSummary) {
+    const skuSummary = String(product?.skuSummary || '').trim();
+    purchaseSkuSummary.hidden = actionConfig.key !== 'details' || !skuSummary;
+    purchaseSkuSummary.textContent = skuSummary;
+  }
+
+  if (purchaseDescriptionSection) {
+    purchaseDescriptionSection.hidden = !actionConfig.showDescription;
+  }
+
+  if (purchaseDescription) {
+    purchaseDescription.textContent = product?.detail || '暂无商品介绍';
   }
 
   const productImages = getProductImages(product);
@@ -2618,7 +2675,7 @@ function renderPurchaseModal() {
     purchaseTotal.textContent = formatPrice(total);
   }
 
-  if (purchaseSkuOptions) {
+  if (purchaseSkuOptions && actionConfig.showSku) {
     const skuList = getProductSkuList(product);
 
     if (structuredSkuProduct) {
@@ -2683,6 +2740,8 @@ function renderPurchaseModal() {
         })
         .join('');
     }
+  } else if (purchaseSkuOptions) {
+    purchaseSkuOptions.innerHTML = '';
   }
 
   if (purchaseAddressSection) {
@@ -2691,6 +2750,10 @@ function renderPurchaseModal() {
 
   if (purchaseQuantitySection) {
     purchaseQuantitySection.hidden = !actionConfig.showQuantity;
+  }
+
+  if (purchaseSkuSection) {
+    purchaseSkuSection.hidden = !actionConfig.showSku;
   }
 
   if (purchasePaymentOptions) {
@@ -2731,6 +2794,7 @@ function renderPurchaseModal() {
   }
 
   if (purchaseSubmit) {
+    purchaseSubmit.hidden = !actionConfig.showSubmit;
     purchaseSubmit.disabled = !canSubmitPurchase;
     purchaseSubmit.textContent = product
       ? canSubmitPurchase
@@ -2744,6 +2808,7 @@ function renderPurchaseModal() {
   }
 
   if (purchaseFeedback) {
+    purchaseFeedback.hidden = !actionConfig.showSubmit;
     purchaseFeedback.textContent = actionConfig.showAddress
       ? '请选择商品规格和地址后继续。'
       : '请选择商品规格后继续。';
@@ -2755,21 +2820,29 @@ async function openPurchaseModal(product, action = 'buy') {
   activePurchaseProduct = product;
   activePurchaseImageUrl = getProductMainImage(product);
   activePurchaseAction = getPurchaseActionConfig(action).key;
-  const cachedSkuId = selectedSkuByProductId.get(product?.id);
-  const initialSelection = resolveInitialSkuSelection(product, cachedSkuId);
-  activePurchaseColor = initialSelection.color;
-  activePurchaseSize = initialSelection.size;
-  activePurchaseSkuId = initialSelection.skuId;
-  if (initialSelection.skuId) {
-    selectedSkuByProductId.set(product.id, Number(initialSelection.skuId));
+  const actionConfig = getPurchaseActionConfig(activePurchaseAction);
+
+  if (actionConfig.key === 'details' && !actionConfig.showSku) {
+    activePurchaseColor = null;
+    activePurchaseSize = null;
+    activePurchaseSkuId = null;
   } else {
-    selectedSkuByProductId.delete(product.id);
+    const cachedSkuId = selectedSkuByProductId.get(product?.id);
+    const initialSelection = resolveInitialSkuSelection(product, cachedSkuId);
+    activePurchaseColor = initialSelection.color;
+    activePurchaseSize = initialSelection.size;
+    activePurchaseSkuId = initialSelection.skuId;
+    if (initialSelection.skuId) {
+      selectedSkuByProductId.set(product.id, Number(initialSelection.skuId));
+    } else {
+      selectedSkuByProductId.delete(product.id);
+    }
+    updateView();
   }
-  updateView();
   activePurchaseQuantity = 1;
   activePurchasePaymentMethod = 'alipay';
 
-  if (getPurchaseActionConfig(activePurchaseAction).showAddress) {
+  if (actionConfig.showAddress) {
     try {
       await loadAddressesFromApi(CURRENT_USER_ID);
     } catch (error) {
@@ -2787,9 +2860,9 @@ async function openPurchaseModal(product, action = 'buy') {
     purchaseModal?.setAttribute('aria-hidden', 'false');
     document.body.classList.add('has-modal');
   } catch (error) {
-    console.error("打开立即购买弹窗失败：", error);
-    setFeedback(purchaseFeedback, `打开立即购买弹窗失败：${error.message}`, true);
-    window.alert(`打开立即购买弹窗失败：${error.message}`);
+    console.error("打开商品弹窗失败：", error);
+    setFeedback(purchaseFeedback, `打开商品弹窗失败：${error.message}`, true);
+    window.alert(`打开商品弹窗失败：${error.message}`);
     throw error;
   }
 }
@@ -2959,6 +3032,9 @@ async function submitPurchaseOrder() {
   }
 
   const actionConfig = getPurchaseActionConfig(activePurchaseAction);
+  if (actionConfig.key === 'details') {
+    return;
+  }
   const selectedSku = getPurchaseSelectedSku(activePurchaseProduct);
   const quantity = Math.max(1, Number(activePurchaseQuantity) || 1);
   const total = Number(selectedSku?.price ?? activePurchaseProduct.price ?? 0) * quantity;
@@ -3152,8 +3228,8 @@ function upsertCartItem(product) {
   return nextCart;
 }
 
-function renderProductShelf(listElement, items, emptyState, { showQuantity = false } = {}) {
-  const shelf = renderSavedProductItems(items, emptyState);
+function renderFavoritesShelf(listElement, items, emptyState, currentProducts = []) {
+  const shelf = renderFavoriteProductItems(items, currentProducts, emptyState);
 
   if (!listElement) {
     return;
@@ -3166,24 +3242,55 @@ function renderProductShelf(listElement, items, emptyState, { showQuantity = fal
 
   listElement.innerHTML = shelf.items
     .map(
-      (item) => `
-        <article class="saved-item">
-          <div class="saved-item__header">
-            <strong>${item.name}</strong>
-            <div>
-              <span>${item.badge}</span>
+      (item) => {
+        const detailsAttribute = item.isAvailable
+          ? `data-favorite-details-product-id="${escapeHtml(item.currentProductId)}"`
+          : '';
+        const imageMarkup = item.image
+          ? `<img class="favorite-card__image" data-favorite-image src="${escapeHtml(item.image)}" alt="" loading="lazy" decoding="async" />`
+          : '';
+
+        return `
+        <article class="favorite-card" data-favorite-id="${escapeHtml(item.id)}">
+          <button
+            type="button"
+            class="favorite-card__visual${item.image ? '' : ' is-image-missing'}"
+            ${detailsAttribute}
+            aria-label="查看 ${escapeHtml(item.name)} 的商品详情和更多图片"
+            ${item.isAvailable ? '' : 'disabled'}
+          >
+            ${imageMarkup}
+            <span class="favorite-card__image-fallback">图片暂不可用</span>
+            <span class="favorite-card__image-hint">点击查看更多图片</span>
+          </button>
+          <div class="favorite-card__content">
+            <div class="favorite-card__header">
+              <div>
+                <p class="favorite-card__category">${escapeHtml(item.category)}</p>
+                <h4>${escapeHtml(item.name)}</h4>
+              </div>
+              ${item.badge ? `<span class="favorite-card__badge">${escapeHtml(item.badge)}</span>` : ''}
+            </div>
+            <p class="favorite-card__description">${escapeHtml(item.detail)}</p>
+            <strong class="favorite-card__price">${formatPrice(item.price)}</strong>
+            <div class="favorite-card__actions">
+              <button
+                type="button"
+                class="ghost-button ghost-button--small"
+                ${detailsAttribute}
+                ${item.isAvailable ? '' : 'disabled'}
+              >${item.isAvailable ? '查看详情' : '商品已不可用'}</button>
               <button
                 type="button"
                 class="ghost-button ghost-button--small ghost-button--danger"
                 data-favorite-remove-id="${escapeHtml(item.id)}"
-                aria-label="取消收藏 ${escapeHtml(item.name)}"
-              >删除</button>
+                aria-label="移除收藏 ${escapeHtml(item.name)}"
+              >移除收藏</button>
             </div>
           </div>
-          <p>${item.category}</p>
-          <p>${formatPrice(item.price)}${showQuantity ? ` × ${item.quantity}` : ''}</p>
         </article>
-      `,
+      `;
+      },
     )
     .join('');
 }
@@ -3567,7 +3674,13 @@ function renderSidebar() {
     ordersList.innerHTML = `<p class="orders-empty">正在加载数据库订单...</p>`;
   }
 
-  renderProductShelf(favoritesList, getStoredFavorites(storage, products), '暂无收藏夹');
+  const currentFavoriteProducts = hasLoadedProductsFromApi ? products : [];
+  renderFavoritesShelf(
+    favoritesList,
+    getStoredFavorites(storage, currentFavoriteProducts),
+    '暂无收藏夹',
+    currentFavoriteProducts,
+  );
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
   const invalidItems = getInvalidCartItems(cart);
@@ -6305,13 +6418,37 @@ if (ordersList) {
 if (favoritesList) {
   favoritesList.addEventListener('click', (event) => {
     const removeButton = event.target.closest('[data-favorite-remove-id]');
+    const detailsButton = event.target.closest('[data-favorite-details-product-id]');
 
     if (removeButton) {
       removeFavorite(removeButton.dataset.favoriteRemoveId);
       renderSidebar();
       updateView();
+      return;
+    }
+
+    if (detailsButton && !detailsButton.disabled) {
+      const product = productsById.get(detailsButton.dataset.favoriteDetailsProductId);
+      if (!product) {
+        setFeedback(sidebarFavoritesFeedback, '商品已不可用，无法查看实时详情。', true);
+        return;
+      }
+
+      void openPurchaseModal(product, 'details').catch((error) => {
+        console.error('打开收藏商品详情失败：', error);
+      });
     }
   });
+
+  favoritesList.addEventListener('error', (event) => {
+    const image = event.target.closest?.('[data-favorite-image]');
+    if (!image) {
+      return;
+    }
+
+    image.hidden = true;
+    image.closest('.favorite-card__visual')?.classList.add('is-image-missing');
+  }, true);
 }
 
 if (cartList) {
@@ -6500,6 +6637,10 @@ if (purchaseModal) {
     if (galleryButton) {
       activePurchaseImageUrl = galleryButton.dataset.purchaseGalleryImage || '';
       renderPurchaseModal();
+      return;
+    }
+
+    if (activePurchaseAction === 'details') {
       return;
     }
     if (quantityDecrease) {
@@ -6727,9 +6868,13 @@ window.addEventListener('keydown', (event) => {
   }
 
   if (event.key === 'Escape') {
+    if (purchaseModal?.classList.contains('is-open')) {
+      closePurchaseModal();
+      return;
+    }
+
     closeAuthModal();
     closeSidebar();
-    closePurchaseModal();
   }
 });
 

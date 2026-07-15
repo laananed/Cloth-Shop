@@ -65,6 +65,7 @@ import {
   saveStoredProfile,
   validateRegistration,
 } from '../src/account-store.js';
+import * as accountStore from '../src/account-store.js';
 
 function sliceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -1078,13 +1079,167 @@ test('[FAVORITE-6-5] storefront favorite toggles directly while cart and buy kee
 
 test('[FAVORITE-6-6] favorites shelf removal synchronizes storage cards and the open panel', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
-  const renderShelfBody = sliceBetween(mainJs, 'function renderProductShelf(', 'function formatCartMoney(');
+  const renderShelfBody = sliceBetween(mainJs, 'function renderFavoritesShelf(', 'function formatCartMoney(');
   const favoriteEvents = sliceBetween(mainJs, 'if (favoritesList) {', 'if (cartList) {');
 
   assert.ok(renderShelfBody.includes('data-favorite-remove-id'));
   assert.ok(favoriteEvents.includes('removeFavorite('));
   assert.ok(favoriteEvents.includes('renderSidebar();'));
   assert.ok(favoriteEvents.includes('updateView();'));
+});
+
+test('[FAVORITE-7-1] favorite cards prefer live product fields and keep snapshot fallbacks', () => {
+  const favorites = [{
+    id: 'product-7',
+    productId: 7,
+    name: '旧名称',
+    category: '旧分类',
+    image: '/snapshot.jpg',
+    detail: '快照介绍',
+    price: 399,
+    badge: '旧角标',
+  }];
+  const products = [{
+    id: 'product-7',
+    productId: 7,
+    name: '实时名称',
+    category: '实时分类',
+    image: '/live.jpg',
+    detail: '实时介绍',
+    price: 359,
+    badge: '实时角标',
+  }];
+
+  assert.equal(typeof accountStore.renderFavoriteProductItems, 'function');
+  const live = accountStore.renderFavoriteProductItems(favorites, products, '暂无收藏夹');
+  const snapshot = accountStore.renderFavoriteProductItems(favorites, [], '暂无收藏夹');
+
+  assert.deepEqual(live.items[0], {
+    id: 'product-7',
+    productId: 7,
+    currentProductId: 'product-7',
+    name: '实时名称',
+    category: '实时分类',
+    image: '/live.jpg',
+    detail: '实时介绍',
+    price: 359,
+    badge: '实时角标',
+    isAvailable: true,
+  });
+  assert.equal(snapshot.items[0].name, '旧名称');
+  assert.equal(snapshot.items[0].image, '/snapshot.jpg');
+  assert.equal(snapshot.items[0].detail, '快照介绍');
+  assert.equal(snapshot.items[0].isAvailable, false);
+  assert.equal(snapshot.items[0].currentProductId, '');
+});
+
+test('[FAVORITE-7-1A] static catalog fallback is not treated as live favorite detail data', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const loaderBody = sliceBetween(mainJs, 'async function loadProductsFromApi()', 'const selectedSkuByProductId');
+  const sidebarBody = sliceBetween(mainJs, 'function renderSidebar() {', 'function updateHeroParallax()');
+
+  assert.ok(mainJs.includes('let hasLoadedProductsFromApi = false;'));
+  assert.ok(loaderBody.includes('hasLoadedProductsFromApi = true;'));
+  assert.ok(loaderBody.includes('hasLoadedProductsFromApi = false;'));
+  assert.ok(sidebarBody.includes("hasLoadedProductsFromApi ? products : []"));
+});
+
+test('[FAVORITE-7-2] favorite cards use neutral description text without leaking sku fields', () => {
+  assert.equal(typeof accountStore.renderFavoriteProductItems, 'function');
+  const rendered = accountStore.renderFavoriteProductItems([{
+    id: 'product-8',
+    productId: 8,
+    name: '无介绍商品',
+    detail: '',
+    skuId: 88,
+    skuName: '黑色 / M',
+    color: '黑色',
+    size: 'M',
+  }], [], '暂无收藏夹');
+
+  assert.equal(rendered.items[0].detail, '暂无商品介绍');
+  assert.equal('skuId' in rendered.items[0], false);
+  assert.equal('skuName' in rendered.items[0], false);
+  assert.equal('color' in rendered.items[0], false);
+  assert.equal('size' in rendered.items[0], false);
+});
+
+test('[FAVORITE-7-3] favorite shelf has accessible details and removal without changing cart markup', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const favoriteRenderer = sliceBetween(mainJs, 'function renderFavoritesShelf(', 'function formatCartMoney(');
+  const cartRenderer = sliceBetween(mainJs, 'function renderCartShelf(', 'function renderCartSummary(');
+
+  assert.ok(favoriteRenderer.includes('data-favorite-details-product-id'));
+  assert.ok(favoriteRenderer.includes('data-favorite-remove-id'));
+  assert.ok(favoriteRenderer.includes('点击查看更多图片'));
+  assert.ok(favoriteRenderer.includes('aria-label="查看'));
+  assert.ok(favoriteRenderer.includes('商品已不可用'));
+  assert.ok(favoriteRenderer.includes('escapeHtml(item.detail)'));
+  assert.doesNotMatch(favoriteRenderer, /skuName|color|size/);
+  assert.doesNotMatch(favoriteRenderer, /更改图片/);
+  assert.doesNotMatch(cartRenderer, /data-favorite-details-product-id|移除收藏|favorite-card__detail/);
+  assert.match(styles, /\.favorite-card__description\s*\{[\s\S]*?-webkit-line-clamp:\s*3;/);
+});
+
+test('[FAVORITE-7-4] favorite image and details button open the shared read-only details mode', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const favoriteEvents = sliceBetween(mainJs, 'if (favoritesList) {', 'if (cartList) {');
+  const openModalBody = sliceBetween(mainJs, "async function openPurchaseModal(product, action = 'buy') {", 'function closePurchaseModal() {');
+
+  assert.ok(favoriteEvents.includes("openPurchaseModal(product, 'details')"));
+  assert.ok(favoriteEvents.includes('[data-favorite-details-product-id]'));
+  assert.ok(favoriteEvents.includes('productsById.get('));
+  assert.doesNotMatch(favoriteEvents, /products\[0\]/);
+  assert.ok(openModalBody.includes("actionConfig.key === 'details'"));
+  assert.ok(openModalBody.includes('!actionConfig.showSku'));
+  assert.doesNotMatch(
+    sliceBetween(openModalBody, "if (actionConfig.key === 'details' && !actionConfig.showSku) {", '} else {'),
+    /selectedSkuByProductId\.(?:set|delete)|resolveInitialSkuSelection/,
+  );
+});
+
+test('[FAVORITE-7-5] details mode is read-only and hides every purchase-only control', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const detailsConfig = sliceBetween(mainJs, 'details: {', '\n  },\n};');
+  const renderBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+  const openModalBody = sliceBetween(mainJs, "async function openPurchaseModal(product, action = 'buy') {", 'function closePurchaseModal() {');
+
+  assert.ok(html.includes('data-purchase-description'));
+  assert.ok(html.includes('data-purchase-status'));
+  assert.ok(html.includes('data-purchase-sku-summary'));
+  const skuSection = sliceBetween(html, 'data-purchase-sku-section', '</section>');
+  assert.ok(skuSection.includes('data-purchase-sku-options'));
+  assert.ok(skuSection.includes('data-purchase-payment-options'));
+  assert.ok(detailsConfig.includes("key: 'details'"));
+  assert.ok(detailsConfig.includes('showSku: false'));
+  assert.ok(detailsConfig.includes('showAddress: false'));
+  assert.ok(detailsConfig.includes('showQuantity: false'));
+  assert.ok(detailsConfig.includes('showPayment: false'));
+  assert.ok(detailsConfig.includes('showTotal: false'));
+  assert.ok(detailsConfig.includes('showSubmit: false'));
+  assert.ok(detailsConfig.includes('showDescription: true'));
+  assert.ok(renderBody.includes('purchaseSkuSection.hidden = !actionConfig.showSku;'));
+  assert.ok(renderBody.includes('purchaseDescriptionSection.hidden = !actionConfig.showDescription;'));
+  assert.ok(renderBody.includes('purchaseSubmit.hidden = !actionConfig.showSubmit;'));
+  assert.ok(renderBody.includes("product?.detail || '暂无商品介绍'"));
+  assert.ok(renderBody.includes('productState.label'));
+  assert.ok(renderBody.includes('product?.skuSummary'));
+  assert.doesNotMatch(openModalBody, /\/cart\/add|\/orders\/direct|\/orders\/pay/);
+  assert.match(openModalBody, /if \(actionConfig\.showAddress\)[\s\S]*?loadAddressesFromApi/);
+});
+
+test('[FAVORITE-7-6] modal layering and Escape preserve the open favorites sidebar', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const keydownBody = sliceBetween(mainJs, "window.addEventListener('keydown', (event) => {", "if ('scrollRestoration' in window.history)");
+
+  assert.match(styles, /\.sidebar\s*\{[\s\S]*?z-index:\s*45;/);
+  assert.match(styles, /\.purchase-modal\s*\{[\s\S]*?z-index:\s*52;/);
+  assert.match(styles, /\.image-lightbox\s*\{[\s\S]*?z-index:\s*90;/);
+  assert.ok(keydownBody.includes("purchaseModal?.classList.contains('is-open')"));
+  assert.match(keydownBody, /closePurchaseModal\(\);\s*return;/);
 });
 
 test('cart item totals and summary totals are calculated from quantity', () => {
@@ -2280,7 +2435,7 @@ test('[SKU-SYNC-6] storefront cache-busts the sku utility module after selection
   const html = readFileSync('index.html', 'utf8');
 
   assert.ok(mainJs.includes("from './sku-utils.js?v=20260715a'"));
-  assert.ok(html.includes('./src/main.js?v=20260715c'));
+  assert.ok(html.includes('./src/main.js?v=20260715d'));
 });
 
 test('[SKU-SYNC-7] cart modal hides payment controls without hiding sku controls', () => {

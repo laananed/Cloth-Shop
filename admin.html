@@ -67,6 +67,7 @@
           <button class="admin-nav__button is-active" type="button" data-admin-nav-target="orders" data-admin-nav-orders>订单查看</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="products" data-admin-nav-products>商品管理</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="categories" data-admin-nav-categories>分类管理</button>
+          <button class="admin-nav__button" type="button" data-admin-nav-target="tags" data-admin-nav-tags>标签管理</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="product-create" data-admin-nav-product-create>新增商品</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="stats" data-admin-nav-stats>销量统计</button>
         </aside>
@@ -170,6 +171,36 @@
             <div class="admin-category-list" data-admin-category-list></div>
           </section>
 
+          <section class="admin-panel" data-admin-panel="tags">
+            <div class="admin-panel__header">
+              <div>
+                <p class="admin-panel__eyebrow">标签管理</p>
+                <h2>商品标签与排序</h2>
+              </div>
+              <p class="admin-panel__note">标签可关联多个商品；仍有关联商品的标签不能删除。</p>
+            </div>
+
+            <form class="admin-category-form" data-admin-tag-form>
+              <label class="admin-field">
+                <span>标签名称</span>
+                <input type="text" maxlength="40" data-admin-tag-name placeholder="例如：夏季新品" />
+              </label>
+              <label class="admin-field">
+                <span>排序值</span>
+                <input type="number" min="0" max="9999" step="1" value="0" data-admin-tag-sort-order />
+              </label>
+              <button class="admin-submit" type="submit">新增标签</button>
+            </form>
+            <p class="admin-feedback" data-admin-tag-feedback aria-live="polite"></p>
+
+            <div class="admin-category-filter" data-admin-tag-filter aria-label="标签状态筛选">
+              <button class="is-active" type="button" data-admin-tag-filter-value="ALL" aria-pressed="true">全部</button>
+              <button type="button" data-admin-tag-filter-value="ACTIVE" aria-pressed="false">使用中</button>
+              <button type="button" data-admin-tag-filter-value="DELETED" aria-pressed="false">已删除</button>
+            </div>
+            <div class="admin-tag-list" data-admin-tag-list></div>
+          </section>
+
           <section class="admin-panel" data-admin-panel="product-create">
             <div class="admin-panel__header">
               <div>
@@ -226,10 +257,11 @@
                 <p class="admin-sku-matrix__empty">填写颜色和尺码后自动生成组合。</p>
               </div>
 
-              <label class="admin-field">
-                <span>标签</span>
-                <input type="text" name="badge" placeholder="新品 / 热卖 / 推荐" />
-              </label>
+              <fieldset class="admin-field admin-field--wide admin-product-tag-picker">
+                <legend>商品标签（最多 5 个）</legend>
+                <div class="admin-product-tag-options" data-admin-product-tag-options></div>
+                <small data-admin-product-tag-count>已选择 0 / 5</small>
+              </fieldset>
 
               <label class="admin-field">
                 <span>商品图片</span>

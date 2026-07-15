@@ -1,5 +1,7 @@
 ﻿import { getAdminMockOrdersSeed, getProducts } from './content.js?v=20260705a';
 
+import { getVisibleProductTags } from './tag-utils.js?v=20260715a';
+
 const PROFILE_KEY = 'blue-song-profile';
 const ORDERS_KEY = 'blue-song-orders';
 const FAVORITES_KEY = 'blue-song-favorites';
@@ -310,6 +312,21 @@ function createProductFavorite(product, fallback = null) {
     return null;
   }
 
+  const sourceTags = Array.isArray(product?.tags)
+    ? product.tags
+    : Array.isArray(fallback?.tags)
+      ? fallback.tags
+      : [];
+  const tags = sourceTags
+    .filter((tag) => String(tag?.name || '').trim())
+    .map((tag) => ({
+      tagId: Number.isInteger(Number(tag.tagId)) && Number(tag.tagId) > 0 ? Number(tag.tagId) : null,
+      name: String(tag.name).trim(),
+      sortOrder: Number(tag.sortOrder || 0),
+      key: String(tag.key || '').trim(),
+      isStatic: Boolean(tag.isStatic),
+    }));
+
   return {
     id,
     productId: product?.productId ?? fallback?.productId ?? id,
@@ -319,6 +336,7 @@ function createProductFavorite(product, fallback = null) {
     detail: String(product?.detail || fallback?.detail || '').trim(),
     price: Number(product?.price ?? fallback?.price ?? 0) || 0,
     badge: String(product?.badge || fallback?.badge || '').trim(),
+    ...(tags.length ? { tags: tags } : {}),
   };
 }
 
@@ -740,6 +758,7 @@ export function renderFavoriteProductItems(favorites, products, emptyState) {
       const currentProduct = findCurrentFavoriteProduct(favorite, currentProducts);
       const source = currentProduct || favorite || {};
       const detail = String(source.detail || '').trim() || '暂无商品介绍';
+      const tags = getVisibleProductTags(source.tags, 5).visible;
 
       return {
         id: String(favorite?.id || ''),
@@ -751,6 +770,7 @@ export function renderFavoriteProductItems(favorites, products, emptyState) {
         detail,
         price: Number(source.price || 0),
         badge: String(source.badge || '').trim(),
+        ...(tags.length ? { tags: tags } : {}),
         isAvailable: Boolean(currentProduct),
       };
     }),

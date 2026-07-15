@@ -3438,3 +3438,329 @@ test('[CATEGORY-13-12] category UI includes responsive editable list styling wit
   assert.equal(existsSync('sql语句/09_商品分类管理增量迁移.sql'), false);
 });
 
+test('[TAGS-14-1] tag helpers keep database identity stable and normalize counted API rows', async () => {
+  assert.equal(existsSync('src/tag-utils.js'), true, 'src/tag-utils.js should exist');
+  const {
+    ALL_TAG_KEY,
+    createApiTagKey,
+    normalizeApiTag,
+    normalizeApiTags,
+  } = await import('../src/tag-utils.js');
+
+  const beforeRename = normalizeApiTag({
+    tag_id: 7,
+    tag_name: ' 夏季新品 ',
+    sort_order: 10,
+    product_count: 3,
+    on_sale_product_count: 2,
+  });
+  const afterRename = normalizeApiTag({ tag_id: 7, tag_name: '清凉系列', sort_order: 10 });
+
+  assert.equal(ALL_TAG_KEY, 'all-tags');
+  assert.equal(createApiTagKey(7), 'tag:7');
+  assert.equal(beforeRename.key, afterRename.key);
+  assert.equal(beforeRename.name, '夏季新品');
+  assert.equal(beforeRename.productCount, 3);
+  assert.equal(beforeRename.onSaleProductCount, 2);
+  assert.deepEqual(
+    normalizeApiTags([
+      { tag_id: 3, tag_name: '外套', sort_order: 20 },
+      { tag_id: 2, tag_name: '半身裙', sort_order: 10 },
+      { tag_id: 1, tag_name: '连衣裙', sort_order: 10 },
+      { tag_id: 2, tag_name: '重复项', sort_order: 99 },
+    ]).map((item) => item.tagId),
+    [2, 1, 3],
+  );
+  assert.deepEqual(
+    normalizeApiTags([
+      { tag_id: 3, tag_name: '外套', sort_order: 20 },
+      { tag_id: 1, tag_name: '连衣裙', sort_order: 10 },
+      { tag_id: 2, tag_name: '半身裙', sort_order: 10 },
+    ], { preserveInputOrder: true }).map((item) => item.tagId),
+    [3, 1, 2],
+  );
+});
+
+test('[TAGS-14-2] product tag helpers deduplicate sort and preserve static badge fallbacks', async () => {
+  const {
+    createStaticProductTags,
+    createStaticTagKey,
+    getVisibleProductTags,
+    normalizeProductTags,
+  } = await import('../src/tag-utils.js');
+
+  const tags = normalizeProductTags([
+    { tag_id: 9, tag_name: '推荐', sort_order: 20 },
+    { tag_id: 8, tag_name: '新品', sort_order: 10 },
+    { tag_id: 9, tag_name: '重复推荐', sort_order: 0 },
+    { tag_id: 7, tag_name: '热卖', sort_order: 15 },
+    { tag_id: 6, tag_name: '夏季', sort_order: 30 },
+  ]);
+  const visible = getVisibleProductTags(tags, 3);
+  const staticTags = createStaticProductTags(' 主题限定 ');
+
+  assert.deepEqual(tags.map((tag) => tag.tagId), [8, 7, 9, 6]);
+  assert.equal(visible.visible.length, 3);
+  assert.equal(visible.overflowCount, 1);
+  assert.equal(staticTags[0].key, createStaticTagKey('主题限定'));
+  assert.equal(staticTags[0].name, '主题限定');
+  assert.deepEqual(createStaticProductTags('   '), []);
+});
+
+test('[TAGS-14-3] tag filtering composes with category and search without mutating products', async () => {
+  const {
+    ALL_TAG_KEY,
+    createApiTagKey,
+    filterProductsByTag,
+    resolveActiveTagKey,
+  } = await import('../src/tag-utils.js');
+  const products = [
+    { productId: 1, name: '海盐长裙', tags: [{ tagId: 7, name: '夏季新品' }] },
+    { productId: 2, name: '星夜风衣', tags: [{ tagId: 8, name: '通勤' }] },
+  ];
+  const snapshot = structuredClone(products);
+  const tags = [{ key: createApiTagKey(7) }, { key: createApiTagKey(8) }];
+
+  assert.deepEqual(filterProductsByTag(products, 'tag:7').map((item) => item.productId), [1]);
+  assert.deepEqual(filterProductsByTag(products, ALL_TAG_KEY).map((item) => item.productId), [1, 2]);
+  assert.equal(resolveActiveTagKey('tag:7', tags), 'tag:7');
+  assert.equal(resolveActiveTagKey('tag:99', tags), ALL_TAG_KEY);
+  assert.deepEqual(products, snapshot);
+});
+
+test('[TAGS-14-4] idempotent migration creates safe tag and product tag tables only', () => {
+  const migrationPath = 'sql语句/09_商品多标签增量迁移.sql';
+  assert.equal(existsSync(migrationPath), true, `${migrationPath} should exist`);
+  const migration = readFileSync(migrationPath, 'utf8');
+
+  assert.match(migration, /USE frieren_cloth_shop_db/i);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS tag\s*\(/i);
+  assert.match(migration, /name VARCHAR\(40\) NOT NULL/i);
+  assert.match(migration, /UNIQUE KEY uk_tag_name \(name\)/i);
+  assert.match(migration, /KEY idx_tag_deleted_sort \(is_deleted, sort_order, name\)/i);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS product_tag\s*\(/i);
+  assert.match(migration, /PRIMARY KEY \(product_id, tag_id\)/i);
+  assert.match(migration, /KEY idx_product_tag_tag_product \(tag_id, product_id\)/i);
+  assert.match(migration, /FOREIGN KEY \(product_id\) REFERENCES product\(id\)/i);
+  assert.match(migration, /FOREIGN KEY \(tag_id\) REFERENCES tag\(id\)/i);
+  assert.match(migration, /ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci/i);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|TRUNCATE|DELETE\s+FROM|INSERT\s+INTO\s+tag/i);
+});
+
+test('[TAGS-14-5] tag request models enforce names sort limits strict positive ids and five-tag maximum', () => {
+  const script = String.raw`
+import json
+from pydantic import ValidationError
+from app.main import TagCreateRequest, AdminProductTagsUpdateRequest
+
+result = {"trimmed": TagCreateRequest(name="  夏季新品  ", sort_order=10).name}
+for key, payload in {
+    "blank": {"name": "   ", "sort_order": 0},
+    "reserved_all_tags": {"name": "全部标签", "sort_order": 0},
+    "reserved_all": {"name": "全部", "sort_order": 0},
+    "too_long": {"name": "测" * 41, "sort_order": 0},
+    "negative_sort": {"name": "夏季", "sort_order": -1},
+    "large_sort": {"name": "夏季", "sort_order": 10000},
+}.items():
+    try:
+        TagCreateRequest(**payload)
+    except ValidationError:
+        result[key] = True
+    else:
+        result[key] = False
+
+for key, values in {
+    "missing_rejected": None,
+    "six_rejected": [1, 2, 3, 4, 5, 6],
+    "zero_rejected": [0],
+    "negative_rejected": [-1],
+    "string_rejected": ["1"],
+}.items():
+    try:
+        AdminProductTagsUpdateRequest() if values is None else AdminProductTagsUpdateRequest(tag_ids=values)
+    except ValidationError:
+        result[key] = True
+    else:
+        result[key] = False
+
+result["deduplicated"] = AdminProductTagsUpdateRequest(tag_ids=[3, 1, 3, 2]).tag_ids
+print(json.dumps(result, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    trimmed: '夏季新品',
+    blank: true,
+    reserved_all_tags: true,
+    reserved_all: true,
+    too_long: true,
+    negative_sort: true,
+    large_sort: true,
+    missing_rejected: true,
+    six_rejected: true,
+    zero_rejected: true,
+    negative_rejected: true,
+    string_rejected: true,
+    deduplicated: [3, 1, 2],
+  });
+});
+
+test('[TAGS-14-6] backend exposes shared counted tag queries and authenticated transactional routes', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const helpers = sliceBetween(backend, 'def query_tags(', '@app.get("/tags")');
+  const routes = sliceBetween(backend, '@app.get("/tags")', '@app.patch("/admin/products/{product_id}/category")');
+
+  assert.ok(helpers.includes('COUNT(DISTINCT CASE WHEN p.is_deleted = 0 THEN p.id END)'));
+  assert.ok(helpers.includes("p.status = 'ON_SALE'"));
+  assert.ok(helpers.includes('ORDER BY t.is_deleted ASC, t.sort_order ASC, t.name ASC, t.id ASC'));
+  assert.ok(backend.includes('def query_product_tags('));
+  assert.ok(backend.includes('def attach_product_tags('));
+  assert.ok(backend.includes('def validate_active_tag_ids('));
+  assert.ok(helpers.includes('tag_id=tag_id'));
+  for (const route of [
+    '@app.get("/tags")',
+    '@app.get("/admin/tags")',
+    '@app.post("/admin/tags")',
+    '@app.patch("/admin/tags/{tag_id}")',
+    '@app.delete("/admin/tags/{tag_id}")',
+    '@app.post("/admin/tags/{tag_id}/restore")',
+    '@app.patch("/admin/products/{product_id}/tags")',
+  ]) {
+    assert.ok(routes.includes(route), `${route} should exist`);
+  }
+  assert.ok(routes.includes('require_admin_user(authorization)'));
+  assert.ok(routes.includes('FOR UPDATE'));
+  assert.ok(routes.includes('conn.commit()'));
+  assert.ok(routes.includes('conn.rollback()'));
+  assert.ok(routes.includes('标签仍关联商品，请先解除关联'));
+  for (const [routeStart, routeEnd, responseQuery] of [
+    ['@app.post("/admin/tags")', '@app.patch("/admin/tags/{tag_id}")', 'query_tag_by_id(conn, tag_id)'],
+    ['@app.patch("/admin/tags/{tag_id}")', '@app.delete("/admin/tags/{tag_id}")', 'query_tag_by_id(conn, tag_id)'],
+    ['@app.post("/admin/tags/{tag_id}/restore")', '@app.patch("/admin/products/{product_id}/tags")', 'query_tag_by_id(conn, tag_id)'],
+    ['@app.patch("/admin/products/{product_id}/tags")', '@app.get("/categories")', 'query_product_tags(conn, [product_id])'],
+  ]) {
+    const routeBody = sliceBetween(backend, routeStart, routeEnd);
+    assert.ok(routeBody.indexOf(responseQuery) < routeBody.indexOf('conn.commit()'), `${routeStart} should build its response before commit`);
+  }
+});
+
+test('[TAGS-14-7] product list inventory and creation share tags with the product transaction', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const publicProducts = sliceBetween(backend, '@app.get("/products")', '@app.post("/admin/login")');
+  const createProduct = sliceBetween(backend, '@app.post("/products")', '@app.post("/admin/products/{product_id}/images")');
+  const inventory = sliceBetween(backend, '@app.get("/admin/inventory")', '@app.post("/admin/inventory/update-stock")');
+
+  assert.ok(publicProducts.includes('attach_product_tags(conn, rows)'));
+  assert.ok(inventory.includes('attach_product_tags(conn, rows)'));
+  assert.ok(createProduct.includes('tag_ids_json: str | None = Form(None)'));
+  assert.ok(createProduct.includes('parse_tag_ids_json(tag_ids_json)'));
+  assert.ok(createProduct.includes('validate_active_tag_ids(cursor, tag_ids)'));
+  assert.ok(createProduct.includes('INSERT INTO product_tag'));
+  assert.ok(createProduct.includes('attach_product_tags(conn, rows)'));
+  assert.ok(createProduct.indexOf('INSERT INTO product_tag') < createProduct.indexOf('conn.commit()'));
+});
+
+test('[TAGS-14-8] admin markup exposes tag management and replaces the legacy badge input', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const tagPanel = sliceBetween(html, 'data-admin-panel="tags"', 'data-admin-panel="product-create"');
+  const productCreate = sliceBetween(html, 'data-admin-panel="product-create"', 'data-admin-panel="stats"');
+
+  assert.ok(html.includes('data-admin-nav-target="tags"'));
+  assert.ok(tagPanel.includes('data-admin-tag-form'));
+  assert.ok(tagPanel.includes('data-admin-tag-filter'));
+  assert.ok(tagPanel.includes('data-admin-tag-list'));
+  assert.ok(productCreate.includes('data-admin-product-tag-options'));
+  assert.ok(productCreate.includes('data-admin-product-tag-count'));
+  assert.doesNotMatch(productCreate, /<input[^>]+name="badge"/);
+});
+
+test('[TAGS-14-9] admin frontend owns tag CRUD single-product assignment and product-create selection', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const adminRenderer = sliceBetween(mainJs, 'function renderProducts() {', 'async function updateAdminSkuStockToApi(');
+
+  for (const helper of [
+    'loadAdminTagsFromApi',
+    'refreshAdminTagsFromApi',
+    'createAdminTagToApi',
+    'updateAdminTagToApi',
+    'deleteAdminTagToApi',
+    'restoreAdminTagToApi',
+    'updateAdminProductTagsToApi',
+  ]) {
+    assert.ok(mainJs.includes(helper), `${helper} should exist`);
+  }
+  assert.ok(mainJs.includes('formData.append("tag_ids_json", JSON.stringify'));
+  assert.ok(adminRenderer.includes('data-admin-product-tag-option'));
+  assert.ok(adminRenderer.includes('data-admin-product-tags-save'));
+  assert.ok(adminRenderer.includes('data-admin-product-tags-feedback'));
+  assert.ok(mainJs.includes('已选择 ${selectedCount} / 5'));
+  assert.ok(mainJs.includes('暂无可用标签，可先在标签管理中创建'));
+  assert.ok(mainJs.includes('请先解除该标签的商品关联'));
+  assert.ok(mainJs.includes('function validateAdminTagValues('));
+  assert.ok(mainJs.includes("let adminTagCatalogState = 'idle'"));
+  assert.ok(mainJs.includes("adminTagCatalogState = 'error'"));
+  assert.ok(adminRenderer.includes('const canEditProductTags ='));
+  assert.ok(adminRenderer.includes("canEditProductTags ? '' : 'disabled'"));
+  assert.ok(mainJs.includes("if (adminTagCatalogState !== 'ready')"));
+  assert.ok(mainJs.includes("productTagsSaveButton.textContent = '保存标签'"));
+});
+
+test('[TAGS-14-10] storefront maps displays searches and filters real tags without database badge fiction', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const mapper = sliceBetween(mainJs, 'function convertApiProducts(', 'async function loadProductsFromApi()');
+  const searchAndFilter = sliceBetween(mainJs, 'function getProductSearchText(', 'function renderProducts()');
+  const productRenderer = sliceBetween(mainJs, 'function renderProducts()', 'function updateView()');
+
+  assert.ok(html.includes('data-product-tag-rail'));
+  assert.ok(html.includes('data-active-tag'));
+  assert.ok(html.includes('data-purchase-tags'));
+  assert.ok(mainJs.includes("from './tag-utils.js"));
+  assert.ok(mainJs.includes('loadTagsFromApi'));
+  assert.ok(mapper.includes('const productTags = normalizeProductTags(row.tags, { preserveInputOrder: true })'));
+  assert.ok(mapper.includes('tags: productTags'));
+  assert.equal((mapper.match(/normalizeProductTags\(row\.tags,/g) || []).length, 1);
+  assert.ok(mapper.includes("badge: productTags[0]?.name || ''"));
+  assert.doesNotMatch(mapper, /badge:\s*["']数据库商品["']/);
+  assert.ok(searchAndFilter.includes('product.tags'));
+  assert.ok(searchAndFilter.includes('filterProductsByTag'));
+  assert.ok(productRenderer.includes('data-product-tag-id'));
+  assert.ok(mainJs.includes('tag.tagId ?? tag.key'));
+  assert.ok(mainJs.includes('aria-label="商品标签：'));
+  assert.ok(productRenderer.includes('const tagMarkup = renderProductTags'));
+  assert.ok(productRenderer.includes('tagMarkup ?'));
+  assert.ok(productRenderer.includes('overflowCount'));
+});
+
+test('[TAGS-14-11] favorite snapshots persist tags and live products remain authoritative', () => {
+  const accountStore = readFileSync('src/account-store.js', 'utf8');
+  const favoriteFactory = sliceBetween(accountStore, 'function createProductFavorite(', 'export function normalizeProductFavorites');
+  const favoriteRenderer = sliceBetween(accountStore, 'export function renderFavoriteProductItems(', 'export function renderOrderItems');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const shelfRenderer = sliceBetween(mainJs, 'function renderFavoritesShelf(', 'function formatCartMoney(');
+
+  assert.ok(accountStore.includes("from './tag-utils.js"));
+  assert.ok(favoriteFactory.includes('tags:'));
+  assert.ok(favoriteFactory.includes('product?.tags'));
+  assert.ok(favoriteFactory.includes('fallback?.tags'));
+  assert.ok(favoriteRenderer.includes('tags:'));
+  assert.ok(shelfRenderer.includes('renderProductTags'));
+  assert.ok(shelfRenderer.includes('overflowCount'));
+});
+
+test('[TAGS-14-12] tag UI uses compact responsive controls without changing default ports', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+
+  assert.match(styles, /\.product-tag-rail\s*\{/);
+  assert.match(styles, /\.product-tags\s*\{/);
+  assert.match(styles, /\.admin-tag-row\s*\{/);
+  assert.match(styles, /\.admin-product-tags\s*\{/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.admin-tag-row/);
+  assert.ok(mainJs.includes('const API_BASE_URL = "http://127.0.0.1:8050"'));
+  assert.doesNotMatch(mainJs, /127\.0\.0\.1:8051/);
+});
+

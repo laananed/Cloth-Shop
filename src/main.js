@@ -122,6 +122,9 @@ const purchaseAddressSection = purchaseAddressList?.closest('.purchase-modal__se
 const purchaseQuantitySection = purchaseQuantityValue?.closest('.purchase-modal__section') || null;
 const purchaseSkuSection = document.querySelector('[data-purchase-sku-section]');
 const purchaseTotalSection = purchaseTotal?.closest('.purchase-modal__total') || null;
+const purchaseRemarkSection = document.querySelector('[data-purchase-remark-section]');
+const purchaseBuyerRemark = document.querySelector('[data-purchase-buyer-remark]');
+const purchaseBuyerRemarkCount = document.querySelector('[data-purchase-buyer-remark-count]');
 
 const sidebar = document.querySelector('[data-sidebar]');
 const menuOpenButton = document.querySelector('[data-menu-open]');
@@ -169,6 +172,8 @@ let activePurchaseQuantity = 1;
 let activePurchasePaymentMethod = 'alipay';
 let activePurchaseAddressId = CURRENT_ADDRESS_ID;
 let activePurchaseAction = 'buy';
+let activePurchaseBuyerRemark = '';
+let isPurchaseSubmitting = false;
 let activeCartAddressId = CURRENT_ADDRESS_ID;
 let activeCartPaymentMethod = 'alipay';
 let dbAddressList = [];
@@ -1365,7 +1370,7 @@ function promptPaymentMethod(defaultMethod = "alipay") {
   return defaultMethod || "alipay";
 }
 
-async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {
+async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null, buyerRemark = null) {
   const skuList = getProductSkuList(product);
   const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;
 
@@ -1374,6 +1379,8 @@ async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = 
   if (!skuId) {
     throw new Error("请先选择商品规格。");
   }
+
+  const normalizedBuyerRemark = String(buyerRemark || '').trim();
 
   const response = await fetch(`${API_BASE_URL}/orders/direct`, {
     method: "POST",
@@ -1385,6 +1392,7 @@ async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = 
       address_id: getActivePurchaseAddressId(),
       sku_id: skuId,
       quantity: Math.max(1, Number(quantity) || 1),
+      buyer_remark: normalizedBuyerRemark || null,
     }),
   });
 
@@ -1762,6 +1770,7 @@ function renderApiOrderDetail(detail) {
         <p>订单金额：${formatPrice(summary.total_amount)}</p>
         <p>商品种类：${renderOrderDetailValue(summary.item_kind_count)} 类</p>
         <p>商品数量：${renderOrderDetailValue(summary.total_quantity)} 件</p>
+        <p class="order-detail__buyer-remark">买家备注：${escapeHtml(summary.buyer_remark || "无")}</p>
         <p>创建时间：${renderOrderDetailValue(summary.created_at)}</p>
       </section>
 
@@ -2804,6 +2813,21 @@ function renderPurchaseModal() {
     purchaseTotalSection.hidden = !actionConfig.showTotal;
   }
 
+  if (purchaseRemarkSection) {
+    purchaseRemarkSection.hidden = actionConfig.key !== 'buy';
+  }
+
+  if (purchaseBuyerRemark) {
+    if (purchaseBuyerRemark.value !== activePurchaseBuyerRemark) {
+      purchaseBuyerRemark.value = activePurchaseBuyerRemark;
+    }
+    purchaseBuyerRemark.disabled = isPurchaseSubmitting;
+  }
+
+  if (purchaseBuyerRemarkCount) {
+    purchaseBuyerRemarkCount.textContent = `${activePurchaseBuyerRemark.length} / 500`;
+  }
+
   if (purchaseAddressList && actionConfig.showAddress) {
     purchaseAddressList.innerHTML = dbAddressList.length
       ? renderDbAddressButtons(
@@ -2831,7 +2855,7 @@ function renderPurchaseModal() {
 
   if (purchaseSubmit) {
     purchaseSubmit.hidden = !actionConfig.showSubmit;
-    purchaseSubmit.disabled = !canSubmitPurchase;
+    purchaseSubmit.disabled = isPurchaseSubmitting || !canSubmitPurchase;
     purchaseSubmit.textContent = product
       ? canSubmitPurchase
         ? actionConfig.submitLabel(formatPrice(total))
@@ -2856,6 +2880,8 @@ async function openPurchaseModal(product, action = 'buy') {
   activePurchaseProduct = product;
   activePurchaseImageUrl = getProductMainImage(product);
   activePurchaseAction = getPurchaseActionConfig(action).key;
+  activePurchaseBuyerRemark = '';
+  isPurchaseSubmitting = false;
   const actionConfig = getPurchaseActionConfig(activePurchaseAction);
 
   if (actionConfig.key === 'details' && !actionConfig.showSku) {
@@ -2913,6 +2939,8 @@ function closePurchaseModal() {
   purchaseModal.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('has-modal');
   activePurchaseAction = 'buy';
+  activePurchaseBuyerRemark = '';
+  isPurchaseSubmitting = false;
 }
 
 function renderImageLightbox() {
@@ -3063,7 +3091,7 @@ function setPurchaseAddress(addressId) {
 }
 
 async function submitPurchaseOrder() {
-  if (!activePurchaseProduct) {
+  if (!activePurchaseProduct || isPurchaseSubmitting) {
     return;
   }
 
@@ -3076,6 +3104,7 @@ async function submitPurchaseOrder() {
   const total = Number(selectedSku?.price ?? activePurchaseProduct.price ?? 0) * quantity;
   const availableStock = getSkuAvailableStock(selectedSku);
   const productState = getProductDisplayState(activePurchaseProduct);
+  const buyerRemark = activePurchaseBuyerRemark.trim();
 
   if (productState.key !== "AVAILABLE") {
     setFeedback(purchaseFeedback, `${actionConfig.label}失败：${productState.message}`, true);
@@ -3103,9 +3132,13 @@ async function submitPurchaseOrder() {
   }
 
   try {
+    isPurchaseSubmitting = true;
     if (purchaseSubmit) {
       purchaseSubmit.disabled = true;
       purchaseSubmit.textContent = actionConfig.pendingLabel;
+    }
+    if (purchaseBuyerRemark) {
+      purchaseBuyerRemark.disabled = true;
     }
 
     if (actionConfig.key === 'buy') {
@@ -3114,8 +3147,17 @@ async function submitPurchaseOrder() {
       const orderResult = await createDirectOrderFromApi(
         activePurchaseProduct,
         quantity,
-        selectedSku?.skuId
+        selectedSku?.skuId,
+        buyerRemark,
       );
+
+      activePurchaseBuyerRemark = '';
+      if (purchaseBuyerRemark) {
+        purchaseBuyerRemark.value = '';
+      }
+      if (purchaseBuyerRemarkCount) {
+        purchaseBuyerRemarkCount.textContent = '0 / 500';
+      }
 
       const orderNo = orderResult.order_no || "未知订单号";
 
@@ -3159,6 +3201,10 @@ async function submitPurchaseOrder() {
     console.error("提交订单或支付失败：", error);
     setFeedback(purchaseFeedback, `${actionConfig.label}失败：${error.message}`, true);
   } finally {
+    isPurchaseSubmitting = false;
+    if (purchaseBuyerRemark) {
+      purchaseBuyerRemark.disabled = false;
+    }
     if (purchaseSubmit) {
       purchaseSubmit.disabled = false;
       purchaseSubmit.textContent = selectedSku
@@ -6735,6 +6781,15 @@ if (purchaseModal) {
 
     if (submitButton) {
       submitPurchaseOrder();
+    }
+  });
+}
+
+if (purchaseBuyerRemark) {
+  purchaseBuyerRemark.addEventListener('input', (event) => {
+    activePurchaseBuyerRemark = String(event.target.value || '').slice(0, 500);
+    if (purchaseBuyerRemarkCount) {
+      purchaseBuyerRemarkCount.textContent = `${activePurchaseBuyerRemark.length} / 500`;
     }
   });
 }

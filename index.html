@@ -137,6 +137,21 @@
           <div class="purchase-payment-options" data-purchase-payment-options></div>
         </section>
 
+        <section class="purchase-modal__section purchase-remark" data-purchase-remark-section hidden>
+          <div class="purchase-remark__header">
+            <label for="purchase-buyer-remark">买家备注（选填）</label>
+            <span data-purchase-buyer-remark-count>0 / 500</span>
+          </div>
+          <textarea
+            id="purchase-buyer-remark"
+            class="purchase-buyer-remark"
+            data-purchase-buyer-remark
+            maxlength="500"
+            rows="4"
+            placeholder="可填写尺码偏好、配送说明等，最多 500 字"
+          ></textarea>
+        </section>
+
         <div class="purchase-modal__total">
           <span>合计</span>
           <strong data-purchase-total>￥0</strong>

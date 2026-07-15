@@ -1,6 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 test('one-click launcher prefers the cloned backend virtual environment', () => {
   const launcher = readFileSync('start_dev.ps1', 'utf8');
@@ -331,7 +332,7 @@ test('cart and buy route through the shared sku flow while favorites toggle dire
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
   const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1) {', 'function normalizePayMethod(method) {');
   const favoriteBody = sliceBetween(mainJs, 'function toggleFavorite(product) {', 'function upsertCartItem(product) {');
-  const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {', 'function openSidebar(section = \'account\') {');
+  const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null, buyerRemark = null) {', 'function openSidebar(section = \'account\') {');
   const buyBranchStart = mainJs.indexOf("if (actionButton.dataset.purchaseLaunch === 'buy') {");
   const buyBranchEnd = mainJs.indexOf('if (actionButton.dataset.favoriteToggle !== undefined) {', buyBranchStart);
   const buyBranchBody = mainJs.slice(buyBranchStart, buyBranchEnd);
@@ -355,7 +356,7 @@ test('cart and buy route through the shared sku flow while favorites toggle dire
   assert.ok(mainJs.includes('toggleProductFavorite(favorites, product)'));
   assert.match(
     mainJs,
-    /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId)\s*\)/,
+    /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId),\s*buyerRemark,\s*\)/,
   );
   assert.ok(mainJs.includes('请先选择商品规格。'));
 
@@ -2740,4 +2741,159 @@ function createMemoryStorage() {
     },
   };
 }
+
+test('[BUYER-REMARK-1] migration adds the nullable order remark through an idempotent compatible procedure', () => {
+  assert.ok(existsSync('sql语句/07_订单买家备注增量迁移.sql'));
+  const migration = readFileSync('sql语句/07_订单买家备注增量迁移.sql', 'utf8');
+
+  assert.match(migration, /information_schema\.columns/i);
+  assert.match(migration, /ALTER TABLE order_main ADD COLUMN buyer_remark VARCHAR\(500\) NULL/i);
+  assert.match(migration, /DROP PROCEDURE IF EXISTS sp_create_direct_order_with_remark/i);
+  assert.match(migration, /CREATE PROCEDURE sp_create_direct_order_with_remark/i);
+  assert.match(migration, /INSERT INTO order_main\([\s\S]*buyer_remark[\s\S]*VALUES\([\s\S]*v_buyer_remark/i);
+  assert.match(migration, /DECLARE EXIT HANDLER FOR SQLEXCEPTION[\s\S]*ROLLBACK[\s\S]*RESIGNAL/i);
+  assert.match(migration, /CREATE OR REPLACE VIEW v_order_summary[\s\S]*o\.buyer_remark AS buyer_remark/i);
+  assert.match(migration, /CREATE OR REPLACE VIEW v_user_order_detail[\s\S]*o\.buyer_remark AS buyer_remark/i);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|TRUNCATE|DROP\s+DATABASE/i);
+  assert.doesNotMatch(migration, /DROP PROCEDURE IF EXISTS sp_create_direct_order\s*(?:;|\$\$)/i);
+});
+
+test('[BUYER-REMARK-2] direct order model normalizes whitespace and enforces the 500 character boundary', () => {
+  const script = String.raw`
+import json
+from pydantic import ValidationError
+from app.main import DirectOrderRequest
+
+base = {"user_id": 2, "address_id": 3, "sku_id": 1, "quantity": 1}
+values = {}
+for name, value in {
+    "missing": ...,
+    "null": None,
+    "empty": "",
+    "blank": "  \n ",
+    "trimmed": "  \u8bf7\u653e\u95e8\u53e3\n\u7b2c\u4e8c\u884c  ",
+    "five_hundred": "\u6d4b" * 500,
+}.items():
+    payload = dict(base)
+    if value is not ...:
+        payload["buyer_remark"] = value
+    values[name] = DirectOrderRequest(**payload).buyer_remark
+
+try:
+    DirectOrderRequest(**base, buyer_remark="\u6d4b" * 501)
+except ValidationError:
+    values["five_hundred_one_rejected"] = True
+else:
+    values["five_hundred_one_rejected"] = False
+
+try:
+    DirectOrderRequest(**base, buyer_remark=123)
+except ValidationError:
+    values["non_string_rejected"] = True
+else:
+    values["non_string_rejected"] = False
+
+print(json.dumps(values, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    missing: null,
+    null: null,
+    empty: null,
+    blank: null,
+    trimmed: '请放门口\n第二行',
+    five_hundred: '测'.repeat(500),
+    five_hundred_one_rejected: true,
+    non_string_rejected: true,
+  });
+});
+
+test('[BUYER-REMARK-3] direct order route uses the new parameterized procedure and returns the remark', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const route = sliceBetween(backend, '@app.post("/orders/direct")', '@app.post("/orders/cancel")');
+
+  assert.ok(backend.includes('buyer_remark: str | None'));
+  assert.ok(route.includes('validate_sku_for_purchase(conn, req.sku_id, req.quantity)'));
+  assert.match(route, /CALL sp_create_direct_order_with_remark\([\s\S]*%s,[\s\S]*%s,[\s\S]*%s,[\s\S]*%s,[\s\S]*%s,/);
+  assert.ok(route.includes('req.buyer_remark'));
+  assert.match(route, /SELECT[\s\S]*buyer_remark,[\s\S]*FROM v_order_summary/);
+});
+
+test('[BUYER-REMARK-4] every explicit order summary and detail query exposes the remark', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const queryHeads = (viewName) => backend
+    .split(`FROM ${viewName}`)
+    .slice(0, -1)
+    .map((chunk) => chunk.slice(chunk.lastIndexOf('SELECT')));
+  const summaryQueries = queryHeads('v_order_summary')
+    .filter((query) => /\border_id\s*,/.test(query));
+  const detailQueries = queryHeads('v_user_order_detail');
+
+  assert.ok(summaryQueries.length >= 8);
+  assert.ok(detailQueries.length >= 4);
+  assert.ok(summaryQueries.every((query) => /\bbuyer_remark\b/.test(query)));
+  assert.ok(detailQueries.every((query) => /\bbuyer_remark\b/.test(query)));
+});
+
+test('[BUYER-REMARK-5] buy modal owns a counted textarea while cart and details keep it hidden', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const renderBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+
+  assert.match(html, /data-purchase-remark-section/);
+  assert.match(html, /data-purchase-buyer-remark[^>]*maxlength="500"/);
+  assert.ok(html.includes('买家备注（选填）'));
+  assert.ok(html.includes('可填写尺码偏好、配送说明等，最多 500 字'));
+  assert.match(html, /data-purchase-buyer-remark-count>0 \/ 500</);
+  assert.ok(mainJs.includes('activePurchaseBuyerRemark'));
+  assert.ok(renderBody.includes("purchaseRemarkSection.hidden = actionConfig.key !== 'buy';"));
+  assert.ok(renderBody.includes('purchaseBuyerRemarkCount.textContent = `${activePurchaseBuyerRemark.length} / 500`;'));
+  assert.match(styles, /\.purchase-buyer-remark\s*\{[\s\S]*?max-width:\s*100%;/);
+  assert.match(styles, /\.purchase-buyer-remark\s*\{[\s\S]*?resize:\s*vertical;/);
+});
+
+test('[BUYER-REMARK-6] remark state survives redraws, clears at session boundaries, and is locked during submit', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const openBody = sliceBetween(mainJs, "async function openPurchaseModal(product, action = 'buy') {", 'function closePurchaseModal() {');
+  const closeBody = sliceBetween(mainJs, 'function closePurchaseModal() {', 'function renderImageLightbox() {');
+  const submitBody = sliceBetween(mainJs, 'async function submitPurchaseOrder() {', "function openSidebar(section = 'account') {");
+
+  assert.ok(mainJs.includes("purchaseBuyerRemark.addEventListener('input'"));
+  assert.ok(openBody.includes("activePurchaseBuyerRemark = '';"));
+  assert.ok(closeBody.includes("activePurchaseBuyerRemark = '';"));
+  assert.ok(submitBody.includes('isPurchaseSubmitting'));
+  assert.ok(submitBody.includes('purchaseBuyerRemark.disabled = true'));
+  assert.ok(submitBody.includes('purchaseBuyerRemark.disabled = false'));
+  assert.ok(submitBody.includes("activePurchaseBuyerRemark = '';"));
+});
+
+test('[BUYER-REMARK-7] only the direct-order request sends normalized buyer_remark', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const directBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(', 'async function createOrderFromCartFromApi()');
+  const cartBody = sliceBetween(mainJs, 'async function createOrderFromCartFromApi()', 'async function createOrderFromSelectedCartFromApi(');
+  const payBody = sliceBetween(mainJs, 'async function payOrderFromApi(', 'async function payOrderWithPasswordPrompt(');
+
+  assert.ok(directBody.includes('buyer_remark: normalizedBuyerRemark || null'));
+  assert.ok(directBody.includes('.trim()'));
+  assert.doesNotMatch(cartBody, /buyer_remark/);
+  assert.doesNotMatch(payBody, /buyer_remark/);
+});
+
+test('[BUYER-REMARK-8] shared user and admin order details safely render multiline remarks with an empty fallback', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const detailBody = sliceBetween(mainJs, 'function renderApiOrderDetail(detail) {', 'async function showOrderDetail(orderId) {');
+
+  assert.ok(detailBody.includes('买家备注：'));
+  assert.ok(detailBody.includes('escapeHtml(summary.buyer_remark || "无")'));
+  assert.match(detailBody, /order-detail__buyer-remark/);
+  assert.match(styles, /\.order-detail__buyer-remark\s*\{[\s\S]*white-space:\s*pre-wrap;/);
+});
 

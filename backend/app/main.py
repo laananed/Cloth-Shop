@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import time
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pymysql.err import MySQLError
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import test_connection, get_db
@@ -43,6 +43,7 @@ ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ADMIN_TOKEN_SECRET = b"frieren-cloth-shop-admin-token-v1"
 ADMIN_TOKEN_TTL_SECONDS = 8 * 60 * 60
 PRODUCT_DESCRIPTION_MAX_LENGTH = 1000
+BUYER_REMARK_MAX_LENGTH = 500
 
 
 def build_product_image_filename(original_filename: str) -> str:
@@ -295,6 +296,20 @@ class DirectOrderRequest(BaseModel):
     address_id: int = Field(..., gt=0, description="收货地址ID")
     sku_id: int = Field(..., gt=0, description="SKU ID")
     quantity: int = Field(..., gt=0, description="购买数量")
+    buyer_remark: str | None = Field(
+        None,
+        max_length=BUYER_REMARK_MAX_LENGTH,
+        description="订单级买家备注（选填，最多500个字符）",
+    )
+
+    @field_validator("buyer_remark", mode="before")
+    @classmethod
+    def normalize_buyer_remark(cls, value):
+        if value is None or not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        return normalized or None
 
 class CancelOrderRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
@@ -404,6 +419,7 @@ def query_order_detail(conn, order_id: int):
                 item_kind_count,
                 total_quantity,
                 item_total_amount,
+                buyer_remark,
                 created_at,
                 updated_at
             FROM v_order_summary
@@ -431,6 +447,7 @@ def query_order_detail(conn, order_id: int):
                 order_no,
                 order_status,
                 total_amount,
+                buyer_remark,
                 order_created_at,
                 order_updated_at,
                 recipient_name,
@@ -1915,6 +1932,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
                             item_kind_count,
                             total_quantity,
                             item_total_amount,
+                            buyer_remark,
                             created_at,
                             updated_at
                         FROM v_order_summary
@@ -1935,6 +1953,7 @@ def create_order_from_cart(req: OrderFromCartRequest):
                             order_no,
                             order_status,
                             total_amount,
+                            buyer_remark,
                             order_created_at,
                             recipient_name,
                             phone,
@@ -2042,6 +2061,7 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
                             item_kind_count,
                             total_quantity,
                             item_total_amount,
+                            buyer_remark,
                             created_at,
                             updated_at
                         FROM v_order_summary
@@ -2061,6 +2081,7 @@ def create_order_from_selected_cart(req: OrderFromSelectedCartRequest):
                             order_no,
                             order_status,
                             total_amount,
+                            buyer_remark,
                             order_created_at,
                             recipient_name,
                             phone,
@@ -2203,6 +2224,7 @@ def pay_order(req: PayOrderRequest):
                             item_kind_count,
                             total_quantity,
                             item_total_amount,
+                            buyer_remark,
                             created_at,
                             updated_at
                         FROM v_order_summary
@@ -2266,7 +2288,7 @@ def pay_order(req: PayOrderRequest):
 def create_direct_order(req: DirectOrderRequest):
     """
     鐩存帴涓嬪崟 / 绔嬪嵆璐拱銆?
-    璋冪敤宸叉湁瀛樺偍杩囩▼ sp_create_direct_order銆?
+    调用兼容存储过程 sp_create_direct_order_with_remark。
     """
     try:
         with get_db() as conn:
@@ -2276,7 +2298,8 @@ def create_direct_order(req: DirectOrderRequest):
                     # 1. 璋冪敤鐩存帴涓嬪崟瀛樺偍杩囩▼锛岀敤 MySQL 鐢ㄦ埛鍙橀噺鎺ユ敹 OUT 鍙傛暟
                     cursor.execute(
                         """
-                        CALL sp_create_direct_order(
+                        CALL sp_create_direct_order_with_remark(
+                            %s,
                             %s,
                             %s,
                             %s,
@@ -2289,7 +2312,8 @@ def create_direct_order(req: DirectOrderRequest):
                             req.user_id,
                             req.address_id,
                             req.sku_id,
-                            req.quantity
+                            req.quantity,
+                            req.buyer_remark,
                         )
                     )
 
@@ -2326,6 +2350,7 @@ def create_direct_order(req: DirectOrderRequest):
                             item_kind_count,
                             total_quantity,
                             item_total_amount,
+                            buyer_remark,
                             created_at,
                             updated_at
                         FROM v_order_summary
@@ -2346,6 +2371,7 @@ def create_direct_order(req: DirectOrderRequest):
                             order_no,
                             order_status,
                             total_amount,
+                            buyer_remark,
                             order_created_at,
                             recipient_name,
                             phone,
@@ -2455,6 +2481,7 @@ def cancel_order(req: CancelOrderRequest):
                             item_kind_count,
                             total_quantity,
                             item_total_amount,
+                            buyer_remark,
                             created_at,
                             updated_at
                         FROM v_order_summary
@@ -2881,6 +2908,7 @@ def get_user_orders(user_id: int):
                         item_kind_count,
                         total_quantity,
                         item_total_amount,
+                        buyer_remark,
                         created_at,
                         updated_at
                     FROM v_order_summary
@@ -2925,6 +2953,7 @@ def get_admin_orders(authorization: str | None = Header(None)):
                         item_kind_count,
                         total_quantity,
                         item_total_amount,
+                        buyer_remark,
                         created_at,
                         updated_at
                     FROM v_order_summary
@@ -3969,6 +3998,7 @@ def get_order_detail(order_id: int):
                         item_kind_count,
                         total_quantity,
                         item_total_amount,
+                        buyer_remark,
                         created_at,
                         updated_at
                     FROM v_order_summary
@@ -3997,6 +4027,7 @@ def get_order_detail(order_id: int):
                         order_no,
                         order_status,
                         total_amount,
+                        buyer_remark,
                         order_created_at,
                         order_updated_at,
                         recipient_name,

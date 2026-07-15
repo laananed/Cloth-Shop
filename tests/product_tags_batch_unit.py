@@ -20,16 +20,18 @@ class FakeCursor:
 
     def execute(self, sql, params=()):
         statement = " ".join(sql.split())
-        values = [int(value) for value in params]
         if statement.startswith("SELECT id FROM product"):
+            values = [int(value) for value in params]
             self.rows = [{"id": product_id} for product_id in sorted(values) if product_id in self.conn.products]
         elif statement.startswith("SELECT id, is_deleted FROM tag"):
+            values = [int(value) for value in params]
             self.rows = [
                 {"id": tag_id, "is_deleted": self.conn.tags[tag_id]["is_deleted"]}
                 for tag_id in sorted(values)
                 if tag_id in self.conn.tags
             ]
         elif statement.startswith("SELECT product_id, tag_id FROM product_tag"):
+            values = [int(value) for value in params]
             requested = set(values)
             self.rows = [
                 {"product_id": product_id, "tag_id": tag_id}
@@ -37,6 +39,7 @@ class FakeCursor:
                 if product_id in requested
             ]
         elif statement.startswith("SELECT pt.product_id, t.id AS tag_id"):
+            values = [int(value) for value in params]
             requested = set(values)
             self.rows = [
                 {
@@ -49,10 +52,13 @@ class FakeCursor:
                 if product_id in requested and tag_id in self.conn.tags and not self.conn.tags[tag_id]["is_deleted"]
             ]
         elif statement.startswith("DELETE FROM product_tag WHERE product_id IN"):
+            values = [int(value) for value in params]
             requested = set(values)
             self.conn.relations = {
                 relation for relation in self.conn.relations if relation[0] not in requested
             }
+        elif statement.startswith("INSERT INTO operation_log"):
+            self.conn.operation_logs.append(tuple(params))
         else:
             raise AssertionError(f"未处理的 SQL：{statement}")
 
@@ -77,6 +83,8 @@ class FakeConnection:
         self.relations = set(relations)
         self._initial_relations = set(relations)
         self.fail_on_insert = fail_on_insert
+        self.operation_logs = []
+        self._initial_operation_logs = []
         self.commit_count = 0
         self.rollback_count = 0
 
@@ -86,29 +94,38 @@ class FakeConnection:
     def commit(self):
         self.commit_count += 1
         self._initial_relations = set(self.relations)
+        self._initial_operation_logs = list(self.operation_logs)
 
     def rollback(self):
         self.rollback_count += 1
         self.relations = set(self._initial_relations)
+        self.operation_logs = list(self._initial_operation_logs)
 
 
 class ProductTagsBatchRouteTests(unittest.TestCase):
     def setUp(self):
         self.original_get_db = main.get_db
         self.original_require_admin_user = main.require_admin_user
+        self.original_write_admin_operation_failure = main.write_admin_operation_failure
+        self.failure_logs = []
 
         def require_admin(authorization):
             if authorization is None:
                 raise HTTPException(status_code=401, detail="请先登录管理员账号")
             if authorization == "Bearer user":
                 raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
-            return {"user_id": 7}
+            return {"id": 7, "email": "admin@example.test", "is_admin": 1, "is_deleted": 0}
+
+        def write_failure(*args, **kwargs):
+            self.failure_logs.append((args, kwargs))
 
         main.require_admin_user = require_admin
+        main.write_admin_operation_failure = write_failure
 
     def tearDown(self):
         main.get_db = self.original_get_db
         main.require_admin_user = self.original_require_admin_user
+        main.write_admin_operation_failure = self.original_write_admin_operation_failure
 
     def use_connection(self, conn):
         @contextmanager
@@ -138,6 +155,10 @@ class ProductTagsBatchRouteTests(unittest.TestCase):
         self.assertEqual([tag["tag_id"] for tag in response["data"][0]["after_tags"]], [1, 2])
         self.assertEqual(conn.relations, {(1, 1), (1, 2), (2, 2)})
         self.assertEqual((conn.commit_count, conn.rollback_count), (1, 0))
+        self.assertEqual(len(conn.operation_logs), 1)
+        self.assertEqual(conn.operation_logs[0][1:5], ("PRODUCT_TAGS_BATCH_UPDATE", "PRODUCT", None, "SUCCESS"))
+        self.assertEqual(json.loads(conn.operation_logs[0][6])["changed_product_ids"], [1, 2])
+        self.assertEqual(self.failure_logs, [])
 
     def test_invalid_product_and_tag_return_404_and_rollback_everything(self):
         for request, invalid_field in [
@@ -163,6 +184,8 @@ class ProductTagsBatchRouteTests(unittest.TestCase):
                 self.assertIn(invalid_field, body)
                 self.assertEqual(conn.relations, {(1, 1)})
                 self.assertEqual((conn.commit_count, conn.rollback_count), (0, 1))
+                self.assertEqual(conn.operation_logs, [])
+                self.assertEqual(self.failure_logs[-1][0][1:4], ("PRODUCT_TAGS_BATCH_UPDATE", "PRODUCT", None))
 
     def test_sixth_tag_returns_409_without_partial_write(self):
         conn = FakeConnection({1, 2}, set(range(1, 7)), {(1, tag_id) for tag_id in range(1, 6)})
@@ -178,6 +201,8 @@ class ProductTagsBatchRouteTests(unittest.TestCase):
         self.assertEqual(body["conflict_product_ids"], [1])
         self.assertEqual(conn.relations, {(1, tag_id) for tag_id in range(1, 6)})
         self.assertEqual((conn.commit_count, conn.rollback_count), (0, 1))
+        self.assertEqual(conn.operation_logs, [])
+        self.assertEqual(self.failure_logs[-1][0][1:4], ("PRODUCT_TAGS_BATCH_UPDATE", "PRODUCT", None))
 
     def test_write_exception_rolls_back_and_permissions_short_circuit(self):
         conn = FakeConnection({1}, {1}, fail_on_insert=True)
@@ -190,6 +215,8 @@ class ProductTagsBatchRouteTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 500)
         self.assertEqual(conn.relations, set())
         self.assertEqual((conn.commit_count, conn.rollback_count), (0, 1))
+        self.assertEqual(conn.operation_logs, [])
+        self.assertEqual(self.failure_logs[-1][0][1:4], ("PRODUCT_TAGS_BATCH_UPDATE", "PRODUCT", None))
 
         for authorization, status_code in [(None, 401), ("Bearer user", 403)]:
             with self.subTest(status_code=status_code):

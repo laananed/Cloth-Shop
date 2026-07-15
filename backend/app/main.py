@@ -1033,22 +1033,28 @@ def get_admin_tags(authorization: str | None = Header(None)):
 
 @app.post("/admin/tags")
 def create_admin_tag(req: TagCreateRequest, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    failure_action_type = "TAG_CREATE"
+    failure_target_id = None
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT id, is_deleted FROM tag WHERE name = %s FOR UPDATE",
+                        "SELECT id, name, sort_order, is_deleted FROM tag WHERE name = %s FOR UPDATE",
                         (req.name,)
                     )
                     existing = cursor.fetchone()
                     restored = False
                     if existing and int(existing["is_deleted"]) == 0:
+                        failure_target_id = int(existing["id"])
                         raise HTTPException(status_code=409, detail="标签名称已存在")
                     if existing:
                         tag_id = int(existing["id"])
+                        failure_target_id = tag_id
                         restored = True
+                        failure_action_type = "TAG_RESTORE"
                         cursor.execute(
                             "UPDATE tag SET is_deleted = 0, sort_order = %s WHERE id = %s",
                             (req.sort_order, tag_id)
@@ -1059,7 +1065,33 @@ def create_admin_tag(req: TagCreateRequest, authorization: str | None = Header(N
                             (req.name, req.sort_order)
                         )
                         tag_id = int(cursor.lastrowid)
+                    action_type = "TAG_RESTORE" if restored else "TAG_CREATE"
+                    detail = {
+                        "after": {
+                            "name": req.name,
+                            "sort_order": req.sort_order,
+                            "is_deleted": 0,
+                        },
+                        "restored": restored,
+                        "changed": True,
+                        "changed_fields": ["is_deleted", "sort_order"] if restored else ["name", "sort_order"],
+                    }
+                    if restored:
+                        detail["before"] = {
+                            "is_deleted": int(existing["is_deleted"]),
+                            "sort_order": int(existing["sort_order"]),
+                        }
+                    insert_operation_log(
+                        cursor, admin_user["id"], action_type, "TAG", tag_id,
+                        "SUCCESS", "恢复标签" if restored else "新增标签", detail, request_id,
+                    )
                 row = query_tag_by_id(conn, tag_id)
+                response = {
+                    "success": True,
+                    "restored": restored,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(row),
+                }
                 conn.commit()
             except HTTPException:
                 conn.rollback()
@@ -1067,23 +1099,36 @@ def create_admin_tag(req: TagCreateRequest, authorization: str | None = Header(N
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "restored": restored, "data": jsonable_encoder(row)}
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(
+            admin_user, failure_action_type, "TAG", failure_target_id, error, request_id
+        )
         raise
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="标签名称已存在")
+    except IntegrityError as error:
+        write_admin_operation_failure(
+            admin_user, failure_action_type, "TAG", failure_target_id, error, request_id
+        )
+        raise HTTPException(status_code=409, detail="标签名称已存在") from error
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"新增标签失败：{str(e)}")
+        write_admin_operation_failure(
+            admin_user, failure_action_type, "TAG", failure_target_id, e, request_id
+        )
+        raise HTTPException(status_code=500, detail=f"新增标签失败：{str(e)}") from e
 
 
 @app.patch("/admin/tags/{tag_id}")
 def update_admin_tag(tag_id: int, req: TagUpdateRequest, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT id, is_deleted FROM tag WHERE id = %s FOR UPDATE", (tag_id,))
+                    cursor.execute(
+                        "SELECT id, name, sort_order, is_deleted FROM tag WHERE id = %s FOR UPDATE",
+                        (tag_id,),
+                    )
                     current = cursor.fetchone()
                     if not current:
                         raise HTTPException(status_code=404, detail="标签不存在")
@@ -1099,7 +1144,26 @@ def update_admin_tag(tag_id: int, req: TagUpdateRequest, authorization: str | No
                         "UPDATE tag SET name = %s, sort_order = %s WHERE id = %s",
                         (req.name, req.sort_order, tag_id)
                     )
+                    before = {"name": current["name"], "sort_order": int(current["sort_order"])}
+                    after = {"name": req.name, "sort_order": req.sort_order}
+                    changed_fields = [key for key in after if before[key] != after[key]]
+                    insert_operation_log(
+                        cursor, admin_user["id"], "TAG_UPDATE", "TAG", tag_id,
+                        "SUCCESS", "修改标签",
+                        {
+                            "before": before,
+                            "after": after,
+                            "changed_fields": changed_fields,
+                            "changed": bool(changed_fields),
+                        },
+                        request_id,
+                    )
                 row = query_tag_by_id(conn, tag_id)
+                response = {
+                    "success": True,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(row),
+                }
                 conn.commit()
             except HTTPException:
                 conn.rollback()
@@ -1107,50 +1171,84 @@ def update_admin_tag(tag_id: int, req: TagUpdateRequest, authorization: str | No
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "data": jsonable_encoder(row)}
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "TAG_UPDATE", "TAG", tag_id, error, request_id)
         raise
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="标签名称已存在")
+    except IntegrityError as error:
+        write_admin_operation_failure(admin_user, "TAG_UPDATE", "TAG", tag_id, error, request_id)
+        raise HTTPException(status_code=409, detail="标签名称已存在") from error
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"修改标签失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "TAG_UPDATE", "TAG", tag_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"修改标签失败：{str(e)}") from e
 
 
 @app.delete("/admin/tags/{tag_id}")
 def delete_admin_tag(tag_id: int, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT id, is_deleted FROM tag WHERE id = %s FOR UPDATE", (tag_id,))
+                    cursor.execute(
+                        "SELECT id, name, sort_order, is_deleted FROM tag WHERE id = %s FOR UPDATE",
+                        (tag_id,),
+                    )
                     current = cursor.fetchone()
                     if not current:
                         raise HTTPException(status_code=404, detail="标签不存在")
-                    if int(current["is_deleted"]) == 1:
-                        conn.rollback()
-                        return {"success": True, "already_deleted": True, "tag_id": tag_id}
-                    cursor.execute(
-                        """
-                        SELECT COUNT(DISTINCT p.id) AS product_count
-                        FROM product_tag pt
-                        INNER JOIN product p ON p.id = pt.product_id AND p.is_deleted = 0
-                        WHERE pt.tag_id = %s
-                        """,
-                        (tag_id,)
-                    )
-                    product_count = int(cursor.fetchone()["product_count"] or 0)
-                    if product_count > 0:
-                        conn.rollback()
-                        return JSONResponse(
-                            status_code=409,
-                            content={
-                                "success": False,
-                                "detail": "标签仍关联商品，请先解除关联",
+                    already_deleted = int(current["is_deleted"]) == 1
+                    product_count = 0
+                    if not already_deleted:
+                        cursor.execute(
+                            """
+                            SELECT COUNT(DISTINCT p.id) AS product_count
+                            FROM product_tag pt
+                            INNER JOIN product p ON p.id = pt.product_id AND p.is_deleted = 0
+                            WHERE pt.tag_id = %s
+                            """,
+                            (tag_id,),
+                        )
+                        product_count = int(cursor.fetchone()["product_count"] or 0)
+                        if product_count > 0:
+                            error = HTTPException(status_code=409, detail="标签仍关联商品，请先解除关联")
+                            conn.rollback()
+                            write_admin_operation_failure(
+                                admin_user,
+                                "TAG_DELETE",
+                                "TAG",
+                                tag_id,
+                                error,
+                                request_id,
+                                {"product_count": product_count},
+                            )
+                            return JSONResponse(
+                                status_code=409,
+                                content={
+                                    "success": False,
+                                    "detail": error.detail,
+                                    "product_count": product_count,
+                                    "request_id": request_id,
+                                },
+                            )
+                        cursor.execute("UPDATE tag SET is_deleted = 1 WHERE id = %s", (tag_id,))
+                    insert_operation_log(
+                        cursor, admin_user["id"], "TAG_DELETE", "TAG", tag_id,
+                        "SUCCESS", "删除标签",
+                        {
+                            "before": {
+                                "name": current["name"],
+                                "is_deleted": int(current["is_deleted"]),
                                 "product_count": product_count,
                             },
-                        )
-                    cursor.execute("UPDATE tag SET is_deleted = 1 WHERE id = %s", (tag_id,))
+                            "after": {"name": current["name"], "is_deleted": 1},
+                            "changed_fields": [] if already_deleted else ["is_deleted"],
+                            "changed": not already_deleted,
+                            "product_count": product_count,
+                        },
+                        request_id,
+                    )
                 conn.commit()
             except HTTPException:
                 conn.rollback()
@@ -1158,21 +1256,32 @@ def delete_admin_tag(tag_id: int, authorization: str | None = Header(None)):
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "already_deleted": False, "tag_id": tag_id}
-    except HTTPException:
+        return {
+            "success": True,
+            "already_deleted": already_deleted,
+            "tag_id": tag_id,
+            "request_id": request_id,
+        }
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "TAG_DELETE", "TAG", tag_id, error, request_id)
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除标签失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "TAG_DELETE", "TAG", tag_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"删除标签失败：{str(e)}") from e
 
 
 @app.post("/admin/tags/{tag_id}/restore")
 def restore_admin_tag(tag_id: int, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT id, name, is_deleted FROM tag WHERE id = %s FOR UPDATE", (tag_id,))
+                    cursor.execute(
+                        "SELECT id, name, sort_order, is_deleted FROM tag WHERE id = %s FOR UPDATE",
+                        (tag_id,),
+                    )
                     current = cursor.fetchone()
                     if not current:
                         raise HTTPException(status_code=404, detail="标签不存在")
@@ -1185,7 +1294,33 @@ def restore_admin_tag(tag_id: int, authorization: str | None = Header(None)):
                         if cursor.fetchone():
                             raise HTTPException(status_code=409, detail="标签名称已存在，无法恢复")
                         cursor.execute("UPDATE tag SET is_deleted = 0 WHERE id = %s", (tag_id,))
+                    insert_operation_log(
+                        cursor, admin_user["id"], "TAG_RESTORE", "TAG", tag_id,
+                        "SUCCESS", "恢复标签",
+                        {
+                            "before": {
+                                "name": current["name"],
+                                "sort_order": int(current["sort_order"]),
+                                "is_deleted": int(current["is_deleted"]),
+                            },
+                            "after": {
+                                "name": current["name"],
+                                "sort_order": int(current["sort_order"]),
+                                "is_deleted": 0,
+                            },
+                            "changed_fields": [] if already_active else ["is_deleted"],
+                            "changed": not already_active,
+                            "restored": not already_active,
+                        },
+                        request_id,
+                    )
                 row = query_tag_by_id(conn, tag_id)
+                response = {
+                    "success": True,
+                    "already_active": already_active,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(row),
+                }
                 conn.commit()
             except HTTPException:
                 conn.rollback()
@@ -1193,13 +1328,16 @@ def restore_admin_tag(tag_id: int, authorization: str | None = Header(None)):
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "already_active": already_active, "data": jsonable_encoder(row)}
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "TAG_RESTORE", "TAG", tag_id, error, request_id)
         raise
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="标签名称已存在，无法恢复")
+    except IntegrityError as error:
+        write_admin_operation_failure(admin_user, "TAG_RESTORE", "TAG", tag_id, error, request_id)
+        raise HTTPException(status_code=409, detail="标签名称已存在，无法恢复") from error
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"恢复标签失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "TAG_RESTORE", "TAG", tag_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"恢复标签失败：{str(e)}") from e
 
 
 @app.patch("/admin/products/tags/batch")
@@ -1207,7 +1345,8 @@ def update_admin_product_tags_batch(
     req: AdminProductTagsBatchUpdateRequest,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
@@ -1229,14 +1368,55 @@ def update_admin_product_tags_batch(
                     "requested_product_count": len(result["product_ids"]),
                     "changed_product_count": len(changed_product_ids),
                     "unchanged_product_count": len(result["product_ids"]) - len(changed_product_ids),
+                    "request_id": request_id,
                     "data": data,
                 }
+                with conn.cursor() as cursor:
+                    insert_operation_log(
+                        cursor,
+                        admin_user["id"],
+                        "PRODUCT_TAGS_BATCH_UPDATE",
+                        "PRODUCT",
+                        None,
+                        "SUCCESS",
+                        "批量修改商品标签",
+                        {
+                            "operation": result["operation"],
+                            "product_ids": result["product_ids"],
+                            "tag_ids": req.tag_ids,
+                            "requested_product_count": len(result["product_ids"]),
+                            "changed_product_ids": sorted(changed_product_ids),
+                            "changed_product_count": len(changed_product_ids),
+                            "unchanged_product_count": len(result["product_ids"]) - len(changed_product_ids),
+                            "changed": bool(changed_product_ids),
+                        },
+                        request_id,
+                    )
                 conn.commit()
             except ProductTagsBatchError as exc:
                 conn.rollback()
+                write_admin_operation_failure(
+                    admin_user,
+                    "PRODUCT_TAGS_BATCH_UPDATE",
+                    "PRODUCT",
+                    None,
+                    exc,
+                    request_id,
+                    {
+                        "operation": req.operation,
+                        "product_ids": req.product_ids,
+                        "tag_ids": req.tag_ids,
+                        "requested_product_count": len(req.product_ids),
+                    },
+                )
                 return JSONResponse(
                     status_code=exc.status_code,
-                    content={"success": False, "detail": exc.detail, **exc.payload},
+                    content={
+                        "success": False,
+                        "detail": exc.detail,
+                        "request_id": request_id,
+                        **exc.payload,
+                    },
                 )
             except HTTPException:
                 conn.rollback()
@@ -1245,10 +1425,38 @@ def update_admin_product_tags_batch(
                 conn.rollback()
                 raise
         return jsonable_encoder(response)
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(
+            admin_user,
+            "PRODUCT_TAGS_BATCH_UPDATE",
+            "PRODUCT",
+            None,
+            error,
+            request_id,
+            {
+                "operation": req.operation,
+                "product_ids": req.product_ids,
+                "tag_ids": req.tag_ids,
+                "requested_product_count": len(req.product_ids),
+            },
+        )
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"批量修改商品标签失败：{str(e)}")
+        write_admin_operation_failure(
+            admin_user,
+            "PRODUCT_TAGS_BATCH_UPDATE",
+            "PRODUCT",
+            None,
+            e,
+            request_id,
+            {
+                "operation": req.operation,
+                "product_ids": req.product_ids,
+                "tag_ids": req.tag_ids,
+                "requested_product_count": len(req.product_ids),
+            },
+        )
+        raise HTTPException(status_code=500, detail=f"批量修改商品标签失败：{str(e)}") from e
 
 
 @app.patch("/admin/products/{product_id}/tags")
@@ -1257,7 +1465,8 @@ def update_admin_product_tags(
     req: AdminProductTagsUpdateRequest,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
@@ -1283,6 +1492,33 @@ def update_admin_product_tags(
                                 (product_id, tag_id)
                             )
                 tags = query_product_tags(conn, [product_id]).get(product_id, [])
+                with conn.cursor() as cursor:
+                    insert_operation_log(
+                        cursor,
+                        admin_user["id"],
+                        "PRODUCT_TAGS_UPDATE",
+                        "PRODUCT",
+                        product_id,
+                        "SUCCESS",
+                        "修改商品标签",
+                        {
+                            "before": {"tag_ids": current_ids},
+                            "after": {"tag_ids": tag_ids},
+                            "changed_fields": ["tag_ids"],
+                            "changed": changed,
+                            "tag_ids": tag_ids,
+                            "tag_count": len(tag_ids),
+                        },
+                        request_id,
+                    )
+                response = {
+                    "success": True,
+                    "product_id": product_id,
+                    "tag_ids": tag_ids,
+                    "tags": jsonable_encoder(tags),
+                    "changed": changed,
+                    "request_id": request_id,
+                }
                 conn.commit()
             except HTTPException:
                 conn.rollback()
@@ -1290,17 +1526,29 @@ def update_admin_product_tags(
             except Exception:
                 conn.rollback()
                 raise
-        return {
-            "success": True,
-            "product_id": product_id,
-            "tag_ids": tag_ids,
-            "tags": jsonable_encoder(tags),
-            "changed": changed,
-        }
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(
+            admin_user,
+            "PRODUCT_TAGS_UPDATE",
+            "PRODUCT",
+            product_id,
+            error,
+            request_id,
+            {"tag_ids": req.tag_ids, "tag_count": len(req.tag_ids)},
+        )
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"修改商品标签失败：{str(e)}")
+        write_admin_operation_failure(
+            admin_user,
+            "PRODUCT_TAGS_UPDATE",
+            "PRODUCT",
+            product_id,
+            e,
+            request_id,
+            {"tag_ids": req.tag_ids, "tag_count": len(req.tag_ids)},
+        )
+        raise HTTPException(status_code=500, detail=f"修改商品标签失败：{str(e)}") from e
 
 
 def write_admin_operation_failure(
@@ -1310,15 +1558,17 @@ def write_admin_operation_failure(
     target_id: int | None,
     error: Exception,
     request_id: str,
+    detail: dict | None = None,
 ) -> None:
     reason_summary = safe_failure_reason(error)
+    failure_detail = {**(detail or {}), "reason_summary": reason_summary}
     write_failure_operation_log(
         operator_id=admin_user["id"],
         action_type=action_type,
         target_type=target_type,
         target_id=target_id,
         remark=f"{action_type} 失败",
-        detail={"reason_summary": reason_summary},
+        detail=failure_detail,
         request_id=request_id,
     )
 
@@ -2145,6 +2395,8 @@ async def create_product(
                             "ids": [int(value) for value in sku_ids],
                             "sku_count": len(sku_ids),
                             "image_count": len(saved_images),
+                            "tag_ids": tag_ids,
+                            "tag_count": len(tag_ids),
                         },
                         request_id,
                     )

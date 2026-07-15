@@ -79,6 +79,8 @@
 
 `04_测试数据与验证.sql` 会清理并重建固定演示数据，只能在明确的测试数据库执行。已有环境应在确认当前数据库为 `frieren_cloth_shop_db` 后按编号执行尚未应用的增量脚本：`06` 为 `product` 增加可空的普通文本介绍字段并更新商品详情视图；`07` 为 `order_main` 增加可空的 `buyer_remark VARCHAR(500)`，更新订单列表/详情视图，并新增兼容的立即购买存储过程；`08` 保留旧选中项下单过程，并新增支持购物车备注的兼容过程；`09` 新增逻辑删除的 `tag` 标签表和 `product_tag` 商品标签关联表；`10` 幂等扩展 `operation_log` 的对象、结果、结构化详情和 `request_id` 字段及查询索引。`09` 和 `10` 均可重复执行，不删除、清空或改名现有业务数据；`10` 保留旧日志 remark，新增结果默认 `SUCCESS`。
 
+阶段 14—16 已在 `master` 完成集成：`09` 建立标签结构，`10` 扩展操作日志，标签写操作已接入成功/失败审计。下一阶段为阶段 17 最终审计，本轮未开始阶段 17。
+
 商品介绍最多 1000 个字符，支持中文与换行，空内容保存为 `NULL`。管理员可通过后台商品卡的“编辑介绍”入口修改或清空，后端接口为 `PATCH /admin/products/{product_id}/description`，需要现有管理员 Bearer 令牌。
 
 立即购买和购物车下单都可选填最多 500 个字符的买家备注，前后端会去除首尾空白，空备注保存为 `NULL`。购物车结算顺序固定为“勾选商品 → 下单 → 选择支付方式 → 输入支付密码”：`POST /orders/from-cart-selected` 先创建 `PENDING_PAYMENT` 订单并只移除选中项，随后 `POST /orders/pay` 支付已有订单；支付失败不会重建订单，用户也可稍后在购买记录中继续支付。备注随各自订单创建事务写入，并在用户端和管理端订单详情中展示。
@@ -90,6 +92,8 @@
 后台商品管理还提供 `PATCH /admin/products/tags/batch`：单次接受 1～100 个有效商品，支持 `ADD`、`REMOVE`、`REPLACE`、`CLEAR` 四种固定操作。前后端都限制每个商品最多 5 个有效标签；后端按商品、标签和关联 ID 升序锁定并在单一事务内先完成全量校验，再一次提交，任一商品/标签无效或 `ADD` 后任一商品超过上限时整批回滚。阶段 15 复用阶段 14 的 `tag` / `product_tag` 结构，没有新增 SQL 迁移。
 
 管理员登录成功及现有后台写操作会写入 `operation_log`。业务成功日志与业务修改使用同一事务，已认证后的业务失败会在回滚后用独立短事务尽力记录；日志只保存白名单摘要，不保存密码、令牌、Authorization 或完整请求。后台“操作日志”面板调用 `GET /admin/operation-logs` 和 `GET /admin/operation-log-options`，支持类型、对象、结果、操作者、时间和关键词筛选以及只读详情与分页，不提供删除日志入口。
+
+标签新增、修改、删除、恢复分别记录 `TAG_CREATE`、`TAG_UPDATE`、`TAG_DELETE`、`TAG_RESTORE`，单商品完整替换与批量标签操作分别记录 `PRODUCT_TAGS_UPDATE`、`PRODUCT_TAGS_BATCH_UPDATE`。成功日志与标签关系变更同事务提交；重名、关联删除冲突、无效商品或标签等已认证失败会在业务回滚后记录 `FAILURE`，并保留 `request_id` 与白名单摘要。日志目标类型包含 `TAG`，后台筛选项会从接口动态加载这些动作和目标类型。
 
 ## 后端启动
 
@@ -200,6 +204,12 @@ http://127.0.0.1:8050
 
 ```bash
 npm.cmd test
+```
+
+当前阶段 14—16 集成基线为 215/215 通过；批量标签事务替身还可单独执行：
+
+```bash
+$env:PYTHONPATH='backend'; backend\.venv\Scripts\python.exe -m unittest tests.product_tags_batch_unit
 ```
 
 语法检查命令：

@@ -4289,3 +4289,150 @@ test('[OPERATION-LOG-16-6] operation log layout protects long content and narrow
   assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*\.admin-operation-log-filter/);
 });
 
+test('[TAG-LOG-INTEGRATION-1] TAG target and safe tag summary fields are accepted without weakening secret filtering', () => {
+  const script = String.raw`
+import json
+from app.operation_logs import CURRENT_TARGET_TYPES, sanitize_operation_detail
+
+detail = sanitize_operation_detail({
+    "operation": "ADD",
+    "tag_ids": [3, 2],
+    "product_ids": [9, 8],
+    "changed_product_ids": [8],
+    "changed": True,
+    "restored": False,
+    "requested_product_count": 2,
+    "changed_product_count": 1,
+    "unchanged_product_count": 1,
+    "product_count": 4,
+    "tag_count": 2,
+    "token": "must-not-survive",
+    "authorization": "must-not-survive",
+    "password": "must-not-survive",
+})
+print(json.dumps({"targets": sorted(CURRENT_TARGET_TYPES), "detail": detail}, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout.trim());
+  assert.ok(payload.targets.includes('TAG'));
+  assert.deepEqual(payload.detail, {
+    operation: 'ADD',
+    tag_ids: [3, 2],
+    product_ids: [9, 8],
+    changed_product_ids: [8],
+    changed: true,
+    restored: false,
+    requested_product_count: 2,
+    changed_product_count: 1,
+    unchanged_product_count: 1,
+    product_count: 4,
+    tag_count: 2,
+  });
+  assert.doesNotMatch(JSON.stringify(payload.detail), /token|authorization|password/i);
+});
+
+test('[TAG-LOG-INTEGRATION-2] tag CRUD logs create update delete restore success and authenticated failures', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const createRoute = sliceBetween(backend, '@app.post("/admin/tags")', '@app.patch("/admin/tags/{tag_id}")');
+  const updateRoute = sliceBetween(backend, '@app.patch("/admin/tags/{tag_id}")', '@app.delete("/admin/tags/{tag_id}")');
+  const deleteRoute = sliceBetween(backend, '@app.delete("/admin/tags/{tag_id}")', '@app.post("/admin/tags/{tag_id}/restore")');
+  const restoreRoute = sliceBetween(backend, '@app.post("/admin/tags/{tag_id}/restore")', '@app.patch("/admin/products/tags/batch")');
+
+  for (const [route, action] of [
+    [createRoute, 'TAG_CREATE'],
+    [updateRoute, 'TAG_UPDATE'],
+    [deleteRoute, 'TAG_DELETE'],
+    [restoreRoute, 'TAG_RESTORE'],
+  ]) {
+    assert.ok(route.includes('admin_user = require_admin_user(authorization)'));
+    assert.ok(route.includes('request_id = create_operation_request_id()'));
+    assert.ok(route.includes('insert_operation_log('));
+    assert.ok(route.includes(`"${action}"`) || route.includes(action));
+    assert.ok(route.includes('"TAG"'));
+    assert.ok(route.includes('write_admin_operation_failure('));
+    assert.ok(route.includes('request_id'));
+  }
+  assert.ok(createRoute.includes('TAG_RESTORE'));
+  assert.ok(createRoute.includes('"before"'));
+  assert.ok(createRoute.includes('"after"'));
+  assert.ok(updateRoute.includes('"changed_fields"'));
+  assert.ok(deleteRoute.includes('"product_count"'));
+  assert.ok(deleteRoute.includes('"changed"'));
+  assert.ok(restoreRoute.includes('"changed"'));
+});
+
+test('[TAG-LOG-INTEGRATION-3] single-product tag replacement logs before after idempotency and failures in the correct transaction', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const route = sliceBetween(backend, '@app.patch("/admin/products/{product_id}/tags")', 'def write_admin_operation_failure(');
+
+  assert.ok(route.includes('admin_user = require_admin_user(authorization)'));
+  assert.ok(route.includes('request_id = create_operation_request_id()'));
+  assert.ok(route.includes('"PRODUCT_TAGS_UPDATE"'));
+  assert.ok(route.includes('"PRODUCT"'));
+  assert.ok(route.includes('"before": {"tag_ids": current_ids}'));
+  assert.ok(route.includes('"after": {"tag_ids": tag_ids}'));
+  assert.ok(route.includes('"changed_fields": ["tag_ids"]'));
+  assert.ok(route.includes('"changed": changed'));
+  assert.ok(route.indexOf('insert_operation_log(') < route.indexOf('conn.commit()'));
+  assert.ok(route.includes('write_admin_operation_failure('));
+  assert.ok(route.includes('"request_id": request_id'));
+});
+
+test('[TAG-LOG-INTEGRATION-4] batch tag updates write one summary log and a rollback-safe failure log', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const route = sliceBetween(backend, '@app.patch("/admin/products/tags/batch")', '@app.patch("/admin/products/{product_id}/tags")');
+
+  assert.ok(route.includes('admin_user = require_admin_user(authorization)'));
+  assert.ok(route.includes('request_id = create_operation_request_id()'));
+  assert.equal((route.match(/insert_operation_log\(/g) || []).length, 1);
+  assert.ok(route.includes('"PRODUCT_TAGS_BATCH_UPDATE"'));
+  assert.ok(route.includes('"operation": result["operation"]'));
+  assert.ok(route.includes('"product_ids": result["product_ids"]'));
+  assert.ok(route.includes('"tag_ids": req.tag_ids'));
+  assert.ok(route.includes('"changed_product_ids"'));
+  assert.ok(route.includes('"requested_product_count"'));
+  assert.ok(route.includes('"changed_product_count"'));
+  assert.ok(route.includes('"unchanged_product_count"'));
+  assert.ok(route.indexOf('insert_operation_log(') < route.indexOf('conn.commit()'));
+  assert.ok(route.includes('write_admin_operation_failure('));
+  assert.ok(route.includes('"request_id": request_id'));
+});
+
+test('[TAG-LOG-INTEGRATION-5] product creation audit keeps existing summaries and adds safe tag ids and count', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const route = sliceBetween(backend, '@app.post("/products")', '@app.post("/admin/products/{product_id}/images")');
+
+  assert.ok(route.includes('tag_ids_json'));
+  assert.ok(route.includes('validate_active_tag_ids'));
+  assert.ok(route.includes('"PRODUCT_CREATE"'));
+  assert.ok(route.includes('"sku_count": len(sku_ids)'));
+  assert.ok(route.includes('"image_count": len(saved_images)'));
+  assert.ok(route.includes('"description_length": len(description)'));
+  assert.ok(route.includes('"tag_ids": tag_ids'));
+  assert.ok(route.includes('"tag_count": len(tag_ids)'));
+  assert.ok(route.indexOf('insert_operation_log(') < route.indexOf('conn.commit()'));
+  assert.doesNotMatch(route, /"description"\s*:\s*description/);
+});
+
+test('[TAG-LOG-INTEGRATION-6] merged admin UI keeps unique tag and operation-log panels with API-driven TAG options', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const navTargets = [...html.matchAll(/data-admin-nav-target="([^"]+)"/g)].map((match) => match[1]);
+  const panels = [...html.matchAll(/data-admin-panel="([^"]+)"/g)].map((match) => match[1]);
+
+  assert.deepEqual(navTargets, ['orders', 'products', 'categories', 'tags', 'product-create', 'stats', 'operation-logs']);
+  assert.equal(new Set(navTargets).size, navTargets.length);
+  assert.equal(new Set(panels).size, panels.length);
+  assert.ok(panels.includes('tags'));
+  assert.ok(panels.includes('operation-logs'));
+  assert.ok(html.includes('data-admin-product-batch-toolbar'));
+  assert.doesNotMatch(sliceBetween(html, 'data-admin-panel="operation-logs"', '</main>'), /删除日志|data-admin-operation-log-delete/);
+  assert.ok(mainJs.includes('loadAdminOperationLogOptions'));
+  assert.ok(mainJs.includes('Array.isArray(result.target_types)'));
+  assert.ok(mainJs.includes('operationLogTarget'));
+});
+

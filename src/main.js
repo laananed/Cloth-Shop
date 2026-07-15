@@ -4,7 +4,8 @@ import {
   compareProductsForCustomer,
   getProductUnavailableAt,
   isProductSellable,
-} from './product-ordering.js?v=20260709a';
+  resolveProductAvailabilityState,
+} from './product-ordering.js?v=20260715a';
 import {
   buildPurchaseOrder,
   getCartItemTotal,
@@ -99,7 +100,9 @@ const purchaseStatus = document.querySelector('[data-purchase-status]');
 const purchaseSkuSummary = document.querySelector('[data-purchase-sku-summary]');
 const purchaseDescription = document.querySelector('[data-purchase-description]');
 const purchaseDescriptionSection = document.querySelector('[data-purchase-description-section]');
+const purchaseImageFrame = document.querySelector('[data-purchase-image-frame]');
 const purchaseImage = document.querySelector('[data-purchase-image]');
+const purchaseStateStamp = purchaseModal?.querySelector('[data-product-state-stamp]') || null;
 const purchaseGallery = document.querySelector('[data-purchase-gallery]');
 const imageLightbox = document.querySelector('[data-image-lightbox]');
 const imageLightboxImage = document.querySelector('[data-image-lightbox-image]');
@@ -573,36 +576,44 @@ function isOnSale(status) {
 }
 
 function getProductDisplayState(product) {
-  const productOnSale = isOnSale(product.productStatus || product.status);
-
-  if (!productOnSale) {
-    return {
+  const state = resolveProductAvailabilityState(product);
+  const states = {
+    AVAILABLE: {
+      key: "AVAILABLE",
+      domValue: "available",
+      label: "可购买",
+      message: "",
+      stampAriaLabel: "",
+      priority: 0,
+    },
+    SOLD_OUT: {
+      key: "SOLD_OUT",
+      domValue: "sold-out",
+      label: "已售罄",
+      message: "该商品已售罄，暂不可购买",
+      stampAriaLabel: "商品状态：已售罄",
+      priority: 1,
+    },
+    OFF_SALE: {
       key: "OFF_SALE",
+      domValue: "off-sale",
       label: "已下架",
       message: "该商品已下架，暂不可购买",
+      stampAriaLabel: "商品状态：已下架",
       priority: 2,
-    };
-  }
-
-  const hasAvailableSku = (product.skuList || []).some((sku) => {
-    return isOnSale(sku.skuStatus || sku.status) && Number(sku.availableStock || 0) > 0;
-  });
-
-  if (!hasAvailableSku) {
-    return {
-      key: "SOLD_OUT",
-      label: "已售罄",
-      message: "该商品库存不足，暂不可购买",
-      priority: 1,
-    };
-  }
-
-  return {
-    key: "AVAILABLE",
-    label: "可购买",
-    message: "",
-    priority: 0,
+    },
   };
+
+  return states[state] || states.AVAILABLE;
+}
+
+function renderProductStateStamp(productState, variant = '') {
+  if (productState.key === 'AVAILABLE') {
+    return '';
+  }
+
+  const variantClass = variant ? ` product-state-stamp--${variant}` : '';
+  return `<span class="product-state-stamp product-state-stamp--${productState.domValue}${variantClass}" data-product-state-stamp role="img" aria-label="${productState.stampAriaLabel}">${productState.label}</span>`;
 }
 
 function getProductImages(product) {
@@ -775,9 +786,18 @@ async function loadProductsFromApi() {
     hasLoadedProductsFromApi = true;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
+    const refreshedActiveProduct = activePurchaseProduct
+      ? productsById.get(activePurchaseProduct.id)
+      : null;
+    if (refreshedActiveProduct) {
+      activePurchaseProduct = refreshedActiveProduct;
+    }
 
     updateView();
     renderSidebar();
+    if (purchaseModal?.classList.contains('is-open')) {
+      renderPurchaseModal();
+    }
 
     console.log("已使用后端数据库商品渲染页面：", {
       count: products.length,
@@ -2413,12 +2433,22 @@ function renderProducts() {
       const selectedSkuName = selectedSku?.skuName || '请选择规格';
       const selectedStock = selectedSku ? Number(selectedSku?.availableStock ?? product.availableStock ?? 0) : null;
       const productState = getProductDisplayState(product);
-      const productStateClass = `product-card--${productState.key.toLowerCase()}`;
+      const productStateClass = `product-card--${productState.domValue}`;
       const isProductAvailable = productState.key === "AVAILABLE";
       const hasSelectedSku = Boolean(selectedSku);
       const canOpenActionModal = canOpenProductActionModal(product);
       const isFavorite = isProductFavorited(favorites, product);
       const isInCart = isProductInCart(cart, product);
+      const cartAriaLabel = isProductAvailable
+        ? isInCart ? '已在购物车，继续添加' : '加入购物车'
+        : productState.key === 'SOLD_OUT'
+          ? '已售罄，暂不可加入购物车'
+          : '商品已下架，暂不可加入购物车';
+      const buyAriaLabel = isProductAvailable
+        ? '立即购买'
+        : productState.key === 'SOLD_OUT'
+          ? '已售罄，暂不可购买'
+          : '商品已下架，暂不可购买';
       const stockLabel = !hasSelectedSku
         ? "请选择规格后查看库存"
         : productState.key === "OFF_SALE"
@@ -2429,13 +2459,13 @@ function renderProducts() {
         : "";
 
       return `
-        <article class="product-card ${productStateClass} ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
+        <article class="product-card ${productStateClass} ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}" data-product-state="${productState.domValue}">
           <div class="product-card__glow"></div>
           <div class="product-card__badge">${product.badge}</div>
-          <div class="product-card__state product-card__state--${productState.key.toLowerCase()}">${productState.label}</div>
-          <div class="product-card__art" aria-hidden="true">
+          <div class="product-card__art">
             <img class="product-card__image" src="${product.image}" alt="${product.name} 预览图" style="${getProductImageStyle(product)}" loading="lazy" decoding="async" />
-            <span class="product-card__art-overlay"></span>
+            <span class="product-card__art-overlay" aria-hidden="true"></span>
+            ${renderProductStateStamp(productState, 'card')}
           </div>
           <div class="product-card__body ${isPrimaryDetail ? 'product-card__body--primary-detail' : ''} ${isSplitDetail ? 'product-card__body--split-detail' : ''}">
             <p class="product-card__category">${product.category}</p>
@@ -2501,7 +2531,7 @@ function renderProducts() {
                 <button
                   type="button"
                   class="ghost-button ghost-button--icon ghost-button--icon-outline ${isInCart ? 'is-in-cart' : ''}"
-                  aria-label="${isInCart ? '已在购物车，继续添加' : '加入购物车'}"
+                  aria-label="${cartAriaLabel}"
                   data-cart-state="${isInCart ? 'active' : 'inactive'}"
                   data-sidebar-launch="cart"
                   ${canOpenActionModal ? '' : 'disabled'}
@@ -2512,6 +2542,7 @@ function renderProducts() {
                   type="button"
                   class="ghost-button ghost-button--solid ghost-button--buy"
                   data-purchase-launch="buy"
+                  aria-label="${buyAriaLabel}"
                   ${canOpenActionModal ? '' : 'disabled'}
                 >
                   ${canOpenActionModal ? '立即购买' : productState.label}
@@ -2776,6 +2807,18 @@ function renderPurchaseModal() {
     purchaseStatus.textContent = `销售状态：${productState.label}`;
   }
 
+  if (purchaseImageFrame) {
+    purchaseImageFrame.dataset.productState = productState.domValue || 'available';
+  }
+
+  if (purchaseStateStamp) {
+    const stateUnavailable = productState.key !== "AVAILABLE";
+    purchaseStateStamp.hidden = !stateUnavailable;
+    purchaseStateStamp.className = `product-state-stamp product-state-stamp--detail product-state-stamp--${productState.domValue}`;
+    purchaseStateStamp.textContent = stateUnavailable ? productState.label : '';
+    purchaseStateStamp.setAttribute('aria-label', stateUnavailable ? productState.stampAriaLabel : '');
+  }
+
   if (purchaseSkuSummary) {
     const skuSummary = String(product?.skuSummary || '').trim();
     purchaseSkuSummary.hidden = actionConfig.key !== 'details' || !skuSummary;
@@ -2974,12 +3017,18 @@ function renderPurchaseModal() {
     purchaseSubmit.textContent = product
       ? canSubmitPurchase
         ? actionConfig.submitLabel(formatPrice(total))
-        : !selectedSku
-          ? '请选择商品规格'
-          : productState.key === "OFF_SALE"
-            ? "商品已下架"
+        : productState.key !== "AVAILABLE"
+          ? productState.label
+          : !selectedSku
+            ? '请选择商品规格'
             : "当前规格库存不足"
       : '请选择商品';
+    const submitAriaLabel = productState.key === 'SOLD_OUT'
+      ? '已售罄，暂不可购买'
+      : productState.key === 'OFF_SALE'
+        ? '商品已下架，暂不可购买'
+        : actionConfig.label;
+    purchaseSubmit.setAttribute('aria-label', submitAriaLabel);
   }
 
   if (purchaseFeedback) {
@@ -3434,6 +3483,7 @@ function upsertCartItem(product) {
 
 function renderFavoritesShelf(listElement, items, emptyState, currentProducts = []) {
   const shelf = renderFavoriteProductItems(items, currentProducts, emptyState);
+  const currentProductsById = new Map(currentProducts.map((product) => [product.id, product]));
 
   if (!listElement) {
     return;
@@ -3447,6 +3497,12 @@ function renderFavoritesShelf(listElement, items, emptyState, currentProducts = 
   listElement.innerHTML = shelf.items
     .map(
       (item) => {
+        const currentProduct = item.isAvailable
+          ? currentProductsById.get(item.currentProductId)
+          : null;
+        const productState = currentProduct
+          ? getProductDisplayState(currentProduct)
+          : null;
         const detailsAttribute = item.isAvailable
           ? `data-favorite-details-product-id="${escapeHtml(item.currentProductId)}"`
           : '';
@@ -3455,7 +3511,7 @@ function renderFavoritesShelf(listElement, items, emptyState, currentProducts = 
           : '';
 
         return `
-        <article class="favorite-card" data-favorite-id="${escapeHtml(item.id)}">
+        <article class="favorite-card" data-favorite-id="${escapeHtml(item.id)}"${productState ? ` data-product-state="${productState.domValue}"` : ''}>
           <button
             type="button"
             class="favorite-card__visual${item.image ? '' : ' is-image-missing'}"
@@ -3465,6 +3521,7 @@ function renderFavoritesShelf(listElement, items, emptyState, currentProducts = 
           >
             ${imageMarkup}
             <span class="favorite-card__image-fallback">图片暂不可用</span>
+            ${productState ? renderProductStateStamp(productState, 'favorite') : ''}
             <span class="favorite-card__image-hint">点击查看更多图片</span>
           </button>
           <div class="favorite-card__content">

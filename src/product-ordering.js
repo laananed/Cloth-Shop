@@ -9,6 +9,72 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isDeletedSku(sku) {
+  return Number(sku?.skuIsDeleted ?? sku?.sku_is_deleted ?? sku?.isDeleted ?? sku?.is_deleted ?? 0) === 1;
+}
+
+function resolveExplicitSaleStatus(value, fallbackFlag) {
+  const status = normalizeStatus(value);
+
+  if (status) {
+    if (status === 'ON_SALE' || status === 'AVAILABLE') return true;
+    if (status === 'OFF_SALE' || status === 'SOLD_OUT' || status === 'OUT_OF_STOCK') return false;
+    return false;
+  }
+
+  if (fallbackFlag === undefined || fallbackFlag === null || fallbackFlag === '') {
+    return null;
+  }
+
+  return fallbackFlag === true || fallbackFlag === 1 || fallbackFlag === '1';
+}
+
+export function resolveProductAvailabilityState(product) {
+  const productStatusValue = product?.productStatus
+    ?? product?.product_status
+    ?? product?.status
+    ?? product?.saleState
+    ?? product?.sale_state;
+  const normalizedProductStatus = normalizeStatus(productStatusValue);
+  const productOnSale = resolveExplicitSaleStatus(
+    productStatusValue,
+    product?.onSale ?? product?.on_sale,
+  );
+
+  if (normalizedProductStatus === 'SOLD_OUT' || normalizedProductStatus === 'OUT_OF_STOCK') {
+    return 'SOLD_OUT';
+  }
+
+  if (productOnSale === false) {
+    return 'OFF_SALE';
+  }
+
+  if (productOnSale === null) {
+    return 'AVAILABLE';
+  }
+
+  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
+  const onSaleSkus = skuList.filter((sku) => {
+    if (isDeletedSku(sku)) {
+      return false;
+    }
+
+    const skuOnSale = resolveExplicitSaleStatus(
+      sku?.skuStatus ?? sku?.sku_status ?? sku?.status,
+      sku?.onSale ?? sku?.on_sale,
+    );
+    return skuOnSale !== false;
+  });
+
+  if (!onSaleSkus.length) {
+    return 'OFF_SALE';
+  }
+
+  return onSaleSkus.some((sku) => toNumber(sku?.availableStock ?? sku?.available_stock ?? sku?.stock) > 0)
+    ? 'AVAILABLE'
+    : 'SOLD_OUT';
+}
+
 export function parseDateTimeValue(value) {
   if (value instanceof Date) {
     const time = value.getTime();
@@ -29,25 +95,7 @@ export function parseDateTimeValue(value) {
 }
 
 export function isProductSellable(product) {
-  const productStatus = normalizeStatus(product?.productStatus || product?.status);
-  const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
-
-  if (!productStatus) {
-    return true;
-  }
-
-  if (productStatus !== 'ON_SALE') {
-    return false;
-  }
-
-  if (!skuList.length) {
-    return true;
-  }
-
-  return skuList.some((sku) => {
-    const skuStatus = normalizeStatus(sku?.skuStatus || sku?.status);
-    return skuStatus === 'ON_SALE' && toNumber(sku?.availableStock ?? sku?.available_stock) > 0;
-  });
+  return resolveProductAvailabilityState(product) === 'AVAILABLE';
 }
 
 export function getProductUnavailableAt(product) {
@@ -64,6 +112,10 @@ export function getProductUnavailableAt(product) {
 
   const skuList = Array.isArray(product?.skuList) ? product.skuList : [];
   const inventoryUpdatedAt = skuList.reduce((maxTime, sku) => {
+    if (isDeletedSku(sku)) {
+      return maxTime;
+    }
+
     const skuStatus = normalizeStatus(sku?.skuStatus || sku?.status);
     if (skuStatus !== 'ON_SALE') {
       return maxTime;

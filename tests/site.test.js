@@ -37,6 +37,7 @@ import {
   getProductUnavailableAt,
   isProductSellable,
   parseDateTimeValue,
+  resolveProductAvailabilityState,
 } from '../src/product-ordering.js';
 import {
   buildPurchaseOrder,
@@ -530,6 +531,107 @@ test('multi-sku products stay sellable while any on-sale sku has stock and use t
   assert.equal(isProductSellable(soldOutProduct), false);
   assert.equal(getProductUnavailableAt(soldOutProduct), Date.parse('2026-07-04T09:00:00'));
   assert.deepEqual([sellableProduct, soldOutProduct].sort(compareProductsForCustomer).map((product) => product.id), ['product-6', 'product-7']);
+});
+
+test('[PRODUCT-STATE-11-1] product availability resolves available sold-out and off-sale from live sku data', () => {
+  const availableProduct = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuStatus: 'ON_SALE', availableStock: 0 },
+      { skuStatus: 'ON_SALE', availableStock: 3 },
+    ],
+  };
+  const soldOutProduct = {
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuStatus: 'ON_SALE', availableStock: 0 },
+      { skuStatus: 'ON_SALE', availableStock: -2 },
+    ],
+  };
+  const offSaleProduct = {
+    productStatus: 'OFF_SALE',
+    skuList: [{ skuStatus: 'ON_SALE', availableStock: 8 }],
+  };
+
+  assert.equal(resolveProductAvailabilityState(availableProduct), 'AVAILABLE');
+  assert.equal(resolveProductAvailabilityState(soldOutProduct), 'SOLD_OUT');
+  assert.equal(resolveProductAvailabilityState(offSaleProduct), 'OFF_SALE');
+  assert.equal(resolveProductAvailabilityState({ ...offSaleProduct, skuList: [{ skuStatus: 'ON_SALE', availableStock: 0 }] }), 'OFF_SALE');
+  assert.equal(isProductSellable(availableProduct), true);
+  assert.equal(isProductSellable(soldOutProduct), false);
+});
+
+test('[PRODUCT-STATE-11-2] sku sale state deletion and invalid stock follow the fixed priority rules', () => {
+  assert.equal(resolveProductAvailabilityState({
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuStatus: 'OFF_SALE', availableStock: 9 },
+      { skuStatus: 'ON_SALE', availableStock: 4, skuIsDeleted: 1 },
+    ],
+  }), 'OFF_SALE');
+
+  for (const invalidStock of [null, undefined, '', 'not-a-number', -1]) {
+    assert.equal(resolveProductAvailabilityState({
+      productStatus: 'ON_SALE',
+      skuList: [{ skuStatus: 'ON_SALE', availableStock: invalidStock }],
+    }), 'SOLD_OUT');
+  }
+
+  assert.equal(resolveProductAvailabilityState({
+    productStatus: 'ON_SALE',
+    skuList: [
+      { skuStatus: 'ON_SALE', availableStock: 0, sku_is_deleted: 1 },
+      { skuStatus: 'ON_SALE', availableStock: 2 },
+    ],
+  }), 'AVAILABLE');
+});
+
+test('[PRODUCT-STATE-11-3] static fallback products stay available and state resolution is pure', () => {
+  const staticProduct = {
+    id: 'product-static',
+    name: '静态兜底商品',
+    price: 99,
+  };
+  const snapshot = structuredClone(staticProduct);
+
+  assert.equal(resolveProductAvailabilityState(staticProduct), 'AVAILABLE');
+  assert.equal(resolveProductAvailabilityState({ ...staticProduct, saleState: 'OFF_SALE' }), 'OFF_SALE');
+  assert.equal(resolveProductAvailabilityState({ ...staticProduct, saleState: 'SOLD_OUT' }), 'SOLD_OUT');
+  assert.deepEqual(staticProduct, snapshot);
+});
+
+test('[PRODUCT-STATE-11-4] storefront favorite and detail views share stable state stamp contracts', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const stampBody = sliceBetween(mainJs, 'function renderProductStateStamp(', 'function getProductImages(');
+  const renderProductsBody = sliceBetween(mainJs, 'function renderProducts() {', 'function updateView()');
+  const favoritesBody = sliceBetween(mainJs, 'function renderFavoritesShelf(', 'function formatCartMoney(');
+  const modalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+
+  assert.ok(mainJs.includes('resolveProductAvailabilityState'));
+  assert.ok(renderProductsBody.includes('data-product-state="${productState.domValue}"'));
+  assert.ok(renderProductsBody.includes("renderProductStateStamp(productState, 'card')"));
+  assert.ok(favoritesBody.includes('data-product-state="${productState.domValue}"'));
+  assert.ok(favoritesBody.includes("renderProductStateStamp(productState, 'favorite')"));
+  assert.ok(stampBody.includes('data-product-state-stamp'));
+  assert.match(html, /data-purchase-image-frame[\s\S]*data-product-state-stamp/);
+  assert.ok(modalBody.includes('purchaseStateStamp'));
+  assert.match(styles, /\.product-state-stamp\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?transform:\s*rotate\(-8deg\);/);
+  assert.ok(styles.includes('.product-state-stamp--sold-out'));
+  assert.ok(styles.includes('.product-state-stamp--off-sale'));
+});
+
+test('[PRODUCT-STATE-11-5] unavailable purchase controls expose state-specific accessible labels', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderProductsBody = sliceBetween(mainJs, 'function renderProducts() {', 'function updateView()');
+  const modalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
+
+  assert.ok(renderProductsBody.includes('已售罄，暂不可加入购物车'));
+  assert.ok(renderProductsBody.includes('商品已下架，暂不可购买'));
+  assert.ok(renderProductsBody.includes('data-cart-state="${isInCart ? \'active\' : \'inactive\'}"'));
+  assert.ok(modalBody.includes('productState.key !== "AVAILABLE"'));
+  assert.ok(modalBody.includes('productState.label'));
 });
 
 test('backend product queries expose inventory_updated_at from the view', () => {

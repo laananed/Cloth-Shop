@@ -2,15 +2,15 @@
 
 - 文档生成日期：2026-07-15
 - 当前分支：`master`
-- 当前 commit：`bc4b0ca`
+- 当前 commit：`e8ff137`
 - 项目技术栈：原生 HTML/CSS/JavaScript ES Module + FastAPI + PyMySQL + MySQL 8.0.28
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 共 159 项，159 项通过；`src/main.js`、`src/account-store.js`、`src/content.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
-- 文档基线：审计起始 commit 为 `bc4b0ca`（`feat: 增加立即购买买家备注`）；本文档包含当前工作区待提交的阶段 10 购物车下单与支付闭环
+- 当前自动测试结果：`npm.cmd test` 共 164 项，164 项通过；`src/main.js`、`src/account-store.js`、`src/content.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
+- 文档基线：审计起始 commit 为 `e8ff137`（`feat: 完善购物车下单与支付流程`）；本文档包含当前工作区待提交的阶段 11 商品售罄与下架状态印章
 
-> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—9 的既有验收保持不变；阶段 10 已完成 08 迁移幂等、购物车选中项备注下单、支付失败/稍后支付、桌面端/390px 浏览器和精确数据清理验收；未执行的项目会明确标注。
+> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—10 的既有验收保持不变；阶段 11 已完成商品级 `AVAILABLE` / `SOLD_OUT` / `OFF_SALE` 判定、首页/收藏夹/详情印章、操作禁用语义和桌面端/390px 浏览器验收，数据库、SQL、后端和 API 均未变化；未执行的项目会明确标注。
 
 ## 1. 项目概述
 
@@ -97,6 +97,7 @@ flowchart LR
 | 商品加载 | `index.html` 的 `data-product-grid` | `loadProductsFromApi()`、`convertApiProducts()`；真实介绍安全转义并保留换行 | `GET /products` | `v_product_detail`、`product_image` |
 | 商品搜索 | `data-product-search` | `getProductSearchText()`、`filteredProducts()` | 无；浏览器内过滤 | API 商品内存集合 |
 | 商品排序 | 商品网格 | `compareProductsForCustomer()`、`getSalesRankMap()` | 无；浏览器内排序 | `product_sales_stat` 的 API 映射 |
+| 商品可售状态与印章 | 商品卡、收藏卡、`data-purchase-image-frame` | `resolveProductAvailabilityState()`、`getProductDisplayState()`、`renderProductStateStamp()`；首页、收藏夹和详情复用同一商品级状态 | 无新增接口；复用 `GET /products` | `product.status`、`product_sku.status/is_deleted`、`inventory.available_stock` 的 API 映射 |
 | 多图预览 | 购买弹窗与 `data-image-lightbox` | `getProductImages()`、`renderImageLightbox()`、`showImageLightboxStep()` | 图片随 `GET /products` 返回 | `product_image`、兼容字段 `product.image_url` |
 | SKU 选择 | 商品卡 `data-product-sku-id`、共用弹窗 `data-purchase-sku-options` | `getSellableProductSkus()`、`resolveInitialSkuSelection()`、`selectSkuDimension()`、`setPurchaseSku()`、`setPurchaseDimension()`；商品级缓存为 `selectedSkuByProductId` | SKU 随 `GET /products` 返回 | `product_sku`、`inventory` |
 | 收藏 | 商品卡、个人中心收藏卡片、共用只读详情弹窗 | `upsertFavorite()`、`renderFavoriteProductItems()`、`renderFavoritesShelf()`、`openPurchaseModal(product, "details")` | 当前未实现收藏 API；详情只复用已加载商品数据，不发新请求 | `localStorage: blue-song-favorites` |
@@ -109,7 +110,7 @@ flowchart LR
 | 取消订单 | 待支付订单操作 | `cancelOrderFromApi()`、`handleCancelOrder()` | `POST /orders/cancel` | `order_main`、`order_status_log`、`inventory`、`inventory_log` |
 | 退款申请 | 已支付/已发货订单操作 | `refundOrderFromApi()`、`handleRefundOrder()` | `POST /orders/refund` | `order_main`、`order_status_log`；订单级请求只发送 `user_id`、`order_id`、`remark` |
 
-重要页面契约包括 `data-product-id`、`data-product-sku-id`、`data-purchase-color`、`data-purchase-size`、`data-purchase-remark-section`、`data-purchase-buyer-remark`、`data-purchase-buyer-remark-count`、`data-purchase-payment-title`、`data-purchase-address-id`、`data-cart-select-id`、`data-cart-checkout`、`data-order-detail-id`、`data-order-pay-id`、`data-order-cancel-id` 和 `data-order-refund-id`。修改标记名必须同步检查 `index.html`、`src/main.js` 与 `tests/site.test.js`。
+重要页面契约包括 `data-product-id`、`data-product-state`、`data-product-state-stamp`、`data-product-sku-id`、`data-purchase-image-frame`、`data-purchase-color`、`data-purchase-size`、`data-purchase-remark-section`、`data-purchase-buyer-remark`、`data-purchase-buyer-remark-count`、`data-purchase-payment-title`、`data-purchase-address-id`、`data-cart-select-id`、`data-cart-checkout`、`data-order-detail-id`、`data-order-pay-id`、`data-order-cancel-id` 和 `data-order-refund-id`。修改标记名必须同步检查 `index.html`、`src/main.js` 与 `tests/site.test.js`。
 
 ## 6. 后台模块
 
@@ -350,7 +351,8 @@ sequenceDiagram
     Images-->>API: 有效图片列表
     API-->>JS: 商品行 + images
     JS->>JS: convertApiProducts() 按 product_id 合并 SKU
-    JS-->>Page: 渲染商品、价格、库存、销量和多图
+    JS->>JS: resolveProductAvailabilityState() 忽略已删除 SKU 并按商品/SKU/库存判定状态
+    JS-->>Page: 渲染商品、价格、库存、销量、多图、状态印章和操作可用性
     User->>Page: 在商品卡选择 SKU 或打开购物车/立即购买弹窗
     Page->>JS: 写入 selectedSkuByProductId / openPurchaseModal()
     JS->>JS: resolveInitialSkuSelection() 校验商品、SKU、删除状态、在售状态和库存
@@ -361,6 +363,10 @@ sequenceDiagram
     Page->>JS: submitPurchaseOrder()
     JS->>JS: 购物车与直接购买复用弹窗当前精确 SKU
 ```
+
+商品级展示状态只有三种：`AVAILABLE` 表示商品在售且至少一个未删除、在售 SKU 的有效可用库存大于 0；`SOLD_OUT` 表示商品在售且存在未删除、在售 SKU，但这些 SKU 的库存均不大于 0；`OFF_SALE` 表示商品未在售，或不存在未删除、在售 SKU。优先级固定为下架高于售罄、高于可售；逻辑删除 SKU 不参与判定，缺失、非数字或负数库存按 0 处理，库存按单个 SKU 检查而不是先求和。缺少数据库状态字段的静态展示数据保持 `AVAILABLE` 兼容，但显式旧 `saleState` 的 `SOLD_OUT` / `OFF_SALE` 仍被识别。
+
+`resolveProductAvailabilityState()` 是不修改输入的纯函数，首页商品卡、实时收藏卡和购买/详情弹窗均复用它；`getProductDisplayState()` 只映射中文印章、按钮提示和 DOM 状态值。页面刷新商品数据时会按同一商品 ID 重新绑定已打开弹窗中的商品，避免状态陈旧。该状态只由现有 API 字段派生，不持久化到数据库，也不新增接口。
 
 ### 9.2 商品收藏、加入购物车与立即购买语义
 
@@ -393,9 +399,11 @@ sequenceDiagram
 
 收藏记录以商品为唯一单位，规范字段为 `id`、`productId`、`name`、`category`、`image`、`detail`、`price`、`badge`，不保存 `skuId`、`skuName`、颜色或尺码。读取 `blue-song-favorites` 时，`normalizeProductFavorites()` 优先使用当前商品数据补齐展示字段；同一商品的旧 SKU 记录会合并为一条并立即写回。只有稳定 `id` 的遗留记录也会剥离 `-sku-*` 后缀后保留；无法形成稳定商品标识的损坏项被单独忽略，不影响其他收藏；重复读取幂等。收藏按钮不受商品/SKU 可售状态限制，但逻辑删除且未出现在 `GET /products` 的商品没有入口。
 
-阶段 7 的收藏夹通过 `renderFavoriteProductItems()` 将本地收藏快照与本轮成功返回的 `GET /products` 商品合并。存在实时商品时，以实时名称、分类、价格、介绍、图片、在售状态和多图列表为准；API 尚未成功加载或商品已不在实时列表时，只展示本地快照，并将详情入口禁用为“商品暂不可用”。静态商品视觉兜底不被视为实时商品数据，因此不会误开详情。收藏卡片只展示商品级信息，不渲染 SKU、颜色或尺码。
+阶段 7 的收藏夹通过 `renderFavoriteProductItems()` 将本地收藏快照与本轮成功返回的 `GET /products` 商品合并。存在实时商品时，以实时名称、分类、价格、介绍、图片、在售状态和多图列表为准，并使用同一状态解析器显示“已售罄”或“已下架”印章；API 尚未成功加载或商品已不在实时列表时，只展示本地快照，并将详情入口禁用为“商品暂不可用”，不会把“实时商品缺失”误标为“已下架”。静态商品视觉兜底不被视为实时商品数据，因此不会误开详情。收藏卡片只展示商品级信息，不渲染 SKU、颜色或尺码。
 
-“查看详情”和收藏图片入口复用购买弹窗的 `details` 模式，只读展示完整介绍、价格、销量、销售状态、SKU 概要和已有图片画廊；地址、SKU 选择、数量、支付、合计、提交按钮和操作反馈均隐藏。该模式不调用 SKU 初选、不改写 `selectedSkuByProductId`、不加载地址、不写购物车/订单，也不触发新的商品请求。详情弹窗可在收藏侧栏之上关闭；图片灯箱打开时，第一次 `Esc` 只关闭灯箱，第二次再关闭详情，收藏侧栏保持打开。
+“查看详情”和收藏图片入口复用购买弹窗的 `details` 模式，只读展示完整介绍、价格、销量、销售状态、SKU 概要、主图状态印章和已有图片画廊；地址、SKU 选择、数量、支付、合计、提交按钮和操作反馈均隐藏。该模式不调用 SKU 初选、不改写 `selectedSkuByProductId`、不加载地址、不写购物车/订单，也不触发新的商品请求。详情弹窗可在收藏侧栏之上关闭；图片灯箱打开时，第一次 `Esc` 只关闭灯箱，第二次再关闭详情，收藏侧栏保持打开。
+
+首页商品卡、收藏卡和详情主图仅在不可售时渲染印章，可售状态不留空白节点；印章不接管指针事件，原有图片灯箱入口保持可用。售罄与下架商品的加入购物车、立即购买按钮都保持禁用，并提供区分状态的按钮文字与 `aria-label`；既有 `data-cart-state` 仍用于购物车数据状态，禁用视觉继续优先。
 
 阶段 8 的商品卡状态与导航徽章全部从现有权威数据派生。收藏爱心读取规范化后的商品级 `blue-song-favorites`，已收藏时使用 `is-favorited`、`data-favorite-state="active"`、`aria-pressed="true"` 和红色填充；购物车图标读取数据库购物车回写快照，只要同一商品任意 SKU 行数量大于 0 就使用 `is-in-cart`、`data-cart-state="active"` 和暖黄色强调，无效或下架行仍计入“已在购物车”，但按钮禁用视觉优先。收藏徽章按规范化后的唯一商品数计算，购物车徽章按所有有效或无效购物车行的非负整数 `quantity` 求和；0 隐藏、1—99 显示真实数字、100 以上显示 `99+`，对应导航按钮的 `aria-label` 始终保留真实总数。
 
@@ -628,23 +636,24 @@ sequenceDiagram
 | 阶段 8 状态与徽章浏览器验收 | 收藏红色填充、取消与收藏夹移除同步、刷新恢复、数据库购物车商品级黄色状态、禁用状态优先、收藏/购物车徽章和真实 ARIA 总数通过；真实购物车总量 16→17→16 并恢复，390px 页面与侧栏无横向溢出，控制台 0 error；未创建订单、未改商品/SKU/库存 |
 | 阶段 9 买家备注迁移/API/浏览器验收 | `07` 连续执行 2 次成功；500 字通过、501 字返回 422；订单 73 的创建响应、数据库、用户/管理员列表与详情均保留中文多行备注，取消后库存 43/1→44/0；订单 74 在用户/管理员详情中换行展示；桌面和 390px 无横向溢出、切换 SKU/数量/地址/支付/图片仍保留、关闭重开清空、购物车/详情模式隐藏，控制台 0 error。订单 71—74 及关联记录已精确清理，最终业务计数和 SKU 9 库存恢复到验证前 |
 | 阶段 10 购物车下单/API/浏览器验收 | `08` 连续执行 2 次成功，新旧选中项过程共存且业务表计数不变；缺失/空/500 字备注通过模型，501 字和空 ID 列表返回 422，非法/跨用户 ID 返回 400，重复 ID 仅生成 1 条明细。API 订单 75 和浏览器订单 76、77 均为待支付，错误密码不重建订单，稍后支付保留购买记录和多行备注；桌面与 390px 无横向溢出，错误密码界面可重试且复测标签页控制台 0 error。所有测试订单、购物车项和关联记录已精确清理，SKU 9 库存恢复 44/0，销量和原购物车快照不变。真实支付成功未执行；未做并发/故障注入。 |
+| 阶段 11 商品状态印章浏览器验收 | 当前真实商品数据在桌面端呈现 26 个可售、3 个售罄、5 个下架商品；首页、实时收藏卡和详情主图的印章、按钮禁用文案/ARIA、多图灯箱、两级 Esc、390px 无横向溢出均通过，控制台 0 error。临时收藏的售罄、下架、可售商品均已移除并恢复原状态；未写购物车、订单、商品、SKU、库存或数据库。实时商品缺失的历史收藏快照未通过浏览器伪造，仅由自动测试覆盖。 |
 | 浏览器自动操作新增商品 SKU 表单 | 2 色×3 尺码生成 6 行且均为 50；人工改为 35 后新增尺码，旧值保留、新行 50；库存可改为 0；未提交商品，控制台 0 错误 |
 | 浏览器自动操作统一图片管理弹窗 | 34 张商品卡各只有一个“管理图片”入口；旧入口为 0；弹窗商品/图片/主图/空上传状态正确；关闭后切换商品无状态串用；1280px 与 390px 均无横向溢出；控制台 0 错误；未真实上传或删除 |
 
 ### 已覆盖模块
 
 - 直接执行 `content.js`、`ranking.js`、`product-ordering.js`、`account-store.js`、`sku-utils.js` 的纯函数行为。
-- 覆盖销量排名、可售优先排序、地址迁移/本地存储、商品级收藏规范化/去重/幂等迁移/切换、收藏唯一商品计数、购物车商品级聚合、购物车非负整数总件数、`99+` 格式化、图标/徽章 DOM 与统一刷新契约、收藏卡片实时数据优先/快照兜底/不可用状态、详情模式控件隔离与 SKU 缓存保护、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用、有效/失效显式 SKU 恢复、唯一可售 SKU 自动选择、多 SKU 未选、商品级缓存同步和 ES Module 缓存版本契约，以及后台图片唯一入口、商品介绍迁移/接口/安全展示/编辑弹窗契约。
+- 覆盖销量排名、可售优先排序、商品状态三态矩阵/优先级/混合 SKU/逻辑删除/异常库存/静态兼容/纯函数不变性、首页/收藏/详情共享印章与按钮 ARIA 契约、地址迁移/本地存储、商品级收藏规范化/去重/幂等迁移/切换、收藏唯一商品计数、购物车商品级聚合、购物车非负整数总件数、`99+` 格式化、图标/徽章 DOM 与统一刷新契约、收藏卡片实时数据优先/快照兜底/不可用状态、详情模式控件隔离与 SKU 缓存保护、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用、有效/失效显式 SKU 恢复、唯一可售 SKU 自动选择、多 SKU 未选、商品级缓存同步和 ES Module 缓存版本契约，以及后台图片唯一入口、商品介绍迁移/接口/安全展示/编辑弹窗契约。
 - 读取 `index.html`、`admin.html`、`src/main.js`、`src/styles.css`、后端 Python、SQL、README 和启动脚本，断言路由字符串、`data-*` 钩子、字段、CORS、端口、图片、认证、订单、买家备注和 SKU 结构。
 
-159 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
+164 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
 
 ### 尚未覆盖或本轮未执行
 
 - **自动化 HTTP 冒烟测试**：尚未纳入常驻测试套件；阶段 4 使用本地临时脚本覆盖商品介绍状态矩阵并在结束后恢复数据。
 - **真实 API 测试范围**：商品介绍与阶段 9 立即购买既有覆盖保持不变；阶段 10 覆盖购物车备注 500/501 字、空/非法/跨用户/重复 ID、选中项创建、错误密码、取消、备注持久化、未选项保留和精确恢复；尚未覆盖令牌过期、数据库故障注入和所有接口的完整状态矩阵。
 - **真实数据库测试**：阶段 4 与阶段 9 既有覆盖保持不变；阶段 10 已验证 08 双次执行、新旧过程共存、同事务写备注、库存锁定/释放、重复 ID 去重和测试数据精确恢复；未执行故障注入回滚或并发压力测试。
-- **浏览器测试**：测试套件未内置浏览器框架；阶段 4—9 的既有浏览器回归保持不变。阶段 10 已覆盖购物车无选择禁用、有效/无效项、地址/备注/数量重绘保留、下单后支付步骤、错误密码重试、稍后支付、购买记录备注、桌面/390px 和无横向溢出，复测标签页控制台 0 error；测试订单和购物车项已精确清理。
+- **浏览器测试**：测试套件未内置浏览器框架；阶段 4—10 的既有浏览器回归保持不变。阶段 11 已覆盖真实可售/售罄/下架商品的首页、收藏卡、详情主图、禁用按钮语义、图片灯箱、桌面/390px 和无横向溢出，控制台 0 error；临时收藏已恢复，未产生交易或数据库写入。实时商品缺失的收藏快照未在浏览器中伪造，由自动测试覆盖。
 - **退款回归**：已覆盖请求模型字段、退款路由不读取 SKU 字段、不调用购买校验、订单归属锁、允许状态、状态更新、提交/回滚、业务错误保留以及前端订单级请求体。
 
 ## 13. 本地启动流程
@@ -684,6 +693,7 @@ sequenceDiagram
 - **商品级收藏与操作语义**：收藏按钮直接切换商品级 localStorage 记录，不要求 SKU、数量、地址或支付方式，不自动打开弹窗/侧栏；旧 SKU 收藏自动去重迁移，商品卡 ARIA 状态、刷新恢复和收藏夹删除同步完成。购物车仍使用精确 `sku_id` 与现有弹窗，成功或失败均不自动打开侧栏；立即购买和支付/订单侧栏行为不变。数据库、SQL 与后端接口无变化。
 - **收藏夹卡片与只读详情**：收藏侧栏展示主图、商品名、分类、介绍摘要、价格、图片提示和详情/删除操作；实时商品详情可查看完整介绍、销售状态、SKU 概要与多图灯箱，下架商品仍可只读查看。历史快照在无实时商品时保留并禁用详情；详情不触发请求、不选择 SKU、不修改购物车/订单，关闭后收藏侧栏保持原位。数据库、SQL 与后端接口无变化。
 - **收藏/购物车状态与导航徽章**：商品级收藏爱心使用红色填充和稳定的 class/data/ARIA 状态；商品任意 SKU 存在于数据库购物车时，商品卡购物车图标按商品级聚合显示暖黄色，禁用商品仍保留数据状态并优先呈现不可操作视觉。收藏徽章按唯一商品数、购物车徽章按全部购物车行 `quantity` 总和计算，0 隐藏、100 以上显示 `99+`，初始化、收藏变更、加购、改量、删除和结算后的数据库回读均统一刷新；后端同步失败保留缓存。数据库、SQL、后端和 API 无变化。
+- **商品售罄与下架状态印章**：纯函数按商品状态、未删除在售 SKU 和单 SKU 可用库存派生 `AVAILABLE` / `SOLD_OUT` / `OFF_SALE`；首页、实时收藏卡和详情主图统一展示售罄/下架印章，可售商品不显示印章，不可售操作保留区分状态的禁用文案与 ARIA，多图灯箱交互不受影响。数据库、SQL、后端和 API 无变化。
 - **多图片**：多图上传、数据库图片列表、主图兼容、前台缩略图/大图和逻辑删除链路齐全；后台商品卡只保留“管理图片”入口，统一弹窗承担已有图片查看、新图片选择与本地预览、单项移除、清空、确认上传和删除。
 - **购物车与下单**：数据库购物车增删改、有效项勾选/全选、地址、内存备注、选中项下单、待支付订单、选择支付方式、密码支付/失败重试、稍后支付和库存锁定/释放链路齐全；创建订单与支付是两个独立请求，未选项继续留在购物车。
 - **立即购买买家备注**：仅立即购买弹窗可选填最多 500 字备注，切换规格等操作保留、关闭或订单创建成功后清空；后端归一化并由兼容存储过程同事务落库，用户端和管理端订单列表/详情统一透传和展示，购物车结算不受影响。
@@ -691,7 +701,7 @@ sequenceDiagram
 - **销量**：支付累计、退款回滚和后台统计代码链路齐全。
 - **退款申请与审核**：订单级申请、归属与状态校验、`REFUND_REQUESTED` 状态日志、重复申请拦截、后台同意/拒绝及退款一致性处理链路齐全；本轮已用专用订单完成真实 MySQL/API 的支付后申请与管理员同意验证。
 
-以上结论来自当前代码、SQL、自动测试及定向运行验证；阶段 10 购物车下单已完成真实数据库、API、用户浏览器和数据清理验收，阶段 4—9 与退款的既有验收记录保持不变，其他浏览器交互仍未完整验收。
+以上结论来自当前代码、SQL、自动测试及定向运行验证；阶段 10 购物车下单已完成真实数据库、API、用户浏览器和数据清理验收，阶段 11 商品状态印章已完成真实 API 数据下的桌面与 390px 浏览器验收，阶段 4—9 与退款的既有验收记录保持不变，其他浏览器交互仍未完整验收。
 
 ### 基本完成但需要真实业务验收
 
@@ -710,7 +720,8 @@ sequenceDiagram
 - 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；阶段 9/10 的真实数据库和浏览器验证使用定向临时验收，测试订单均已清理。
 - `04` 只有固定规模测试数据，不是大量销售、压力或容量测试数据。
 - 当前仓库没有完成可直接交付的课程报告、PPT 和讲解视频闭环。
-- 阶段 11 功能尚未实现；本轮未扩展支付方式、支付网关、订单合并、管理员备注编辑或跨设备购物车备注草稿。
+- 阶段 12 的图片预览增强尚未实现：灯箱左右切换箭头、透明背景图片显示优化和进一步的图片预览细节仍待后续阶段处理。
+- 商品分类管理、标签管理/批量标签、管理员运行时操作日志等扩展功能仍未实现；本轮也未扩展支付方式、支付网关、订单合并、管理员备注编辑或跨设备购物车备注草稿。
 
 ### 可以延后优化
 

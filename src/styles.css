@@ -22,6 +22,308 @@
   box-sizing: border-box;
 }
 
+/* 商品标签：前台筛选、商品快照和后台单商品维护共用轻量标签语义。 */
+.product-tag-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.product-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid rgba(92, 116, 162, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--ink, #24304a);
+  cursor: pointer;
+}
+
+.product-tag-chip small {
+  color: var(--muted, #6f7890);
+}
+
+.product-tag-chip.is-active {
+  border-color: rgba(69, 103, 174, 0.62);
+  background: rgba(92, 130, 207, 0.16);
+}
+
+.product-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+}
+
+.product-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 12rem;
+  padding: 0.22rem 0.58rem;
+  overflow: hidden;
+  border: 1px solid rgba(88, 111, 158, 0.2);
+  border-radius: 999px;
+  background: rgba(242, 247, 255, 0.9);
+  color: #40577d;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-tag--overflow {
+  background: rgba(235, 239, 248, 0.92);
+  color: #6b7488;
+}
+
+.section--compact {
+  padding-top: 0;
+  padding-bottom: 1.5rem;
+}
+
+.section__header--compact {
+  margin-bottom: 0.8rem;
+}
+
+.admin-tag-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.admin-tag-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.55fr) minmax(160px, 1.25fr) minmax(110px, 0.7fr) minmax(170px, 1fr) minmax(90px, 0.55fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid rgba(89, 111, 154, 0.18);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.admin-tag-row.is-deleted {
+  opacity: 0.7;
+}
+
+.admin-tag-row__meta,
+.admin-tag-row__field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.admin-tag-row__meta span,
+.admin-tag-row__field span,
+.admin-tag-row__hint {
+  color: var(--muted, #6f7890);
+  font-size: 0.78rem;
+}
+
+.admin-tag-row__field input {
+  width: 100%;
+  min-height: 2.35rem;
+}
+
+.admin-tag-row__actions,
+.admin-product-tags__actions,
+.admin-product-tags__header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.admin-tag-row__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.admin-product-tag-picker,
+.admin-product-tags {
+  padding: 0.9rem;
+  border: 1px solid rgba(89, 111, 154, 0.18);
+  border-radius: 0.9rem;
+}
+
+.admin-product-tags {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.85rem 0;
+}
+
+.admin-product-tags__header,
+.admin-product-tags__actions {
+  justify-content: space-between;
+}
+
+.admin-product-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.admin-product-tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.62rem;
+  border: 1px solid rgba(89, 111, 154, 0.2);
+  border-radius: 999px;
+  background: rgba(248, 250, 255, 0.92);
+  cursor: pointer;
+}
+
+.admin-product-tag-option:has(input:checked) {
+  border-color: rgba(69, 103, 174, 0.58);
+  background: rgba(92, 130, 207, 0.14);
+}
+
+.admin-product-batch-toolbar {
+  position: sticky;
+  top: 12px;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(170px, 0.55fr) minmax(280px, 1.5fr) auto;
+  gap: 0.85rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid rgba(69, 103, 174, 0.25);
+  border-radius: 1rem;
+  background: rgba(248, 251, 255, 0.97);
+  box-shadow: 0 16px 38px rgba(57, 102, 146, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.admin-product-batch-toolbar__summary,
+.admin-product-batch-toolbar__operation,
+.admin-product-batch-toolbar__tags,
+.admin-product-batch-toolbar__actions {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.admin-product-batch-toolbar__summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.admin-product-batch-toolbar__summary > strong {
+  text-align: right;
+}
+
+.admin-product-batch-toolbar__summary > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.admin-product-batch-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-product-row__batch-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-product-batch-selector input,
+.admin-product-row__batch-selector input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--accent-strong);
+}
+
+.admin-product-batch-toolbar__operation select {
+  width: 100%;
+  min-height: 2.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(89, 111, 154, 0.25);
+  border-radius: 0.7rem;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.admin-product-batch-toolbar__tags {
+  margin: 0;
+  padding: 0.7rem;
+  border: 1px solid rgba(89, 111, 154, 0.18);
+  border-radius: 0.8rem;
+}
+
+.admin-product-batch-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.admin-product-batch-toolbar__actions .admin-submit {
+  width: auto;
+  white-space: nowrap;
+}
+
+.admin-product-batch-toolbar__feedback {
+  grid-column: 1 / -1;
+}
+
+.admin-product-row__batch-selector {
+  align-self: start;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(89, 111, 154, 0.2);
+  border-radius: 0.75rem;
+  background: rgba(248, 251, 255, 0.9);
+}
+
+@media (max-width: 720px) {
+  .admin-product-batch-toolbar {
+    position: static;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .admin-product-batch-toolbar__summary {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-product-batch-toolbar__summary > strong {
+    text-align: left;
+  }
+
+  .admin-product-batch-toolbar__summary > button,
+  .admin-product-batch-toolbar__actions .admin-submit {
+    width: 100%;
+  }
+
+  .admin-tag-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .admin-tag-row__actions,
+  .admin-product-tags__actions,
+  .admin-product-tags__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .product-tag-rail {
+    flex-wrap: nowrap;
+    padding-bottom: 0.4rem;
+    overflow-x: auto;
+  }
+}
+
 [hidden] {
   display: none !important;
 }

@@ -1,20 +1,20 @@
 # Cloth-Shop 当前项目架构
 
 - 文档生成日期：2026-07-15
-- 当前分支：`master`
-- 当前 commit：`8940661`
+- 当前分支：`Cloth-Shop-tags`
+- 当前 commit：`f36127ec9080baf15288617652126ddf6c6dafb2`（阶段 15 开始时的审计基线）
 - 项目技术栈：原生 HTML/CSS/JavaScript ES Module + FastAPI + PyMySQL + MySQL 8.0.28
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 共 182 项，182 项通过；`src/main.js`、`src/category-utils.js`、`src/image-lightbox.js`、`src/account-store.js`、`src/content.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
-- 文档基线：审计起始 commit 为 `8940661`（`feat: 优化商品图片大图预览体验`）；本文档包含当前工作区待提交的阶段 13 商品分类管理闭环
+- 当前自动测试结果：`npm.cmd test` 共 203 项，203 项通过；`src/main.js`、`src/category-utils.js`、`src/tag-utils.js`、`src/image-lightbox.js`、`src/account-store.js`、`src/content.js`、`src/sku-utils.js`、`src/product-ordering.js`、`src/ranking.js` 语法检查和后端 Python 编译检查均通过
+- 文档基线：审计起始 commit 为 `f36127e`；本文档包含当前工作区待提交的阶段 15 商品标签批量管理闭环，不填写未来 commit
 
-> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—12 的既有验收保持不变；阶段 13 复用现有 `category` 表完成前台动态分类导航、后台分类增删改查/恢复、商品分类调整和新增商品分类选择，并完成真实 MySQL、API、桌面端与 390px 浏览器验收；未执行的项目会明确标注。
+> 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—14 的既有验收保持不变；阶段 15 在相同标签工作线上增加 1～100 商品的原子批量 ADD/REMOVE/REPLACE/CLEAR、后台多选与当前列表全选，并完成真实 MySQL、API、桌面端与 390px 浏览器定向验收；未执行的项目会明确标注。
 
 ## 1. 项目概述
 
-Cloth-Shop 是一个服装商城与进销存管理课程设计。前台承担商品浏览、分类筛选、SKU 选择、收藏、购物车、地址、下单、支付和订单记录；后台承担管理员认证、分类、商品/SKU/图片/库存、订单发货、退款审核和销量统计。FastAPI 提供 HTTP 接口、鉴权、文件上传与事务编排，PyMySQL 连接 MySQL；MySQL 保存分类、商品、库存、订单、支付、日志和销量，并通过视图、存储过程、触发器维护主要业务一致性。
+Cloth-Shop 是一个服装商城与进销存管理课程设计。前台承担商品浏览、分类/标签筛选、SKU 选择、收藏、购物车、地址、下单、支付和订单记录；后台承担管理员认证、分类、标签、商品/SKU/图片/库存、订单发货、退款审核和销量统计。FastAPI 提供 HTTP 接口、鉴权、文件上传与事务编排，PyMySQL 连接 MySQL；MySQL 保存分类、标签、商品、库存、订单、支付、日志和销量，并通过视图、存储过程、触发器维护主要业务一致性。
 
 ## 2. 核心技术栈
 
@@ -38,6 +38,7 @@ Cloth-Shop/
 ├─ src/
 │  ├─ main.js                         # 前后台共享入口；DOM、状态、API 与图片待上传预览等主要业务交互
 │  ├─ category-utils.js               # API/静态分类规范化、排序、稳定键与商品分类筛选纯函数
+│  ├─ tag-utils.js                    # 标签规范化/筛选与后台批量商品选择纯函数
 │  ├─ image-lightbox.js               # 前台大图列表规范化、索引解析、循环切换与初始状态纯函数
 │  ├─ styles.css                      # 前后台共用样式和响应式规则
 │  ├─ content.js                      # 静态文案、分类、17 个展示商品和旧 mock 种子
@@ -60,8 +61,10 @@ Cloth-Shop/
 │  ├─ 05_账号与支付密码初始化.sql     # 支付密码字段/测试用户与管理员初始化
 │  ├─ 06_商品描述增量迁移.sql         # product.description 与商品详情视图增量
 │  ├─ 07_订单买家备注增量迁移.sql     # order_main.buyer_remark、订单视图与立即购买兼容过程
-│  └─ 08_购物车选中项备注下单增量迁移.sql # 购物车选中项备注下单兼容过程
-├─ tests/site.test.js                 # 182 项 Node.js 行为与源码结构测试
+│  ├─ 08_购物车选中项备注下单增量迁移.sql # 购物车选中项备注下单兼容过程
+│  └─ 09_商品多标签增量迁移.sql       # tag 与 product_tag 多标签关系表、索引和外键
+├─ tests/site.test.js                 # 203 项 Node.js 行为、Python 事务替身与源码结构测试入口
+├─ tests/product_tags_batch_unit.py   # 批量标签权限、提交、回滚、响应与原子错误行为测试
 ├─ start_dev.ps1                      # 双服务启动、端口等待和浏览器打开逻辑
 ├─ start_dev.bat                      # Windows 一键启动入口
 ├─ package.json                       # `node --test tests/site.test.js`
@@ -96,14 +99,15 @@ flowchart LR
 
 | 模块 | 页面入口 | JavaScript 核心函数/模块 | API | 数据库对象 |
 |---|---|---|---|---|
-| 商品加载 | `index.html` 的 `data-product-grid` | `loadProductsFromApi()`、`convertApiProducts()`；真实介绍安全转义并保留换行 | `GET /products` | `v_product_detail`、`product_image` |
+| 商品加载 | `index.html` 的 `data-product-grid` | `loadProductsFromApi()`、`convertApiProducts()`；真实介绍安全转义并保留换行，响应中的 `tags` 规范化到商品 | `GET /products` | `v_product_detail`、`product_image`、`product_tag`、`tag` |
 | 分类导航 | `data-collection` 分类按钮 | `loadStorefrontCategories()`、`renderStorefrontCategories()` 与 `category-utils.js`；API 失败时按商品/静态分类兜底，稳定键为 `category:{id}` | `GET /categories` | `category`、`product` |
-| 商品搜索 | `data-product-search` | `getProductSearchText()`、`filteredProducts()` | 无；浏览器内过滤 | API 商品内存集合 |
+| 标签导航 | `data-product-tag-rail` 标签按钮 | `loadStorefrontTags()`、`renderStorefrontTags()` 与 `tag-utils.js`；API 失败时按商品/静态促销徽章兜底，稳定键为 `tag:{id}` | `GET /tags` | `tag`、`product_tag`、`product` |
+| 商品搜索 | `data-product-search` | `getProductSearchText()`、`filteredProducts()`；商品名、分类、介绍、SKU 和标签名共同参与，并与分类/标签同时生效 | 无；浏览器内过滤 | API 商品内存集合 |
 | 商品排序 | 商品网格 | `compareProductsForCustomer()`、`getSalesRankMap()` | 无；浏览器内排序 | `product_sales_stat` 的 API 映射 |
 | 商品可售状态与印章 | 商品卡、收藏卡、`data-purchase-image-frame` | `resolveProductAvailabilityState()`、`getProductDisplayState()`、`renderProductStateStamp()`；首页、收藏夹和详情复用同一商品级状态 | 无新增接口；复用 `GET /products` | `product.status`、`product_sku.status/is_deleted`、`inventory.available_stock` 的 API 映射 |
 | 统一商品大图预览 | 商品详情/收藏详情共用弹窗的主图、当前缩略图与 `data-image-lightbox` | `image-lightbox.js` 的 `normalizeLightboxImages()`、`resolveLightboxIndex()`、`wrapLightboxIndex()`、`createImageLightboxState()`；`main.js` 的 `openImageLightbox()`、`renderImageLightbox()`、`showImageLightboxStep()` | 图片随 `GET /products` 返回；无新增请求 | `product_image`、兼容字段 `product.image_url` |
 | SKU 选择 | 商品卡 `data-product-sku-id`、共用弹窗 `data-purchase-sku-options` | `getSellableProductSkus()`、`resolveInitialSkuSelection()`、`selectSkuDimension()`、`setPurchaseSku()`、`setPurchaseDimension()`；商品级缓存为 `selectedSkuByProductId` | SKU 随 `GET /products` 返回 | `product_sku`、`inventory` |
-| 收藏 | 商品卡、个人中心收藏卡片、共用只读详情弹窗 | `upsertFavorite()`、`renderFavoriteProductItems()`、`renderFavoritesShelf()`、`openPurchaseModal(product, "details")` | 当前未实现收藏 API；详情只复用已加载商品数据，不发新请求 | `localStorage: blue-song-favorites` |
+| 收藏 | 商品卡、个人中心收藏卡片、共用只读详情弹窗 | `upsertFavorite()`、`renderFavoriteProductItems()`、`renderFavoritesShelf()`、`openPurchaseModal(product, "details")`；新快照保存标签，实时商品标签保持权威 | 当前未实现收藏 API；详情只复用已加载商品数据，不发新请求 | `localStorage: blue-song-favorites` |
 | 加入购物车 | 共用购买弹窗 | `addCartToApi()`、`syncCartFromApi()` | `POST /cart/add`、`GET /cart/{user_id}` | `cart`、`cart_item`、`product_sku`、`inventory` |
 | 购物车结算 | 个人中心购物车 | `cartCheckoutState`、`submitCartCheckout()`、`submitCreatedCartOrderPayment()`；勾选、地址、备注、下单、支付和稍后支付分步处理 | `POST /orders/from-cart-selected` 后按需调用 `POST /orders/pay` | `cart_item`、`order_main.buyer_remark`、`order_item`、`inventory`、`inventory_log`、`payment_record` |
 | 直接购买 | 共用购买弹窗；仅立即购买显示备注输入 | `createDirectOrderFromApi()`、`submitPurchaseOrder()`；备注在 SKU/数量/图片切换时保留，关闭或创建成功后清空 | `POST /orders/direct` 的可选 `buyer_remark` | `order_main.buyer_remark`、`order_item`、`inventory`、`inventory_log` |
@@ -113,7 +117,7 @@ flowchart LR
 | 取消订单 | 待支付订单操作 | `cancelOrderFromApi()`、`handleCancelOrder()` | `POST /orders/cancel` | `order_main`、`order_status_log`、`inventory`、`inventory_log` |
 | 退款申请 | 已支付/已发货订单操作 | `refundOrderFromApi()`、`handleRefundOrder()` | `POST /orders/refund` | `order_main`、`order_status_log`；订单级请求只发送 `user_id`、`order_id`、`remark` |
 
-重要页面契约包括 `data-product-id`、`data-product-state`、`data-product-state-stamp`、`data-product-sku-id`、`data-purchase-image-frame`、`data-purchase-color`、`data-purchase-size`、`data-purchase-remark-section`、`data-purchase-buyer-remark`、`data-purchase-buyer-remark-count`、`data-purchase-payment-title`、`data-purchase-address-id`、`data-cart-select-id`、`data-cart-checkout`、`data-order-detail-id`、`data-order-pay-id`、`data-order-cancel-id` 和 `data-order-refund-id`。修改标记名必须同步检查 `index.html`、`src/main.js` 与 `tests/site.test.js`。
+重要页面契约包括 `data-product-id`、`data-product-tag-rail`、`data-product-tag`、`data-product-state`、`data-product-state-stamp`、`data-product-sku-id`、`data-purchase-image-frame`、`data-purchase-tags`、`data-purchase-color`、`data-purchase-size`、`data-purchase-remark-section`、`data-purchase-buyer-remark`、`data-purchase-buyer-remark-count`、`data-purchase-payment-title`、`data-purchase-address-id`、`data-cart-select-id`、`data-cart-checkout`、`data-order-detail-id`、`data-order-pay-id`、`data-order-cancel-id` 和 `data-order-refund-id`。修改标记名必须同步检查 `index.html`、`src/main.js` 与 `tests/site.test.js`。
 
 ## 6. 后台模块
 
@@ -124,7 +128,10 @@ flowchart LR
 | 商品搜索和筛选 | 商品管理面板 | `getFilteredAdminProductRows()`、后台 `renderProducts()` | 无新增请求；内存过滤 | `GET /admin/inventory` 已加载结果 |
 | 分类管理 | `data-admin-panel="categories"` | `loadAdminCategoriesFromApi()`、`renderAdminCategories()`、新增/保存/删除/恢复处理；按全部/使用中/已删除筛选 | `GET/POST/PATCH/DELETE /admin/categories...` | `category`、`product` |
 | 调整商品分类 | 商品管理卡片分类选择器 | `updateAdminProductCategoryToApi()` | `PATCH /admin/products/{product_id}/category` | `product.category_id`、`category` |
-| 新增商品 | `data-admin-product-form` | `buildSkuMatrix()`、`createAdminProductToApi()`；选择现有有效 `category_id`，提交最多 1000 字普通文本介绍，新生成 SKU 默认库存 50 | `POST /products` | `category`、`product.description`、`product_sku`、`inventory`、`product_sales_stat`、`product_image` |
+| 标签管理 | `data-admin-panel="tags"` | `loadAdminTagsFromApi()`、`renderAdminTags()`、新增/保存/删除/恢复处理；按全部/使用中/已删除筛选 | `GET/POST/PATCH/DELETE /admin/tags...` | `tag`、`product_tag`、`product` |
+| 调整商品标签 | 商品管理卡片标签复选集合 | `updateAdminProductTagsToApi()`；完整替换、去重且最多 5 个 | `PATCH /admin/products/{product_id}/tags` | `product_tag`、`tag`、`product` |
+| 批量调整商品标签 | `data-admin-product-batch-toolbar` 与商品卡批量复选框 | `adminProductTagBatchState`、`tag-utils.js` 选择纯函数、`updateAdminProductTagsBatchToApi()`；当前筛选列表最多选择 100 个商品 | `PATCH /admin/products/tags/batch` | `product`、`tag`、`product_tag` |
+| 新增商品 | `data-admin-product-form` | `buildSkuMatrix()`、`createAdminProductToApi()`；选择现有有效 `category_id` 和最多 5 个 `tag_ids_json`，提交最多 1000 字普通文本介绍，新生成 SKU 默认库存 50 | `POST /products` | `category`、`tag`、`product_tag`、`product.description`、`product_sku`、`inventory`、`product_sales_stat`、`product_image` |
 | 编辑或清空商品介绍 | 商品卡“编辑介绍”与 `data-admin-description-editor` | `updateAdminProductDescriptionToApi()`、`refreshAdminProductsFromApi()` | `PATCH /admin/products/{product_id}/description` | `product.description` |
 | SKU 管理 | `data-admin-sku-manager` | `loadAdminProductSkusToApi()`、`createAdminProductSkusToApi()`、`updateAdminProductSkuToApi()`、`deleteAdminProductSkuToApi()` | `GET/POST /admin/products/{product_id}/skus`、`PATCH/DELETE /admin/products/{product_id}/skus/{sku_id}` | `product_sku`、`inventory`、`product_sales_stat` |
 | 库存更新 | 商品卡和 SKU 管理器 | `updateAdminSkuStockToApi()` | `POST /admin/inventory/update-stock` | `inventory` |
@@ -137,7 +144,7 @@ flowchart LR
 | 销量统计 | 销量统计面板 | `refreshAdminStatsFromApi()`、`convertApiStatsToRenderedStats()` | `GET /admin/stats` | `order_main`、`order_item`、`product`、`v_product_sales_rank` |
 | 操作日志现状 | 当前无独立页面 | 订单详情只展示状态日志和库存流水 | 当前无 `operation_log` API | `operation_log` 仅有 SQL 测试数据，运行时未读写 |
 
-后台导航当前有订单查看、商品管理、分类管理、新增商品、销量统计五项。商品接口失败且不是 401/403 时，前端仍可能回退到 `localStorage` 的 mock 商品，这是数据库权威数据源方向下需要收敛的兼容逻辑。
+后台导航当前有订单查看、商品管理、分类管理、标签管理、新增商品、销量统计六项。商品接口失败且不是 401/403 时，前端仍可能回退到 `localStorage` 的 mock 商品，这是数据库权威数据源方向下需要收敛的兼容逻辑。
 
 ## 7. 后端 API 结构
 
@@ -145,8 +152,8 @@ flowchart LR
 
 | 方法 | 路径 | 作用 | 权限 | 主要数据库对象 |
 |---|---|---|---|---|
-| GET | `/products` | 查询商品介绍、结构化 SKU、库存、销量和图片 | 公开 | `v_product_detail`、`product_image` |
-| POST | `/products` | multipart 新增商品；优先校验现有有效 `category_id`，兼容旧 `category_name` 仅查找且不会自动创建/恢复分类 | 管理员 Bearer 令牌 | `category`、`product`、`product_sku`、`inventory`、`product_sales_stat`、`product_image` |
+| GET | `/products` | 查询商品介绍、结构化 SKU、库存、销量、图片和有效标签数组 | 公开 | `v_product_detail`、`product_image`、`product_tag`、`tag` |
+| POST | `/products` | multipart 新增商品；校验有效 `category_id` 与可选 `tag_ids_json`（去重、最多 5 个），在同一事务写商品、SKU、库存、图片和标签关联 | 管理员 Bearer 令牌 | `category`、`tag`、`product_tag`、`product`、`product_sku`、`inventory`、`product_sales_stat`、`product_image` |
 | PATCH | `/admin/products/{product_id}/category` | 锁定有效商品和分类后只更新 `product.category_id`；同分类重复提交幂等 | 管理员 Bearer 令牌 | `product`、`category` |
 | PATCH | `/admin/products/{product_id}/description` | 修改或清空最多 1000 字的商品介绍 | 管理员 Bearer 令牌 | `product.description` |
 | GET | `/admin/products/{product_id}/skus` | 查询商品全部 SKU（含逻辑删除项） | 管理员 Bearer 令牌 | `product_sku`、`inventory` |
@@ -164,6 +171,19 @@ flowchart LR
 | PATCH | `/admin/categories/{category_id}` | 修改分类名称和排序值，名称唯一 | 管理员 Bearer 令牌 | `category` |
 | DELETE | `/admin/categories/{category_id}` | 空分类逻辑删除；有任意商品引用时拒绝；重复删除幂等 | 管理员 Bearer 令牌 | `category`、`product` |
 | POST | `/admin/categories/{category_id}/restore` | 恢复已删除分类，重复恢复幂等 | 管理员 Bearer 令牌 | `category` |
+
+### 商品标签
+
+| 方法 | 路径 | 作用 | 权限 | 主要数据库对象 |
+|---|---|---|---|---|
+| GET | `/tags` | 查询有效标签、排序值和关联有效商品数，包含暂时没有商品的标签 | 公开 | `tag`、`product_tag`、`product` |
+| GET | `/admin/tags` | 查询全部标签（含逻辑删除）和关联有效商品数 | 管理员 Bearer 令牌 | `tag`、`product_tag`、`product` |
+| POST | `/admin/tags` | 新增标签；同名已删除标签恢复原 ID | 管理员 Bearer 令牌 | `tag` |
+| PATCH | `/admin/tags/{tag_id}` | 修改标签名称和排序值，名称唯一 | 管理员 Bearer 令牌 | `tag` |
+| DELETE | `/admin/tags/{tag_id}` | 空标签逻辑删除；仍关联有效商品时返回 409 与 `product_count`；重复删除幂等 | 管理员 Bearer 令牌 | `tag`、`product_tag`、`product` |
+| POST | `/admin/tags/{tag_id}/restore` | 恢复已删除标签，重复恢复幂等 | 管理员 Bearer 令牌 | `tag` |
+| PATCH | `/admin/products/{product_id}/tags` | 锁定有效商品和标签后完整替换标签集合；去重、最多 5 个，同集合重复提交幂等 | 管理员 Bearer 令牌 | `product`、`tag`、`product_tag` |
+| PATCH | `/admin/products/tags/batch` | 对 1～100 个商品原子执行 `ADD` / `REMOVE` / `REPLACE` / `CLEAR`；返回逐商品前后标签及 changed/unchanged 统计 | 管理员 Bearer 令牌 | `product`、`tag`、`product_tag` |
 
 ### 图片
 
@@ -253,7 +273,9 @@ flowchart LR
 | `user` | 普通用户、管理员和密码/支付密码载体 | 被地址、购物车、订单、操作日志引用；`email` 唯一 |
 | `user_address` | 用户收货地址、默认地址和逻辑删除 | `user_id → user.id`；被订单引用 |
 | `category` | 商品分类与排序 | 被 `product.category_id` 引用；`name` 唯一 |
-| `product` | 商品主数据、可空普通文本介绍、状态和兼容主图 | 属于分类；被 SKU、图片引用 |
+| `tag` | 商品标签、排序和逻辑删除 | `name` 唯一；被 `product_tag.tag_id` 引用 |
+| `product` | 商品主数据、可空普通文本介绍、状态和兼容主图 | 属于分类；被标签关联、SKU、图片引用 |
+| `product_tag` | 商品与标签的多对多关联 | `(product_id, tag_id)` 联合主键；外键不使用物理级联删除；反向标签索引支持统计 |
 | `product_image` | 商品多图、主图、排序和逻辑删除 | `product_id → product.id` |
 | `product_sku` | SKU 编码、名称、颜色、尺码、价格、状态 | `product_id → product.id`；被库存、购物车、订单、销量引用 |
 | `inventory` | 每个 SKU 的可用库存和锁定库存 | `sku_id → product_sku.id` 且唯一 |
@@ -279,6 +301,8 @@ erDiagram
     USER ||--o{ OPERATION_LOG : operates
     USER_ADDRESS ||--o{ ORDER_MAIN : receives
     CATEGORY ||--o{ PRODUCT : contains
+    PRODUCT ||--o{ PRODUCT_TAG : tagged_with
+    TAG ||--o{ PRODUCT_TAG : labels
     PRODUCT ||--o{ PRODUCT_IMAGE : has
     PRODUCT ||--o{ PRODUCT_SKU : has
     PRODUCT_SKU ||--o| INVENTORY : stocks
@@ -342,8 +366,9 @@ erDiagram
 6. `sql语句/06_商品描述增量迁移.sql`：幂等增加 `product.description`，并覆盖 `v_product_detail` 以透传商品介绍。
 7. `sql语句/07_订单买家备注增量迁移.sql`：幂等增加 `order_main.buyer_remark`，覆盖订单列表/详情视图，并创建兼容的 `sp_create_direct_order_with_remark`。
 8. `sql语句/08_购物车选中项备注下单增量迁移.sql`：不改字段和视图，幂等创建 `sp_create_order_from_selected_cart_items_with_remark`，旧选中项过程继续存在。
+9. `sql语句/09_商品多标签增量迁移.sql`：幂等创建逻辑删除的 `tag` 表与 `product_tag` 关联表、唯一/查询索引和两个无物理级联的外键；不写入或改动现有业务数据。
 
-从零初始化时必须按以上顺序执行。已存在数据库只需按编号执行尚未应用的 `06`、`07` 增量；`04` 当前是固定规模演示数据（16 商品、32 SKU、8 订单等），不是大量销售压力数据。
+从零初始化时必须按以上顺序执行。已存在数据库只需按编号执行尚未应用的 `06`～`09` 增量；`04` 当前是固定规模演示数据（16 商品、32 SKU、8 订单等），不是大量销售压力数据。
 
 ## 9. 核心业务链路
 
@@ -603,29 +628,40 @@ sequenceDiagram
 
 `lightboxState` 隔离保存图片数组、索引、来源元素、加载/错误状态和请求序号，不写 SKU、收藏、购物车、订单或商品状态。打开后锁定背景滚动、将焦点移入预览并预加载相邻图片；关闭后清理状态、恢复滚动位置和来源焦点。Esc、背景点击、关闭按钮每次只关闭最上层 lightbox，下方商品详情和收藏侧栏保持原状态。图片舞台使用浅色低对比棋盘格、`object-fit: contain`、`100dvh` 与安全区约束；失败图片不显示破图图标，保留计数和切换能力。商品售罄/下架印章与交易信息不进入 lightbox。
 
+### 9.10 商品多标签管理与筛选
+
+后台标签页通过受保护接口维护名称、排序和逻辑删除状态；同名已删除标签在新增时恢复原 ID。删除前统计仍关联的有效商品，非零时返回 409 并要求先从商品卡解除关联。商品卡和新增商品表单都只提供有效标签，前端限制最多 5 个，后端再次执行严格正整数校验、去重、有效性校验和数量上限。后台显式区分标签目录的加载中、就绪和失败状态；目录未就绪或商品存在目录外标签时禁用保存，避免把接口失败误当成显式空数组而清空关系。已有商品更新使用“删除旧关联后插入新集合”的单事务完整替换，重复提交同集合返回 `changed: false`；新增商品在原创建事务中写入 `product_tag`，任一步失败均回滚。
+
+`GET /products` 与 `GET /admin/inventory` 在既有商品响应上附加按排序值、名称和 ID 稳定排序的 `tags` 数组；浏览器对数据库响应去重时保留服务端顺序，仅对派生/静态兜底执行本地排序。前台标签键使用数据库稳定 ID，标签、分类、搜索三种过滤条件同时生效；API 失败时仅从已加载商品或静态促销徽章派生视觉兜底，不为数据库商品伪造标签。商品卡紧凑展示前几个标签和 `+N`，详情展示全部标签。新收藏快照保存标签；存在实时商品时仍优先使用实时标签，旧收藏结构保持兼容。
+
+阶段 15 新增 `AdminProductTagsBatchUpdateRequest` 和固定路由 `PATCH /admin/products/tags/batch`。请求仅接受严格正整数 `product_ids`（去重后 1～100）、固定大写操作 `ADD` / `REMOVE` / `REPLACE` / `CLEAR`，以及按操作约束为 0 或 1～5 个的严格正整数 `tag_ids`。批量辅助逻辑按 `product_id ASC` 锁定并验证全部有效商品，按 `tag_id ASC` 锁定并验证全部目标标签，再按 `product_id ASC, tag_id ASC` 锁定关联；所有最终集合在内存中计算并校验后才写入，只有 changed 商品执行删除/批量插入，单一 commit，任一异常 rollback。无效商品/标签返回 404 及对应 ID；任一商品 `ADD` 后超过 5 标签返回 409 和 `conflict_product_ids`，均不会产生部分成功。单商品完整替换接口保持兼容并继续复用标签有效性、排序和响应对象规则。
+
+后台以独立 `adminProductTagBatchState` 保存 `Set<number>` 商品/标签选择、操作、提交中、反馈和筛选身份；商品重渲染保留仍有效选择，筛选或搜索变化清空选择，全选只作用于当前实际渲染列表且最多取前 100 个。提交使用不可变快照且只发送一次批量请求；`REMOVE` / `REPLACE` / `CLEAR` 有明确确认，成功后清空选择并重载商品与标签统计，失败后保留有效选择并显示服务端冲突/无效 ID。前台没有新增接口；后台重载的标签关系通过既有 `GET /products` / `GET /tags` 刷新边界反映到商品、标签统计和组合筛选。本阶段不新增迁移，不写操作日志，也不触碰并行的阶段 16 日志工作线；最终集成若记录管理员动作，应接入 `PRODUCT_TAGS_BATCH_UPDATE`，而不是在本分支另建日志实现。
+
 ## 10. 数据来源与状态管理
 
 | 数据来源 | 当前职责 | 权威性与限制 |
 |---|---|---|
-| MySQL | 商品/SKU/库存、数据库购物车、地址、订单、支付、退款审核、销量、状态与库存流水 | 核心交易数据权威来源；阶段 4 已在本地库验证商品介绍迁移、写入、查询、清空和恢复 |
+| MySQL | 分类、标签及商品标签关系、商品/SKU/库存、数据库购物车、地址、订单、支付、退款审核、销量、状态与库存流水 | 核心业务数据权威来源；阶段 14 已验证标签结构和单商品闭环，阶段 15 已验证批量事务与精确清理 |
 | `sessionStorage` | 保存 `cloth_shop_admin_session`（管理员 ID、邮箱、token） | 仅浏览器会话；刷新后由首批受保护请求间接验证，无 `/admin/me` |
-| `localStorage` | 前台本地账号资料、商品级收藏、购物车快照、购物车勾选项；旧后台商品/mock 订单 | 收藏以 `blue-song-favorites` 商品级规范记录为准并自动迁移旧 SKU 记录；收藏卡片优先合并本轮 API 实时商品，历史快照只作不可用兜底；购物车商品以数据库为业务源但 UI 使用回读快照；后台 API 失败仍有 mock 回退 |
+| `localStorage` | 前台本地账号资料、商品级收藏（含新快照的标签）、购物车快照、购物车勾选项；旧后台商品/mock 订单 | 收藏以 `blue-song-favorites` 商品级规范记录为准并自动迁移旧 SKU 记录；收藏卡片优先合并 API 实时商品和标签，历史快照只作不可用兜底；购物车商品以数据库为业务源但 UI 使用回读快照；后台 API 失败仍有 mock 回退 |
 | `src/content.js` | 品牌文案、分类、17 个静态商品、展示图片、旧 mock 订单种子 | API 失败时用于视觉兜底和测试，不包含可购买的真实 SKU/库存 |
 | `backend/uploads/products` | 新增和追加商品图片文件 | 数据库保存访问路径；删除图片当前只逻辑删数据库记录，不删除磁盘文件 |
 | `src/account-store.js` | 本地存储、金额/排名展示纯函数和旧 mock 辅助 | 当前仍被前台收藏/缓存与后台失败回退使用，不能视为已完全淘汰 |
 | `src/account-state.js` | 重复的注册、地址、profile 辅助 | 当前未被页面入口或 `main.js` 导入 |
 
-已迁移到数据库的主要业务包括商品/SKU/库存、购物车增删改、地址、订单、支付、后台商品、后台订单与销量统计。仍属本地或兼容逻辑的包括普通用户登录/注册资料、商品级收藏、购物车勾选项、数据库购物车的 UI 快照、静态商品视觉兜底、旧后台 mock 商品/订单辅助。收藏不新增数据库表或后端 API；购物车继续以真实 `sku_id` 为数据库业务单位。
+已迁移到数据库的主要业务包括分类、标签及商品标签关系、商品/SKU/库存、购物车增删改、地址、订单、支付、后台商品、后台订单与销量统计。仍属本地或兼容逻辑的包括普通用户登录/注册资料、商品级收藏、购物车勾选项、数据库购物车的 UI 快照、静态商品视觉兜底、旧后台 mock 商品/订单辅助。收藏不新增数据库表或后端 API，仅在新快照中携带标签；购物车继续以真实 `sku_id` 为数据库业务单位。
 
 `selectedSkuByProductId` 是页面会话内的商品级 SKU 选择缓存，不写入 `localStorage`。商品卡和共用操作弹窗都读写这一个缓存：有效显式选择会恢复；失效、下架、删除、售罄或不属于当前商品的选择会被丢弃；唯一可售 SKU 会自动写入缓存；多个可售 SKU 且没有显式选择时保持未选。结构化 SKU 恢复时同时恢复 `color`、`size` 与真实 `skuId`，不同商品按 `product.id` 隔离。
 
 ## 11. 权限与数据一致性
 
 - **管理员登录和令牌**：`POST /admin/login` 通过邮箱、MySQL `SHA2` 密码和 `is_admin` 校验；令牌是 `admin_user_id:expires_at:HMAC-SHA256` 的 URL-safe Base64，默认 8 小时。密钥当前硬编码在后端源码中。
-- **后台接口权限**：后台商品、SKU、图片、库存、订单和统计接口调用 `require_admin_user()`，要求 Bearer token，并重新查询用户的管理员/删除状态。
+- **后台接口权限**：后台分类、标签、商品、SKU、图片、库存、订单和统计接口调用 `require_admin_user()`，要求 Bearer token，并重新查询用户的管理员/删除状态。
 - **普通用户权限限制**：前台交易接口没有普通用户 token；大量接口直接信任路径或请求体中的 `user_id`。`GET /orders/{order_id}` 也没有订单归属认证。这是课程演示实现，不是生产级权限模型。
 - **401/403 行为**：前端 `adminFetch()` 能识别 401/403，三个主要列表刷新路径会清会话和后台数据；部分后端列表接口的通用异常捕获可能把鉴权异常包装为 500，部分局部操作也不会立即触发统一退出。
-- **逻辑删除**：商品、SKU、图片、地址均保留历史数据；商品删除同步将有效 SKU 下架并标记删除，SKU 删除禁止删除最后一个有效 SKU。
+- **逻辑删除**：分类、标签、商品、SKU、图片、地址均保留历史数据；标签仍关联有效商品时禁止删除且不会隐式解除关联；商品删除同步将有效 SKU 下架并标记删除，SKU 删除禁止删除最后一个有效 SKU。
+- **标签集合一致性**：商品标签写入只接受有效标签，严格正整数 ID 去重后最多 5 个；已有商品完整替换和新增商品标签写入均位于事务内，`product_tag` 联合主键防止重复关联。
 - **SKU 与库存校验**：下单前后端均检查真实 `sku_id`、商品/SKU 状态和可用库存；存储过程锁定行，库存触发器阻止负库存。
 - **订单状态**：核心状态包括 `PENDING_PAYMENT`、`PAID`、`CANCELLED`、`SHIPPED`、`REFUND_REQUESTED`、`REFUNDED`；状态变化由触发器写 `order_status_log`。代码中也有 `COMPLETED` 显示文案，但当前没有完成订单的 API。
 - **支付**：支付校验订单归属和 6 位支付密码，调用 `sp_pay_order`，在事务中释放锁定库存、写支付记录并联动销量。
@@ -641,10 +677,11 @@ sequenceDiagram
 
 | 命令 | 结果 |
 |---|---|
-| `npm.cmd test` | 182/182 通过，0 失败、0 跳过、0 TODO |
+| `npm.cmd test` | 203/203 通过，0 失败、0 跳过、0 TODO；包含 4 项批量标签 Python 事务替身子测试 |
 | `node --check src/account-store.js` | 通过 |
 | `node --check src/main.js` | 通过 |
 | `node --check src/category-utils.js` | 通过 |
+| `node --check src/tag-utils.js` | 通过 |
 | `node --check src/image-lightbox.js` | 通过 |
 | `node --check src/content.js` | 通过 |
 | `node --check src/sku-utils.js` | 通过 |
@@ -664,29 +701,31 @@ sequenceDiagram
 | 阶段 11 商品状态印章浏览器验收 | 当前真实商品数据在桌面端呈现 26 个可售、3 个售罄、5 个下架商品；首页、实时收藏卡和详情主图的印章、按钮禁用文案/ARIA、多图灯箱、两级 Esc、390px 无横向溢出均通过，控制台 0 error。临时收藏的售罄、下架、可售商品均已移除并恢复原状态；未写购物车、订单、商品、SKU、库存或数据库。实时商品缺失的历史收藏快照未通过浏览器伪造，仅由自动测试覆盖。 |
 | 阶段 12 商品大图预览浏览器验收 | 1280×720 与 390×844 下真实 5 图、单图、带 alpha 通道 PNG 和失效图片均通过；验证从当前缩略图索引打开、方向键循环、错误图切回、棋盘格、计数、移动端边界、背景点击、焦点恢复与 Esc 分层关闭，控制台 0 error。收藏夹当前为 0 件，未为验收写入临时收藏；收藏详情复用 `openPurchaseModal(product, 'details')` 的入口由既有行为测试与本轮共享 lightbox 契约覆盖。未写收藏、购物车、订单、商品、SKU、库存或数据库。 |
 | 阶段 13 商品分类 API/数据库/浏览器验收 | 真实 MySQL 8.0.28 上完成分类新增、重命名、排序、空分类删除、恢复、重复操作幂等、同名冲突、已删除分类同名恢复、商品跨分类调整、非空分类删除拦截，以及新增商品缺失/删除分类拒绝；公共和后台列表统计与商品/库存响应一致。浏览器完成后台新增/编辑/删除/筛选/恢复、商品分类入口、新增商品有效分类下拉、前台分类与搜索组合筛选和 390px 无横向溢出。临时分类已精确清理，分类/商品/SKU/库存/订单总数恢复为 8/41/89/89/70；未执行并发压力和数据库故障注入。 |
+| 阶段 14 商品多标签 API/数据库/浏览器验收 | 真实 MySQL 8.0.28 上将 `09` 连续执行 2 次，迁移前后商品/SKU/订单保持 41/89/70，新增 2 表、9 列、5 个索引和 2 个外键；完成标签新增、同 ID 修改/删除/恢复、统计、关联删除 409、商品标签完整替换与幂等、公共/后台商品标签回读。完成代码审查修正后又在临时 8051 复验：缺失 `tag_ids` 与 6 标签均返回 422，重复集合 `changed: false`，关联删除返回 409。浏览器完成后台标签编辑/筛选/删除/恢复、关联禁删提示、商品清空/保存/重载/重设标签，前台标签+分类+搜索组合筛选、商品卡/详情/收藏标签、多图与 390px 无横向溢出；未创建商品、订单、购物车项、分类、SKU、库存或图片。临时收藏已移除，商品 5/41 原标签均恢复为空，两轮任务标签均在确认零关联后按精确 ID 物理清理；最终分类/商品/SKU/库存/订单为 8/41/89/89/70，`tag`/`product_tag` 均为 0。验收期间曾短暂观察到并行阶段 16 的已删除临时分类，该记录已由所属任务清理，本阶段未修改分类。前台日志检查为 0 error；浏览器工具最终汇总日志时超时，管理页未观察到功能错误但不把该次汇总记为已完成。未执行并发压力和数据库故障注入。 |
+| 阶段 15 商品标签批量管理 API/数据库/浏览器验收 | 自动测试用内存事务替身实际执行权限短路、成功单次 commit、逐商品前后标签/顺序/计数、无效商品/标签 404、第 6 标签 409 和写入异常 rollback；纯函数实际验证目录不可用时保留 Set、目录就绪时仅剔除失效标签。真实 MySQL 8.0.28 与隔离端口 8051 完成管理员权限、ADD/REMOVE/REPLACE/CLEAR、重复请求幂等及相同原子回滚矩阵；商品 4/5/6 的状态、分类、标签、SKU、库存和图片快照恢复一致，6 个 API 测试标签及 2 个浏览器测试标签按精确 ID 清理，最终 `tag`/`product_tag` 均为 0。浏览器完成单选/取消、当前列表全选、筛选清空、批量 ADD 成功刷新、前台标签计数与商品标签回读，390×844 工具栏单列且无横向溢出，前后台控制台均 0 error；确认弹窗下的 REMOVE/REPLACE/CLEAR 浏览器自动点击受工具定位时限影响，操作语义由真实 API 与自动测试覆盖，不声称该部分浏览器步骤已全部执行。未执行并发压力或数据库故障注入。 |
 | 浏览器自动操作新增商品 SKU 表单 | 2 色×3 尺码生成 6 行且均为 50；人工改为 35 后新增尺码，旧值保留、新行 50；库存可改为 0；未提交商品，控制台 0 错误 |
 | 浏览器自动操作统一图片管理弹窗 | 34 张商品卡各只有一个“管理图片”入口；旧入口为 0；弹窗商品/图片/主图/空上传状态正确；关闭后切换商品无状态串用；1280px 与 390px 均无横向溢出；控制台 0 错误；未真实上传或删除 |
 
 ### 已覆盖模块
 
-- 直接执行 `content.js`、`category-utils.js`、`ranking.js`、`product-ordering.js`、`account-store.js`、`sku-utils.js`、`image-lightbox.js` 的纯函数行为。
+- 直接执行 `content.js`、`category-utils.js`、`tag-utils.js`、`ranking.js`、`product-ordering.js`、`account-store.js`、`sku-utils.js`、`image-lightbox.js` 的纯函数行为。
 - 覆盖销量排名、可售优先排序、商品状态三态矩阵/优先级/混合 SKU/逻辑删除/异常库存/静态兼容/纯函数不变性、首页/收藏/详情共享印章与按钮 ARIA 契约、地址迁移/本地存储、商品级收藏规范化/去重/幂等迁移/切换、收藏唯一商品计数、购物车商品级聚合、购物车非负整数总件数、`99+` 格式化、图标/徽章 DOM 与统一刷新契约、收藏卡片实时数据优先/快照兜底/不可用状态、详情模式控件隔离与 SKU 缓存保护、购物车金额、注册校验、SKU 笛卡尔积、新增商品 SKU 默认库存 50、矩阵重建时保留人工库存、已有商品缺失组合仍默认 0、颜色尺码选择和不可售组合禁用、有效/失效显式 SKU 恢复、唯一可售 SKU 自动选择、多 SKU 未选、商品级缓存同步和 ES Module 缓存版本契约，以及大图图片规范化/去重/主图优先、索引解析、单图/多图循环、空列表安全、统一 DOM/样式/键盘/加载错误/焦点契约、后台图片唯一入口和商品介绍迁移/接口/安全展示/编辑弹窗契约。
 - 读取 `index.html`、`admin.html`、`src/main.js`、`src/styles.css`、后端 Python、SQL、README 和启动脚本，断言路由字符串、`data-*` 钩子、字段、CORS、端口、图片、认证、订单、买家备注和 SKU 结构。
 
-182 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。
+203 项中相当一部分是 `readFileSync(...).includes(...)` 或正则形式的源码结构断言；它们能锁定契约，但不是浏览器或 API 端到端测试。阶段 15 的事务替身与选择纯函数测试会实际执行对应行为，但仍不等同于并发数据库压力测试。
 
 ### 尚未覆盖或本轮未执行
 
-- **自动化 HTTP 冒烟测试**：尚未纳入常驻测试套件；阶段 4 使用本地临时脚本覆盖商品介绍状态矩阵并在结束后恢复数据。
-- **真实 API 测试范围**：商品介绍与阶段 9 立即购买既有覆盖保持不变；阶段 10 覆盖购物车备注；阶段 13 覆盖分类权限、CRUD/恢复、统计、冲突、幂等、商品移动和新增商品分类校验；尚未覆盖令牌过期、数据库故障注入和所有接口的完整状态矩阵。
-- **真实数据库测试**：阶段 4 与阶段 9 既有覆盖保持不变；阶段 10 已验证订单备注迁移和事务；阶段 13 复用既有结构并验证分类/商品关系与精确数据恢复，没有执行 SQL 迁移；未执行故障注入回滚或并发压力测试。
-- **浏览器测试**：测试套件未内置浏览器框架；阶段 4—12 的既有浏览器回归保持不变。阶段 13 已覆盖后台分类新增、修改、删除、筛选、恢复、商品分类入口、新增商品分类下拉、前台分类/搜索组合筛选和 390px 响应式布局；一次预期的错误密码登录产生对应控制台错误，正确登录后的分类链路未出现功能错误。
+- **自动化 HTTP 冒烟测试**：尚未纳入常驻测试套件；阶段 4、14 与 15 使用本地临时脚本覆盖定向状态矩阵并在结束后恢复数据。
+- **真实 API 测试范围**：商品介绍与阶段 9 立即购买既有覆盖保持不变；阶段 10 覆盖购物车备注；阶段 13 覆盖分类；阶段 14 覆盖标签单商品链路；阶段 15 覆盖批量标签权限、四操作、幂等、无效 ID、已删除标签和五标签上限原子回滚；尚未覆盖令牌过期、数据库故障注入和所有接口的完整状态矩阵。
+- **真实数据库测试**：阶段 4 与阶段 9 既有覆盖保持不变；阶段 10 已验证订单备注迁移和事务；阶段 13 复用既有结构；阶段 14 已将 `09` 连续执行两次并验证表、列、索引、外键、标签/商品关联事务和精确数据恢复；未执行故障注入回滚或并发压力测试。
+- **浏览器测试**：测试套件未内置浏览器框架；阶段 4—14 的既有浏览器回归保持不变。阶段 15 已覆盖后台选择/全选/筛选边界、ADD、前台回读和 390px 响应式；REMOVE/REPLACE/CLEAR 的确认后自动点击受浏览器工具定位时限影响，未作为完整浏览器验收，只由真实 API 与自动测试覆盖。
 - **退款回归**：已覆盖请求模型字段、退款路由不读取 SKU 字段、不调用购买校验、订单归属锁、允许状态、状态更新、提交/回滚、业务错误保留以及前端订单级请求体。
 
 ## 13. 本地启动流程
 
 1. 启动 MySQL 8.0，并确认将使用 `frieren_cloth_shop_db`。
-2. 按第 8.4 节顺序执行 `sql语句/` 下 `01`～`08`。`04` 会清空并重建测试数据，只能用于测试库；已有数据库只执行尚未应用的增量脚本。
+2. 按第 8.4 节顺序执行 `sql语句/` 下 `01`～`09`。`04` 会清空并重建测试数据，只能用于测试库；已有数据库只执行尚未应用的增量脚本。
 3. 在 `backend/.env` 配置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`；不要提交或公开该文件。
 4. 若虚拟环境不存在，在仓库根目录执行 `python -m venv backend/.venv`。
 5. 安装依赖：`backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt`。
@@ -703,10 +742,10 @@ sequenceDiagram
 | 文件 | 高耦合原因 | 修改时必须联动检查 |
 |---|---|---|
 | `src/main.js` | 同时包含前台、后台、DOM、状态、API 和兼容逻辑 | 两个 HTML 的 `data-*`、所有 API 字段、local/sessionStorage、SKU 工具、订单/图片/认证回归测试 |
-| `backend/app/main.py` | 单文件包含 46 个路由、模型、上传、鉴权、SQL 和事务 | Pydantic 模型、前端请求、SQL 对象、状态机、提交/回滚、错误码和上传清理 |
+| `backend/app/main.py` | 单文件包含 53 个路由、模型、上传、鉴权、SQL 和事务 | Pydantic 模型、前端请求、SQL 对象、状态机、提交/回滚、错误码和上传清理 |
 | `src/styles.css` | 前后台共用且大量状态类依赖 JS | 响应式布局、隐藏/活动状态、弹窗、侧栏、管理面板和测试中的选择器断言 |
 | `tests/site.test.js` | 同时覆盖纯函数与大量源码字符串契约 | 修改路径、函数名、字段、端口、文案、`data-*` 或 SQL 时区分行为测试与结构断言 |
-| `sql语句/01-08` | 表、视图、过程、触发器、测试数据、账号初始化、商品介绍和订单备注增量按序耦合 | 增量迁移、外键/索引、最终覆盖视图、过程兼容、测试数据与 README 执行顺序 |
+| `sql语句/01-09` | 表、视图、过程、触发器、测试数据、账号初始化、商品介绍、订单备注和商品标签增量按序耦合 | 增量迁移、外键/索引、最终覆盖视图、过程兼容、测试数据与 README 执行顺序 |
 
 禁止因文件体积大而整体重写。跨层功能应按“页面 → `data-*` → `main.js` → API → Pydantic → SQL/过程/事务 → 响应 → 重渲染”逐段验证。
 
@@ -715,10 +754,11 @@ sequenceDiagram
 ### 已形成完整闭环
 
 - **商品分类管理**：前台从数据库加载有效分类并与搜索组合筛选，分类 API 失败时使用商品数据或静态分类兜底；后台可查看统计、新增、重命名、排序、逻辑删除和恢复分类，有商品引用时阻止删除。商品卡可调整现有商品分类，新建商品必须选择有效 `category_id`；全链路复用现有 `category` 表和 `product.category_id`，未新增 SQL。
+- **商品多标签管理**：`tag` 与 `product_tag` 提供稳定 ID、多对多关系、排序、逻辑删除、统计和恢复；后台可维护标签、阻止删除仍有关联商品的标签，并为单个已有商品完整替换最多 5 个标签；新增商品可在原事务写入标签。前台标签与分类、搜索组合筛选，商品卡、详情和收藏展示真实标签，API 失败时仅使用可识别的静态促销标签兜底。
 - **商品介绍**：新建商品可选填介绍，`product.description` 持久化，商品列表与后台库存接口透传，前台安全展示并保留换行，后台独立弹窗可查看、修改、清空和刷新；空内容统一保存为 `NULL`。
 - **复杂 SKU**：颜色×尺码生成、真实 SKU ID、价格/库存/状态选择、后台增删改和逻辑删除链路齐全；新建商品的新组合默认库存为 50，矩阵重建保留已有编辑值，已有商品新增缺失组合仍默认 0。
 - **前台 SKU 选择同步**：商品卡与购物车/立即购买共用弹窗共享商品级有效 SKU；有效显式选择优先恢复，唯一可售 SKU 自动选择，多 SKU 无显式选择保持未选，失效缓存被清理；普通 SKU 与结构化颜色/尺码最终都解析为真实 `skuId`。
-- **商品级收藏与操作语义**：收藏按钮直接切换商品级 localStorage 记录，不要求 SKU、数量、地址或支付方式，不自动打开弹窗/侧栏；旧 SKU 收藏自动去重迁移，商品卡 ARIA 状态、刷新恢复和收藏夹删除同步完成。购物车仍使用精确 `sku_id` 与现有弹窗，成功或失败均不自动打开侧栏；立即购买和支付/订单侧栏行为不变。数据库、SQL 与后端接口无变化。
+- **商品级收藏与操作语义**：收藏按钮直接切换商品级 localStorage 记录，不要求 SKU、数量、地址或支付方式，不自动打开弹窗/侧栏；旧 SKU 收藏自动去重迁移，新收藏快照携带商品标签且实时商品标签优先，商品卡 ARIA 状态、刷新恢复和收藏夹删除同步完成。购物车仍使用精确 `sku_id` 与现有弹窗，成功或失败均不自动打开侧栏；立即购买和支付/订单侧栏行为不变。收藏本身未新增数据库表或 API。
 - **收藏夹卡片与只读详情**：收藏侧栏展示主图、商品名、分类、介绍摘要、价格、图片提示和详情/删除操作；实时商品详情可查看完整介绍、销售状态、SKU 概要与多图灯箱，下架商品仍可只读查看。历史快照在无实时商品时保留并禁用详情；详情不触发请求、不选择 SKU、不修改购物车/订单，关闭后收藏侧栏保持原位。数据库、SQL 与后端接口无变化。
 - **收藏/购物车状态与导航徽章**：商品级收藏爱心使用红色填充和稳定的 class/data/ARIA 状态；商品任意 SKU 存在于数据库购物车时，商品卡购物车图标按商品级聚合显示暖黄色，禁用商品仍保留数据状态并优先呈现不可操作视觉。收藏徽章按唯一商品数、购物车徽章按全部购物车行 `quantity` 总和计算，0 隐藏、100 以上显示 `99+`，初始化、收藏变更、加购、改量、删除和结算后的数据库回读均统一刷新；后端同步失败保留缓存。数据库、SQL、后端和 API 无变化。
 - **商品售罄与下架状态印章**：纯函数按商品状态、未删除在售 SKU 和单 SKU 可用库存派生 `AVAILABLE` / `SOLD_OUT` / `OFF_SALE`；首页、实时收藏卡和详情主图统一展示售罄/下架印章，可售商品不显示印章，不可售操作保留区分状态的禁用文案与 ARIA，多图灯箱交互不受影响。数据库、SQL、后端和 API 无变化。
@@ -730,14 +770,14 @@ sequenceDiagram
 - **销量**：支付累计、退款回滚和后台统计代码链路齐全。
 - **退款申请与审核**：订单级申请、归属与状态校验、`REFUND_REQUESTED` 状态日志、重复申请拦截、后台同意/拒绝及退款一致性处理链路齐全；本轮已用专用订单完成真实 MySQL/API 的支付后申请与管理员同意验证。
 
-以上结论来自当前代码、SQL、自动测试及定向运行验证；阶段 10 购物车下单和阶段 13 商品分类均已完成真实数据库、API、浏览器与数据清理验收，阶段 11 商品状态印章与阶段 12 商品大图预览已完成真实 API 数据下的桌面与 390px 浏览器验收，阶段 4—9 与退款的既有验收记录保持不变，其他浏览器交互仍未完整验收。
+以上结论来自当前代码、SQL、自动测试及定向运行验证；阶段 10 购物车下单、阶段 13 商品分类和阶段 14 商品多标签均已完成真实数据库、API、浏览器与数据清理验收，阶段 11 商品状态印章与阶段 12 商品大图预览已完成真实 API 数据下的桌面与 390px 浏览器验收，阶段 4—9 与退款的既有验收记录保持不变，其他浏览器交互仍未完整验收。
 
 ### 基本完成但需要真实业务验收
 
 - **支付**：阶段 10 已真实验证购物车订单错误密码保持待支付且不会重建订单；真实支付成功、重复支付和故障注入回滚仍需专项验收。
 - **图片文件一致性**：新增失败能清理本批文件，但逻辑删除不删磁盘文件，需要验收长期文件治理。
 - **管理员认证**：登录、恢复、退出和主要 401/403 清理存在，需要验证异常包装为 500 的接口和令牌过期行为。
-- **SQL 初始化与业务过程**：阶段 9 已真实执行 `07` 两次，阶段 10 已真实执行 `08` 两次并验证幂等；`04` 的全量演示数据重建本轮未执行。
+- **SQL 初始化与业务过程**：阶段 9 已真实执行 `07` 两次，阶段 10 已真实执行 `08` 两次，阶段 14 已真实执行 `09` 两次并验证幂等；`04` 的全量演示数据重建本轮未执行。
 
 ### 尚未完成
 
@@ -746,10 +786,10 @@ sequenceDiagram
 - 没有订单“完成/确认收货”API；仅存在 `COMPLETED` 显示文案。
 - 没有手动设置任意商品图片为主图的接口。
 - 收藏仍只存在于浏览器 localStorage，尚未实现数据库收藏与跨设备同步。
-- 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；阶段 9/10 的真实数据库和浏览器验证使用定向临时验收，测试订单均已清理。
+- 没有纳入常驻套件的自动化 HTTP、真实数据库、并发事务或浏览器端到端测试；阶段 9/10/14/15 的真实数据库和浏览器验证使用定向临时验收，任务自有临时数据均已清理。
 - `04` 只有固定规模测试数据，不是大量销售、压力或容量测试数据。
 - 当前仓库没有完成可直接交付的课程报告、PPT 和讲解视频闭环。
-- 标签管理/批量标签、管理员运行时操作日志等扩展功能仍未实现。本轮也未扩展支付方式、支付网关、订单合并、管理员备注编辑或跨设备购物车备注草稿。
+- 标签合并/迁移和管理员运行时操作日志等扩展功能仍未实现；批量商品标签已完成，但尚未与阶段 16 日志工作线集成。本轮也未扩展分类/删除/上下架批量操作、支付方式、支付网关、订单合并、管理员备注编辑或跨设备购物车备注草稿。
 
 ### 可以延后优化
 

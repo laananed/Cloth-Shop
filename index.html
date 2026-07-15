@@ -97,7 +97,7 @@
           </div>
           <div class="purchase-modal__meta">
             <p data-purchase-category>商品信息</p>
-            <h3 data-purchase-badge>精选</h3>
+            <div class="product-tags product-tags--purchase" data-purchase-tags hidden></div>
             <p data-purchase-sales>请选择商品</p>
             <p data-purchase-status hidden></p>
             <p data-purchase-sku-summary hidden></p>
@@ -340,6 +340,17 @@
         <div class="collection-rail" data-collection-rail></div>
       </section>
 
+      <section class="section section--compact" aria-labelledby="product-tags-title">
+        <div class="section__header section__header--compact">
+          <div>
+            <h2 id="product-tags-title">商品标签</h2>
+            <p>可叠加分类、标签与关键词筛选。</p>
+          </div>
+          <p>当前标签：<strong data-active-tag>全部标签</strong></p>
+        </div>
+        <div class="product-tag-rail" data-product-tag-rail></div>
+      </section>
+
       <section class="section" id="products" aria-labelledby="products-title">
         <div class="section__header">
           <h2 id="products-title">新品商品</h2>
@@ -347,14 +358,14 @@
         <div class="product-search product-search--glass">
           <div class="product-search__header">
             <label class="product-search__label" for="product-search-input">搜索商品</label>
-            <span class="product-search__hint">支持商品名、分类或规格关键词</span>
+            <span class="product-search__hint">支持商品名、分类、标签或规格关键词</span>
           </div>
           <div class="product-search__control">
             <input
               id="product-search-input"
               class="product-search__input"
               type="search"
-              placeholder="搜索商品名、分类或规格，例如：S、XL、外套"
+              placeholder="搜索商品名、分类、标签或规格，例如：新品、XL、外套"
               data-product-search
             />
             <button

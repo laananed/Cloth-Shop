@@ -69,6 +69,7 @@
           <button class="admin-nav__button" type="button" data-admin-nav-target="categories" data-admin-nav-categories>分类管理</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="product-create" data-admin-nav-product-create>新增商品</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="stats" data-admin-nav-stats>销量统计</button>
+          <button class="admin-nav__button" type="button" data-admin-nav-target="operation-logs" data-admin-nav-operation-logs>操作日志</button>
         </aside>
 
         <section class="admin-panels">
@@ -259,6 +260,72 @@
             </div>
             <div class="admin-summary-grid" data-admin-stats-summary></div>
             <div class="admin-stats-body" data-admin-stats-rows></div>
+          </section>
+
+          <section class="admin-panel" data-admin-panel="operation-logs">
+            <div class="admin-panel__header">
+              <div>
+                <p class="admin-panel__eyebrow">运行时审计</p>
+                <h2>管理员操作日志</h2>
+              </div>
+              <p class="admin-panel__note">按时间倒序查看管理员写操作；本面板只提供查询，不修改或清理日志。</p>
+            </div>
+
+            <form class="admin-operation-log-filter" data-admin-operation-log-filter>
+              <label class="admin-field">
+                <span>操作类型</span>
+                <select data-admin-operation-log-action>
+                  <option value="">全部操作</option>
+                </select>
+              </label>
+              <label class="admin-field">
+                <span>目标类型</span>
+                <select data-admin-operation-log-target>
+                  <option value="">全部目标</option>
+                </select>
+              </label>
+              <label class="admin-field">
+                <span>操作结果</span>
+                <select data-admin-operation-log-result>
+                  <option value="">全部结果</option>
+                  <option value="SUCCESS">成功</option>
+                  <option value="FAILURE">失败</option>
+                </select>
+              </label>
+              <label class="admin-field">
+                <span>操作人</span>
+                <select data-admin-operation-log-operator>
+                  <option value="">全部管理员</option>
+                </select>
+              </label>
+              <label class="admin-field">
+                <span>开始时间</span>
+                <input type="datetime-local" data-admin-operation-log-date-from />
+              </label>
+              <label class="admin-field">
+                <span>结束时间</span>
+                <input type="datetime-local" data-admin-operation-log-date-to />
+              </label>
+              <label class="admin-field admin-operation-log-filter__keyword">
+                <span>关键词</span>
+                <input type="search" maxlength="100" placeholder="操作、备注、请求 ID 或目标 ID" data-admin-operation-log-keyword />
+              </label>
+              <div class="admin-operation-log-filter__actions">
+                <button class="admin-submit" type="submit">查询</button>
+                <button class="ghost-button" type="button" data-admin-operation-log-reset>重置</button>
+              </div>
+            </form>
+
+            <p class="admin-feedback" data-admin-operation-log-feedback aria-live="polite"></p>
+            <div class="admin-operation-log-list" data-admin-operation-log-list></div>
+            <nav class="admin-operation-log-pagination" aria-label="操作日志分页">
+              <button class="ghost-button ghost-button--small" type="button" data-admin-operation-log-first>首页</button>
+              <button class="ghost-button ghost-button--small" type="button" data-admin-operation-log-prev>上一页</button>
+              <span data-admin-operation-log-page-info>第 1 / 1 页</span>
+              <button class="ghost-button ghost-button--small" type="button" data-admin-operation-log-next>下一页</button>
+              <button class="ghost-button ghost-button--small" type="button" data-admin-operation-log-last>末页</button>
+              <span data-admin-operation-log-total>共 0 条</span>
+            </nav>
           </section>
         </section>
       </div>

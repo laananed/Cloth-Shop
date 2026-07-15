@@ -296,6 +296,7 @@ function clearAdminDashboardData(targets = {}) {
     productList,
     productSummary,
     categoryList,
+    operationLogList,
   } = targets;
   const emptyMessage = '请先登录管理员账号';
 
@@ -322,6 +323,10 @@ function clearAdminDashboardData(targets = {}) {
 
   if (categoryList) {
     categoryList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyMessage)}</div>`;
+  }
+
+  if (operationLogList) {
+    operationLogList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyMessage)}</div>`;
   }
 }
 
@@ -4459,6 +4464,23 @@ function initAdminPage() {
   const categoryFeedback = shell.querySelector('[data-admin-category-feedback]');
   const categoryFilter = shell.querySelector('[data-admin-category-filter]');
   const categoryList = shell.querySelector('[data-admin-category-list]');
+  const operationLogFilter = shell.querySelector('[data-admin-operation-log-filter]');
+  const operationLogAction = shell.querySelector('[data-admin-operation-log-action]');
+  const operationLogTarget = shell.querySelector('[data-admin-operation-log-target]');
+  const operationLogResult = shell.querySelector('[data-admin-operation-log-result]');
+  const operationLogOperator = shell.querySelector('[data-admin-operation-log-operator]');
+  const operationLogDateFrom = shell.querySelector('[data-admin-operation-log-date-from]');
+  const operationLogDateTo = shell.querySelector('[data-admin-operation-log-date-to]');
+  const operationLogKeyword = shell.querySelector('[data-admin-operation-log-keyword]');
+  const operationLogReset = shell.querySelector('[data-admin-operation-log-reset]');
+  const operationLogFeedback = shell.querySelector('[data-admin-operation-log-feedback]');
+  const operationLogList = shell.querySelector('[data-admin-operation-log-list]');
+  const operationLogFirst = shell.querySelector('[data-admin-operation-log-first]');
+  const operationLogPrev = shell.querySelector('[data-admin-operation-log-prev]');
+  const operationLogNext = shell.querySelector('[data-admin-operation-log-next]');
+  const operationLogLast = shell.querySelector('[data-admin-operation-log-last]');
+  const operationLogPageInfo = shell.querySelector('[data-admin-operation-log-page-info]');
+  const operationLogTotal = shell.querySelector('[data-admin-operation-log-total]');
   const adminSkuColorsInput = shell.querySelector('[data-admin-sku-colors]');
   const adminSkuSizesInput = shell.querySelector('[data-admin-sku-sizes]');
   const adminSkuBasePriceInput = shell.querySelector('[data-admin-sku-base-price]');
@@ -4500,6 +4522,7 @@ function initAdminPage() {
     productList,
     productSummary,
     categoryList,
+    operationLogList,
   };
   let activePanel = 'orders';
   let activeAdminOrderDetailId = null;
@@ -4531,6 +4554,14 @@ function initAdminPage() {
   ];
   let activeAdminProductFilter = 'ALL';
   let activeAdminProductSearchKeyword = "";
+  const adminOperationLogState = {
+    page: 1,
+    pageSize: 20,
+    pages: 0,
+    total: 0,
+    loading: false,
+    optionsLoaded: false,
+  };
 
   function renderAdminSkuMatrix() {
     if (!adminSkuMatrix) {
@@ -4699,6 +4730,11 @@ function initAdminPage() {
     renderedProducts = null;
     adminCategories = [];
     pendingAdminCategoryIds.clear();
+    adminOperationLogState.page = 1;
+    adminOperationLogState.pages = 0;
+    adminOperationLogState.total = 0;
+    adminOperationLogState.loading = false;
+    adminOperationLogState.optionsLoaded = false;
     refreshAdminProductCategorySelect();
     clearAdminDashboardData(dashboardTargets);
   }
@@ -6004,6 +6040,219 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   return result;
 }
 
+  function setAdminOperationLogSelectOptions(select, placeholder, rows, getValue, getLabel) {
+    if (!select) {
+      return;
+    }
+
+    const selectedValue = select.value;
+    const fragment = document.createDocumentFragment();
+    const placeholderOption = document.createElement('option');
+    placeholderOption.value = '';
+    placeholderOption.textContent = placeholder;
+    fragment.append(placeholderOption);
+
+    rows.forEach((row) => {
+      const value = String(getValue(row) ?? '');
+      if (!value) {
+        return;
+      }
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = String(getLabel(row) ?? value);
+      fragment.append(option);
+    });
+
+    select.replaceChildren(fragment);
+    select.value = selectedValue;
+  }
+
+  async function loadAdminOperationLogOptions() {
+    const result = await adminFetch(`${API_BASE_URL}/admin/operation-log-options`);
+    if (!result.success) {
+      throw new Error(result.detail || '加载操作日志筛选项失败');
+    }
+
+    setAdminOperationLogSelectOptions(
+      operationLogAction,
+      '全部操作',
+      Array.isArray(result.action_types) ? result.action_types : [],
+      (value) => value,
+      (value) => value,
+    );
+    setAdminOperationLogSelectOptions(
+      operationLogTarget,
+      '全部目标',
+      Array.isArray(result.target_types) ? result.target_types : [],
+      (value) => value,
+      (value) => value,
+    );
+    setAdminOperationLogSelectOptions(
+      operationLogOperator,
+      '全部管理员',
+      Array.isArray(result.operators) ? result.operators : [],
+      (row) => row.operator_id,
+      (row) => `${row.operator_email || '管理员'} · ID ${row.operator_id}`,
+    );
+    adminOperationLogState.optionsLoaded = true;
+    return result;
+  }
+
+  function getAdminOperationLogQuery(page) {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(adminOperationLogState.pageSize),
+    });
+    const filters = [
+      ['action_type', operationLogAction?.value],
+      ['target_type', operationLogTarget?.value],
+      ['action_result', operationLogResult?.value],
+      ['operator_id', operationLogOperator?.value],
+      ['date_from', operationLogDateFrom?.value],
+      ['date_to', operationLogDateTo?.value],
+      ['keyword', operationLogKeyword?.value?.trim()],
+    ];
+    filters.forEach(([key, value]) => {
+      if (value) {
+        params.set(key, value);
+      }
+    });
+    return params;
+  }
+
+  function formatAdminOperationLogTime(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value || '未知时间') : date.toLocaleString('zh-CN', { hour12: false });
+  }
+
+  function renderAdminOperationLogs(rows = [], options = {}) {
+    if (!operationLogList) {
+      return;
+    }
+
+    operationLogList.replaceChildren();
+    if (options.loading) {
+      const loading = document.createElement('div');
+      loading.className = 'admin-empty';
+      loading.textContent = '正在加载操作日志...';
+      operationLogList.append(loading);
+    } else if (!rows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'admin-empty';
+      empty.textContent = '没有符合当前条件的操作日志。';
+      operationLogList.append(empty);
+    } else {
+      const fragment = document.createDocumentFragment();
+      rows.forEach((row) => {
+        const isSuccess = row.action_result === 'SUCCESS';
+        const card = document.createElement('article');
+        card.className = `admin-operation-log-card ${isSuccess ? 'is-success' : 'is-failure'}`;
+
+        const header = document.createElement('header');
+        header.className = 'admin-operation-log-card__header';
+        const title = document.createElement('strong');
+        title.textContent = row.action_type || 'UNKNOWN_ACTION';
+        const result = document.createElement('span');
+        result.className = 'admin-operation-log-result';
+        result.textContent = isSuccess ? '成功' : '失败';
+        const time = document.createElement('time');
+        time.textContent = formatAdminOperationLogTime(row.created_at);
+        header.append(title, result, time);
+
+        const meta = document.createElement('div');
+        meta.className = 'admin-operation-log-meta';
+        const operator = document.createElement('span');
+        operator.textContent = `操作人：${row.operator_email || '管理员'}（ID ${row.operator_id ?? '-'}）`;
+        const target = document.createElement('span');
+        target.textContent = `目标：${row.target_type || '-'} / ${row.target_id ?? '-'}`;
+        const logId = document.createElement('span');
+        logId.textContent = `日志 ID：${row.log_id ?? '-'}`;
+        meta.append(operator, target, logId);
+
+        const remark = document.createElement('p');
+        remark.className = 'admin-operation-log-remark';
+        remark.textContent = row.remark || '无备注';
+
+        const requestId = document.createElement('p');
+        requestId.className = 'admin-operation-log-request-id';
+        requestId.textContent = `请求 ID：${row.request_id || '-'}`;
+
+        const detail = document.createElement('details');
+        detail.className = 'admin-operation-log-detail';
+        const detailSummary = document.createElement('summary');
+        detailSummary.textContent = '查看结构化详情';
+        const detailContent = document.createElement('pre');
+        detailContent.textContent = row.detail ? JSON.stringify(row.detail, null, 2) : '无结构化详情';
+        detail.append(detailSummary, detailContent);
+
+        card.append(header, meta, remark, requestId, detail);
+        fragment.append(card);
+      });
+      operationLogList.append(fragment);
+    }
+
+    const hasPages = adminOperationLogState.pages > 0;
+    if (operationLogPageInfo) {
+      operationLogPageInfo.textContent = hasPages
+        ? `第 ${adminOperationLogState.page} / ${adminOperationLogState.pages} 页`
+        : '第 0 / 0 页';
+    }
+    if (operationLogTotal) {
+      operationLogTotal.textContent = `共 ${adminOperationLogState.total} 条`;
+    }
+    const atFirst = !hasPages || adminOperationLogState.page <= 1;
+    const atLast = !hasPages || adminOperationLogState.page >= adminOperationLogState.pages;
+    [operationLogFirst, operationLogPrev].forEach((button) => {
+      if (button) button.disabled = adminOperationLogState.loading || atFirst;
+    });
+    [operationLogNext, operationLogLast].forEach((button) => {
+      if (button) button.disabled = adminOperationLogState.loading || atLast;
+    });
+  }
+
+  async function loadAdminOperationLogs(page = 1) {
+    if (adminOperationLogState.loading) {
+      return;
+    }
+    const requestedPage = Math.max(1, Number(page) || 1);
+    const dateFrom = operationLogDateFrom?.value || '';
+    const dateTo = operationLogDateTo?.value || '';
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      setFeedback(operationLogFeedback, '开始时间不能晚于结束时间。', true);
+      return;
+    }
+
+    adminOperationLogState.loading = true;
+    renderAdminOperationLogs([], { loading: true });
+    setFeedback(operationLogFeedback, '正在加载操作日志...');
+    try {
+      const params = getAdminOperationLogQuery(requestedPage);
+      const result = await adminFetch(`${API_BASE_URL}/admin/operation-logs?${params.toString()}`);
+      if (!result.success) {
+        throw new Error(result.detail || '加载操作日志失败');
+      }
+      adminOperationLogState.page = Number(result.page || requestedPage);
+      adminOperationLogState.pages = Number(result.pages || 0);
+      adminOperationLogState.total = Number(result.total || 0);
+      adminOperationLogState.loading = false;
+      renderAdminOperationLogs(Array.isArray(result.data) ? result.data : []);
+      setFeedback(operationLogFeedback, `已加载 ${result.data?.length || 0} 条操作日志。`);
+      return result;
+    } catch (error) {
+      adminOperationLogState.loading = false;
+      adminOperationLogState.pages = 0;
+      adminOperationLogState.total = 0;
+      renderAdminOperationLogs([]);
+      setFeedback(operationLogFeedback, error.detail || error.message || '加载操作日志失败', true);
+      if (error.status === 401 || error.status === 403) {
+        clearStoredAdminSession();
+        resetAdminDashboardState();
+        renderAdminAuthState(error.detail || error.message);
+      }
+      return undefined;
+    }
+  }
+
   function syncPanels() {
     navButtons.forEach((button) => {
       button.classList.toggle('is-active', button.dataset.adminNavTarget === activePanel);
@@ -6060,8 +6309,27 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     });
   }
 
+  if (operationLogFilter) {
+    operationLogFilter.addEventListener('submit', (event) => {
+      event.preventDefault();
+      loadAdminOperationLogs(1);
+    });
+  }
+
+  if (operationLogReset) {
+    operationLogReset.addEventListener('click', () => {
+      operationLogFilter?.reset();
+      loadAdminOperationLogs(1);
+    });
+  }
+
+  operationLogFirst?.addEventListener('click', () => loadAdminOperationLogs(1));
+  operationLogPrev?.addEventListener('click', () => loadAdminOperationLogs(adminOperationLogState.page - 1));
+  operationLogNext?.addEventListener('click', () => loadAdminOperationLogs(adminOperationLogState.page + 1));
+  operationLogLast?.addEventListener('click', () => loadAdminOperationLogs(adminOperationLogState.pages));
+
   navButtons.forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       activePanel = button.dataset.adminNavTarget || 'orders';
       syncPanels();
 
@@ -6079,6 +6347,17 @@ async function deleteAdminProductImageToApi(productId, imageId) {
 
       if (activePanel === "categories") {
         refreshAdminCategoriesFromApi();
+      }
+
+      if (activePanel === "operation-logs") {
+        if (!adminOperationLogState.optionsLoaded) {
+          try {
+            await loadAdminOperationLogOptions();
+          } catch (error) {
+            setFeedback(operationLogFeedback, error.detail || error.message || '加载操作日志筛选项失败', true);
+          }
+        }
+        await loadAdminOperationLogs(adminOperationLogState.page);
       }
     });
   });

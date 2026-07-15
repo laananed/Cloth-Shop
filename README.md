@@ -111,6 +111,30 @@ backend\.venv\Scripts\python.exe scripts\reset_final_demo_data.py --execute
 
 前端数据集版本为 `final-catalog-v1`。浏览器第一次打开该版本时会清除旧收藏、旧购物车快照/勾选项、旧本地订单和后台 mock 缓存，并保留账号资料、界面偏好与管理员会话；后续刷新不会再次清除新收藏。商品 API 返回空数组时显示空商品状态，请求失败时显示加载失败，不再回退到旧静态商品。
 
+## 千级销售演示数据
+
+`scripts/generate_final_sales_data.py` 为当前 13 件正式商品生成可反向核验的订单、支付、状态日志、库存日志和销量统计。脚本固定使用随机种子 `20260716`，合成用户邮箱使用 `seed_sales_0001@example.test` 格式，订单号使用 `SEED20260716-000001` 格式；相同商品目录与非 seed 销量基线会得到相同的商品销量分布。
+
+默认命令只读取数据库、打印快照和生成计划，并在结束时确认前后快照一致：
+
+```powershell
+backend\.venv\Scripts\python.exe scripts\generate_final_sales_data.py
+```
+
+确认当前连接的是课程设计演示库后，显式传入 `--execute` 才会在单个事务内写入：
+
+```powershell
+backend\.venv\Scripts\python.exe scripts\generate_final_sales_data.py --execute
+```
+
+重复执行会先精确释放旧 seed 待支付订单的锁定库存，再只删除上述邮箱和订单号标记的数据，重建同一数据集及 `product_sales_stat`；不会删除非 seed 用户、订单、管理员、商品、SKU、图片、分类或标签。只清理本脚本数据并从剩余真实订单重建销量统计时执行：
+
+```powershell
+backend\.venv\Scripts\python.exe scripts\generate_final_sales_data.py --cleanup-only --execute
+```
+
+> 警告：该工具会批量写入或清理交易演示数据，只能在已经确认的课程设计演示/测试数据库中执行，不得在正式生产数据库中随意运行。执行前应另行做好数据库备份。
+
 ## 后端启动
 
 进入后端目录后执行：

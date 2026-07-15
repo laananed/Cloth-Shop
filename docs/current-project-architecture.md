@@ -7,7 +7,7 @@
 - 数据库名称：`frieren_cloth_shop_db`
 - 后端端口：`8050`
 - 前端端口：`5900`
-- 当前自动测试结果：`npm.cmd test` 223/223 通过；`tests.reset_final_demo_data_unit` 6/6 通过
+- 当前自动测试结果：`npm.cmd test` 223/223 通过；`tests.reset_final_demo_data_unit` 6/6、`tests.generate_final_sales_data_unit` 8/8 通过
 - 文档基线：审计起始 commit 为 `73bd07effa932cc467d39b73c224ba3c1119d5e4`（`feat: 集成标签操作日志与并行分支`）；阶段 17 最终提交 SHA 以 Git 历史为准
 
 > 本文档描述当前代码快照。自动测试以纯函数行为和源码结构契约为主；既有退款轮次已完成专用订单验证。阶段 4—13 的既有验收保持不变；阶段 14—15 提供商品多标签和 1～100 商品批量 ADD/REMOVE/REPLACE/CLEAR，阶段 16 为管理员写操作增加同事务成功审计和回滚后失败审计，并提供受保护的日志查询 API 与只读后台面板。阶段 14—16 已在本次集成中完成联合 SQL、API、浏览器和精确数据恢复验证；未执行项会明确标注。
@@ -55,7 +55,8 @@ Cloth-Shop/
 │  ├─ requirements.txt                # Python 依赖清单
 │  └─ uploads/products/               # 运行时商品图片目录；文档不枚举具体文件
 ├─ scripts/
-│  └─ reset_final_demo_data.py         # 带预览、备份、事务、计数、图片失败清单与幂等验证的最终数据清理工具
+│  ├─ reset_final_demo_data.py         # 带预览、备份、事务、计数、图片失败清单与幂等验证的最终数据清理工具
+│  └─ generate_final_sales_data.py     # 固定种子、默认 dry-run、事务写入、幂等替换与一致性验证的销售演示数据工具
 ├─ sql语句/
 │  ├─ 01_数据库结构与增量迁移.sql     # 数据库、16 张表和复杂 SKU 增量字段
 │  ├─ 02_视图.sql                     # 6 个业务视图及复杂 SKU 商品视图覆盖
@@ -70,6 +71,7 @@ Cloth-Shop/
 ├─ tests/site.test.js                 # Node.js 行为、Python 事务替身与源码结构测试入口
 ├─ tests/product_tags_batch_unit.py   # 批量标签权限、提交、回滚、响应与原子错误行为测试
 ├─ tests/reset_final_demo_data_unit.py # 删除顺序、事务/备份失败和商品图片重试边界单元测试
+├─ tests/generate_final_sales_data_unit.py # 销量/SKU 分配、标记隔离、退款历史与 GBK 输出回归测试
 ├─ start_dev.ps1                      # 双服务启动、端口等待和浏览器打开逻辑
 ├─ start_dev.bat                      # Windows 一键启动入口
 ├─ package.json                       # `node --test tests/site.test.js`
@@ -774,6 +776,7 @@ sequenceDiagram
 ### 已形成完整闭环
 
 - **最终演示数据清理**：`scripts/reset_final_demo_data.py` 默认只预览，`--execute` 才执行；可用时先完整备份并持久化受限图片待清理清单，再事务清理旧商品与交易数据，提交后重置适用自增并只删除数据库明确引用的商品运行时文件。图片失败清单会跨次重试，全部处理成功后移除。`final-catalog-v1` 首次页面迁移清除旧商品/SKU 绑定的 localStorage，前后台空结果和失败结果不再回退旧 mock 商品。
+- **千级销售演示数据**：`scripts/generate_final_sales_data.py` 固定随机种子 `20260716`，默认 dry-run，`--execute` 才以事务生成带 `seed_sales_####@example.test` / `SEED20260716-######` 标记的用户、地址、订单、支付、状态/库存日志，并从有效订单明细重建 `product_sales_stat`。重复执行只替换本脚本数据并释放旧待支付锁定库存；`--cleanup-only --execute` 可只清理 seed 数据。当前真实库验收为 13 件商品、80 用户、296 订单、451 明细、1000 件有效销量，指定礼服 250 件唯一第一、指定摩托车 10 件唯一最后，销量/金额/支付/库存/孤儿/无效 SKU 异常均为 0；商品、SKU、图片、分类、标签及非 seed 用户/订单未改变。
 - **商品分类管理**：前台从数据库加载有效分类并与搜索组合筛选，分类 API 失败时使用商品数据或静态分类兜底；后台可查看统计、新增、重命名、排序、逻辑删除和恢复分类，有商品引用时阻止删除。商品卡可调整现有商品分类，新建商品必须选择有效 `category_id`；全链路复用现有 `category` 表和 `product.category_id`，未新增 SQL。
 - **商品多标签管理**：`tag` 与 `product_tag` 提供稳定 ID、多对多关系、排序、逻辑删除、统计和恢复；后台可维护标签、阻止删除仍有关联商品的标签，并为单个已有商品完整替换最多 5 个标签；新增商品可在原事务写入标签。前台标签与分类、搜索组合筛选，商品卡、详情和收藏展示真实标签，API 失败时仅使用可识别的静态促销标签兜底。
 - **商品介绍**：新建商品可选填介绍，`product.description` 持久化，商品列表与后台库存接口透传，前台安全展示并保留换行，后台独立弹窗可查看、修改、清空和刷新；空内容统一保存为 `NULL`。

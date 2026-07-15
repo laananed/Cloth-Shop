@@ -8,7 +8,7 @@ import hmac
 import time
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator
-from pymysql.err import MySQLError
+from pymysql.err import IntegrityError, MySQLError
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import test_connection, get_db
 
@@ -342,6 +342,33 @@ class ProductCreateRequest(BaseModel):
     price: float = Field(..., gt=0, description="SKU 鍞环")
     available_stock: int = Field(..., ge=0, description="初始可用库存")
 
+
+def normalize_category_name(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("分类名称不能为空")
+    if normalized == "全部":
+        raise ValueError("分类名称不能使用保留名称“全部”")
+    return normalized
+
+
+class CategoryCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    sort_order: int = Field(0, ge=0, le=9999)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value):
+        return normalize_category_name(value)
+
+
+class CategoryUpdateRequest(CategoryCreateRequest):
+    pass
+
+
+class AdminProductCategoryUpdateRequest(BaseModel):
+    category_id: int = Field(..., gt=0)
+
 class AdminStockUpdateRequest(BaseModel):
     sku_id: int = Field(..., gt=0, description="要修改库存的 SKU ID")
     available_stock: int = Field(..., ge=0, description="新的可用库存数量")
@@ -593,6 +620,291 @@ def db_test():
             status_code=500,
             detail=f"鏁版嵁搴撹繛鎺ュけ璐ワ細{str(e)}"
         )
+
+
+def query_categories(conn, include_deleted: bool) -> list[dict]:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                c.id AS category_id,
+                c.name AS category_name,
+                c.sort_order,
+                c.is_deleted,
+                c.created_at,
+                COUNT(DISTINCT CASE WHEN p.is_deleted = 0 THEN p.id END) AS product_count,
+                COUNT(DISTINCT CASE WHEN p.is_deleted = 0 AND p.status = 'ON_SALE' THEN p.id END) AS on_sale_product_count,
+                COUNT(DISTINCT CASE WHEN p.is_deleted = 0 AND p.status <> 'ON_SALE' THEN p.id END) AS off_sale_product_count
+            FROM category c
+            LEFT JOIN product p ON p.category_id = c.id
+            WHERE (%s = 1 OR c.is_deleted = 0)
+            GROUP BY c.id, c.name, c.sort_order, c.is_deleted, c.created_at
+            ORDER BY c.is_deleted ASC, c.sort_order ASC, c.name ASC, c.id ASC
+            """,
+            (1 if include_deleted else 0,)
+        )
+        return cursor.fetchall()
+
+
+def query_category_by_id(conn, category_id: int) -> dict | None:
+    return next(
+        (row for row in query_categories(conn, include_deleted=True) if int(row["category_id"]) == category_id),
+        None,
+    )
+
+
+@app.get("/categories")
+def get_categories():
+    try:
+        with get_db() as conn:
+            rows = query_categories(conn, include_deleted=False)
+        return {"success": True, "count": len(rows), "data": jsonable_encoder(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询分类列表失败：{str(e)}")
+
+
+@app.get("/admin/categories")
+def get_admin_categories(authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            rows = query_categories(conn, include_deleted=True)
+        return {"success": True, "count": len(rows), "data": jsonable_encoder(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询后台分类列表失败：{str(e)}")
+
+
+@app.post("/admin/categories")
+def create_admin_category(req: CategoryCreateRequest, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id, is_deleted FROM category WHERE name = %s FOR UPDATE",
+                        (req.name,)
+                    )
+                    existing = cursor.fetchone()
+                    restored = False
+                    if existing and int(existing["is_deleted"]) == 0:
+                        raise HTTPException(status_code=409, detail="分类名称已存在")
+                    if existing:
+                        category_id = int(existing["id"])
+                        restored = True
+                        cursor.execute(
+                            "UPDATE category SET is_deleted = 0, sort_order = %s WHERE id = %s",
+                            (req.sort_order, category_id)
+                        )
+                    else:
+                        cursor.execute(
+                            "INSERT INTO category(name, sort_order, is_deleted) VALUES(%s, %s, 0)",
+                            (req.name, req.sort_order)
+                        )
+                        category_id = int(cursor.lastrowid)
+                conn.commit()
+                row = query_category_by_id(conn, category_id)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+        return {"success": True, "restored": restored, "data": jsonable_encoder(row)}
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="分类名称已存在")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"新增分类失败：{str(e)}")
+
+
+@app.patch("/admin/categories/{category_id}")
+def update_admin_category(category_id: int, req: CategoryUpdateRequest, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        (category_id,)
+                    )
+                    current = cursor.fetchone()
+                    if not current:
+                        raise HTTPException(status_code=404, detail="分类不存在")
+                    if int(current["is_deleted"]) == 1:
+                        raise HTTPException(status_code=400, detail="分类已删除，请先恢复后再修改")
+                    cursor.execute(
+                        "SELECT id FROM category WHERE name = %s AND id <> %s LIMIT 1",
+                        (req.name, category_id)
+                    )
+                    if cursor.fetchone():
+                        raise HTTPException(status_code=409, detail="分类名称已存在")
+                    cursor.execute(
+                        "UPDATE category SET name = %s, sort_order = %s WHERE id = %s",
+                        (req.name, req.sort_order, category_id)
+                    )
+                conn.commit()
+                row = query_category_by_id(conn, category_id)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+        return {"success": True, "data": jsonable_encoder(row)}
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="分类名称已存在")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"修改分类失败：{str(e)}")
+
+
+@app.delete("/admin/categories/{category_id}")
+def delete_admin_category(category_id: int, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        (category_id,)
+                    )
+                    current = cursor.fetchone()
+                    if not current:
+                        raise HTTPException(status_code=404, detail="分类不存在")
+                    if int(current["is_deleted"]) == 1:
+                        conn.rollback()
+                        return {"success": True, "already_deleted": True, "category_id": category_id}
+                    cursor.execute(
+                        "SELECT COUNT(DISTINCT id) AS product_count FROM product WHERE category_id = %s AND is_deleted = 0",
+                        (category_id,)
+                    )
+                    product_count = int(cursor.fetchone()["product_count"] or 0)
+                    if product_count > 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"分类下仍有商品，请先移动商品（当前 {product_count} 件）"
+                        )
+                    cursor.execute(
+                        "UPDATE category SET is_deleted = 1 WHERE id = %s",
+                        (category_id,)
+                    )
+                conn.commit()
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+        return {"success": True, "already_deleted": False, "category_id": category_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除分类失败：{str(e)}")
+
+
+@app.post("/admin/categories/{category_id}/restore")
+def restore_admin_category(category_id: int, authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id, name, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        (category_id,)
+                    )
+                    current = cursor.fetchone()
+                    if not current:
+                        raise HTTPException(status_code=404, detail="分类不存在")
+                    already_active = int(current["is_deleted"]) == 0
+                    if not already_active:
+                        cursor.execute(
+                            "SELECT id FROM category WHERE name = %s AND id <> %s LIMIT 1",
+                            (current["name"], category_id)
+                        )
+                        if cursor.fetchone():
+                            raise HTTPException(status_code=409, detail="分类名称已存在，无法恢复")
+                        cursor.execute(
+                            "UPDATE category SET is_deleted = 0 WHERE id = %s",
+                            (category_id,)
+                        )
+                conn.commit()
+                row = query_category_by_id(conn, category_id)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+        return {"success": True, "already_active": already_active, "data": jsonable_encoder(row)}
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="分类名称已存在，无法恢复")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"恢复分类失败：{str(e)}")
+
+
+@app.patch("/admin/products/{product_id}/category")
+def update_admin_product_category(
+    product_id: int,
+    req: AdminProductCategoryUpdateRequest,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id, category_id FROM product WHERE id = %s AND is_deleted = 0 FOR UPDATE",
+                        (product_id,)
+                    )
+                    product = cursor.fetchone()
+                    if not product:
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+                    cursor.execute(
+                        "SELECT id, name, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        (req.category_id,)
+                    )
+                    category = cursor.fetchone()
+                    if not category:
+                        raise HTTPException(status_code=404, detail="目标分类不存在")
+                    if int(category["is_deleted"]) == 1:
+                        raise HTTPException(status_code=400, detail="目标分类已删除，请先恢复")
+                    changed = int(product["category_id"]) != req.category_id
+                    if changed:
+                        cursor.execute(
+                            """
+                            UPDATE product
+                            SET category_id = %s
+                            WHERE id = %s
+                            """,
+                            (req.category_id, product_id)
+                        )
+                conn.commit()
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+        return {
+            "success": True,
+            "product_id": product_id,
+            "category_id": req.category_id,
+            "category_name": category["name"],
+            "changed": changed,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"修改商品分类失败：{str(e)}")
 
 
 @app.get("/products")
@@ -853,7 +1165,8 @@ def ensure_admin_sku_unique(cursor, product_id: int, sku_row: dict, exclude_sku_
 
 @app.post("/products")
 async def create_product(
-    category_name: str = Form(...),
+    category_id: int | None = Form(None),
+    category_name: str | None = Form(None),
     product_name: str = Form(...),
     description: str = Form(""),
     sku_name: str = Form("默认规格"),
@@ -871,13 +1184,13 @@ async def create_product(
     """
     require_admin_user(authorization)
 
-    category_name = category_name.strip()
+    category_name = str(category_name or "").strip()
     product_name = product_name.strip()
     description = normalize_product_description(description)
     sku_name = sku_name.strip() or "默认规格"
 
-    if not category_name:
-        raise HTTPException(status_code=400, detail="鍟嗗搧鍒嗙被涓嶈兘涓虹┖")
+    if category_id is None and not category_name:
+        raise HTTPException(status_code=400, detail="请选择商品分类")
 
     if not product_name:
         raise HTTPException(status_code=400, detail="鍟嗗搧鍚嶇О涓嶈兘涓虹┖")
@@ -908,18 +1221,27 @@ async def create_product(
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
-                    # 1. 鍒嗙被涓嶅瓨鍦ㄥ垯鍒涘缓锛屽凡瀛樺湪鍒欏鐢?
-                    cursor.execute(
-                        """
-                        INSERT INTO category(name, sort_order, is_deleted)
-                        VALUES(%s, 0, 0)
-                        ON DUPLICATE KEY UPDATE
-                            id = LAST_INSERT_ID(id),
-                            is_deleted = 0
-                        """,
-                        (category_name,)
-                    )
-                    category_id = cursor.lastrowid
+                    # 1. 分类必须已存在且启用；category_id 优先，category_name 仅兼容旧客户端。
+                    if category_id is not None:
+                        cursor.execute(
+                            "SELECT id, is_deleted FROM category WHERE id = %s",
+                            (category_id,)
+                        )
+                        category = cursor.fetchone()
+                        if not category:
+                            raise HTTPException(status_code=404, detail="分类不存在，请先在分类管理中创建")
+                        if int(category["is_deleted"]) == 1:
+                            raise HTTPException(status_code=400, detail="分类已删除，请先在分类管理中恢复")
+                        resolved_category_id = int(category["id"])
+                    else:
+                        cursor.execute(
+                            "SELECT id FROM category WHERE name = %s AND is_deleted = 0 LIMIT 1",
+                            (category_name,)
+                        )
+                        category = cursor.fetchone()
+                        if not category:
+                            raise HTTPException(status_code=404, detail="分类不存在，请先在分类管理中创建")
+                        resolved_category_id = int(category["id"])
 
                     # 2. 鍐欏叆 product 琛紝淇濆瓨 image_url
                     cursor.execute(
@@ -934,7 +1256,7 @@ async def create_product(
                         )
                         VALUES(%s, %s, %s, %s, 'ON_SALE', 0)
                         """,
-                        (category_id, product_name, description, image_url)
+                        (resolved_category_id, product_name, description, image_url)
                     )
                     product_id = cursor.lastrowid
                     # 3. 保存商品图片扩展记录，第一张图片兼容为主图。

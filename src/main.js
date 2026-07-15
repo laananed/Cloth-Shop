@@ -52,6 +52,15 @@ import {
   normalizeLightboxImages,
   wrapLightboxIndex,
 } from './image-lightbox.js?v=20260715a';
+import {
+  ALL_CATEGORY_KEY,
+  createStaticCategories,
+  deriveApiCategoriesFromProducts,
+  filterProductsByCategory,
+  normalizeApiCategory,
+  normalizeApiCategories,
+  resolveActiveCategoryKey,
+} from './category-utils.js?v=20260715a';
 
 const API_BASE_URL = "http://127.0.0.1:8050";
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000;
@@ -60,7 +69,7 @@ const CURRENT_USER_ID = 2;
 const CURRENT_ADDRESS_ID = 3;
 
 const copy = getSiteCopy();
-const collections = getCollections();
+const staticCollections = getCollections();
 // const products = getProducts();
 // const salesRankMap = getSalesRankMap(products);
 // const productsById = new Map(products.map((product) => [product.id, product]));
@@ -73,6 +82,9 @@ let products = staticProducts;
 let salesRankMap = getSalesRankMap(products);
 let productsById = new Map(products.map((product) => [product.id, product]));
 let hasLoadedProductsFromApi = false;
+let hasLoadedCategoriesFromApi = false;
+let apiCategoryOptions = [];
+let categoryOptions = createStaticCategories(staticCollections, staticProducts);
 
 const heroTitle = document.querySelector('[data-hero-title]');
 const heroSlogan = document.querySelector('[data-hero-slogan]');
@@ -283,6 +295,7 @@ function clearAdminDashboardData(targets = {}) {
     statsRows,
     productList,
     productSummary,
+    categoryList,
   } = targets;
   const emptyMessage = '请先登录管理员账号';
 
@@ -305,6 +318,10 @@ function clearAdminDashboardData(targets = {}) {
   if (productSummary) {
     productSummary.hidden = true;
     productSummary.innerHTML = '';
+  }
+
+  if (categoryList) {
+    categoryList.innerHTML = `<div class="admin-empty">${escapeHtml(emptyMessage)}</div>`;
   }
 }
 
@@ -550,7 +567,7 @@ const sidebarMeta = {
   },
 };
 
-let activeCategory = '全部';
+let activeCategoryKey = ALL_CATEGORY_KEY;
 let activeProductSearchKeyword = '';
 let activeSidebarSection = 'account';
 let activeOrderStatusFilter = 'ALL';
@@ -661,6 +678,7 @@ function convertApiProducts(apiRows) {
 
         // 数据库字段
         productId,
+        categoryId: Number(row.category_id),
         skuId,
         defaultSkuId: skuId,
 
@@ -765,6 +783,7 @@ async function loadProductsFromApi() {
     hasLoadedProductsFromApi = true;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
+    syncStorefrontCategoryOptions();
     const refreshedActiveProduct = activePurchaseProduct
       ? productsById.get(activePurchaseProduct.id)
       : null;
@@ -790,9 +809,38 @@ async function loadProductsFromApi() {
     hasLoadedProductsFromApi = false;
     salesRankMap = getSalesRankMap(products);
     productsById = new Map(products.map((product) => [product.id, product]));
+    syncStorefrontCategoryOptions();
     updateView();
     renderSidebar();
   }
+}
+
+function syncStorefrontCategoryOptions() {
+  if (!hasLoadedProductsFromApi) {
+    categoryOptions = createStaticCategories(staticCollections, staticProducts);
+  } else if (hasLoadedCategoriesFromApi) {
+    categoryOptions = apiCategoryOptions;
+  } else {
+    categoryOptions = deriveApiCategoriesFromProducts(products);
+  }
+  activeCategoryKey = resolveActiveCategoryKey(activeCategoryKey, categoryOptions);
+}
+
+async function loadCategoriesFromApi() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/categories`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    if (!result.success || !Array.isArray(result.data)) throw new Error('后端返回的分类数据格式不正确');
+    apiCategoryOptions = normalizeApiCategories(result.data);
+    hasLoadedCategoriesFromApi = true;
+  } catch (error) {
+    console.warn('加载分类接口失败，使用当前商品派生分类：', error);
+    apiCategoryOptions = [];
+    hasLoadedCategoriesFromApi = false;
+  }
+  syncStorefrontCategoryOptions();
+  updateView();
 }
 
 const selectedSkuByProductId = new Map();
@@ -2332,18 +2380,26 @@ function renderCollections() {
     return;
   }
 
-  const buttons = [{ title: '全部', summary: '浏览全部商品' }, ...collections].map((item) => {
-    const isActive = item.title === activeCategory;
+  const visibleCategories = categoryOptions.filter((item) => Number(item.isDeleted) === 0 && item.productCount > 0);
+  activeCategoryKey = resolveActiveCategoryKey(activeCategoryKey, visibleCategories);
+  const allOption = { key: ALL_CATEGORY_KEY, name: '全部', productCount: products.length };
+  const buttons = [allOption, ...visibleCategories].map((item) => {
+    const isActive = item.key === activeCategoryKey;
+    const ariaLabel = item.key === ALL_CATEGORY_KEY
+      ? `全部，共 ${item.productCount} 件商品`
+      : `${item.name}，共 ${item.productCount} 件商品`;
 
     return `
-      <button class="collection-chip ${isActive ? 'is-active' : ''}" type="button" data-collection="${item.title}">
-        <span class="collection-chip__title">${item.title}</span>
+      <button class="collection-chip ${isActive ? 'is-active' : ''}" type="button" data-collection="${escapeHtml(item.key)}" aria-label="${escapeHtml(ariaLabel)}" aria-pressed="${isActive}">
+        <span class="collection-chip__title">${escapeHtml(item.name)}</span>
       </button>
     `;
   });
 
   collectionRail.innerHTML = buttons.join('');
-  activeCollectionLabel.textContent = activeCategory;
+  activeCollectionLabel.textContent = activeCategoryKey === ALL_CATEGORY_KEY
+    ? '全部'
+    : visibleCategories.find((item) => item.key === activeCategoryKey)?.name || '全部';
 }
 
 function getProductSearchText(product) {
@@ -2366,17 +2422,12 @@ function getProductSearchText(product) {
 }
 
 function filteredProducts() {
-  const keyword = activeProductSearchKeyword.trim().toLowerCase();
-
-  return products.filter((product) => {
-    const matchCategory =
-      activeCategory === '全部' || product.category === activeCategory;
-
-    const matchKeyword =
-      !keyword || getProductSearchText(product).includes(keyword);
-
-    return matchCategory && matchKeyword;
-  }).sort(compareProductsForCustomer);
+  return filterProductsByCategory(
+    products,
+    activeCategoryKey,
+    activeProductSearchKeyword,
+    getProductSearchText,
+  ).sort(compareProductsForCustomer);
 }
 
 function renderProducts() {
@@ -4278,7 +4329,7 @@ if (collectionRail) {
       return;
     }
 
-    activeCategory = button.dataset.collection;
+    activeCategoryKey = button.dataset.collection;
     updateView();
   });
 }
@@ -4400,6 +4451,14 @@ function initAdminPage() {
   const productImagePreview = shell.querySelector('[data-admin-image-preview]');
   const productNameInput = shell.querySelector('[data-admin-product-form] [name="name"]');
   const productSubmitButton = shell.querySelector('[data-admin-product-form] button[type="submit"]');
+  const productCategorySelect = shell.querySelector('[data-admin-product-form] [data-admin-product-category-select]');
+  const productCategoryEmpty = shell.querySelector('[data-admin-product-category-empty]');
+  const categoryForm = shell.querySelector('[data-admin-category-form]');
+  const categoryNameInput = shell.querySelector('[data-admin-category-name]');
+  const categorySortOrderInput = shell.querySelector('[data-admin-category-sort-order]');
+  const categoryFeedback = shell.querySelector('[data-admin-category-feedback]');
+  const categoryFilter = shell.querySelector('[data-admin-category-filter]');
+  const categoryList = shell.querySelector('[data-admin-category-list]');
   const adminSkuColorsInput = shell.querySelector('[data-admin-sku-colors]');
   const adminSkuSizesInput = shell.querySelector('[data-admin-sku-sizes]');
   const adminSkuBasePriceInput = shell.querySelector('[data-admin-sku-base-price]');
@@ -4440,6 +4499,7 @@ function initAdminPage() {
     statsRows,
     productList,
     productSummary,
+    categoryList,
   };
   let activePanel = 'orders';
   let activeAdminOrderDetailId = null;
@@ -4460,6 +4520,9 @@ function initAdminPage() {
   let productRows = [];
   let renderedStats = null;
   let renderedProducts = null;
+  let adminCategories = [];
+  let activeAdminCategoryFilter = 'ALL';
+  const pendingAdminCategoryIds = new Set();
   const adminProductFilters = [
     { value: 'ALL', label: '全部' },
     { value: 'ON_SALE', label: '在售' },
@@ -4634,6 +4697,9 @@ function initAdminPage() {
     productRows = [];
     renderedStats = null;
     renderedProducts = null;
+    adminCategories = [];
+    pendingAdminCategoryIds.clear();
+    refreshAdminProductCategorySelect();
     clearAdminDashboardData(dashboardTargets);
   }
 
@@ -5163,6 +5229,7 @@ function convertApiRowsToAdminProducts(apiRows) {
       productMap.set(productId, {
         id: `db-product-${productId}`,
         productId,
+        categoryId: Number(row.category_id),
         name: row.product_name || "未命名商品",
         category: row.category_name || "未分类",
         price,
@@ -5225,6 +5292,7 @@ function renderAdminInventoryProductsView(adminProducts) {
     rows: adminProducts.map((product) => ({
       id: product.id,
       productId: product.productId,
+      categoryId: product.categoryId,
       name: product.name,
       category: product.category,
       priceLabel: formatPrice(product.price),
@@ -5253,6 +5321,135 @@ async function loadAdminProductsFromApi() {
   }
 
   return convertApiRowsToAdminProducts(result.data);
+}
+
+async function loadAdminCategoriesFromApi() {
+  const result = await adminFetch(`${API_BASE_URL}/admin/categories`);
+  if (!result.success || !Array.isArray(result.data)) {
+    throw new Error(result.detail || '加载后台分类列表失败');
+  }
+  return result.data
+    .map(normalizeApiCategory)
+    .sort((left, right) => left.isDeleted - right.isDeleted
+      || left.sortOrder - right.sortOrder
+      || left.name.localeCompare(right.name, 'zh-CN')
+      || left.categoryId - right.categoryId);
+}
+
+async function createAdminCategoryToApi(name, sortOrder) {
+  return adminFetch(`${API_BASE_URL}/admin/categories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, sort_order: sortOrder }),
+  });
+}
+
+async function updateAdminCategoryToApi(categoryId, name, sortOrder) {
+  return adminFetch(`${API_BASE_URL}/admin/categories/${categoryId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, sort_order: sortOrder }),
+  });
+}
+
+async function deleteAdminCategoryToApi(categoryId) {
+  return adminFetch(`${API_BASE_URL}/admin/categories/${categoryId}`, { method: 'DELETE' });
+}
+
+async function restoreAdminCategoryToApi(categoryId) {
+  return adminFetch(`${API_BASE_URL}/admin/categories/${categoryId}/restore`, { method: 'POST' });
+}
+
+async function updateAdminProductCategoryToApi(productId, categoryId) {
+  return adminFetch(`${API_BASE_URL}/admin/products/${productId}/category`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category_id: categoryId }),
+  });
+}
+
+function getActiveAdminCategories() {
+  return adminCategories.filter((category) => Number(category.isDeleted) === 0);
+}
+
+function getAdminCategoryOptionsHtml(selectedId = null) {
+  return getActiveAdminCategories().map((category) => `
+    <option value="${category.categoryId}" ${Number(selectedId) === category.categoryId ? 'selected' : ''}>
+      ${escapeHtml(category.name)}
+    </option>
+  `).join('');
+}
+
+function refreshAdminProductCategorySelect() {
+  if (!productCategorySelect) return;
+  const previous = Number(productCategorySelect.value);
+  const activeCategories = getActiveAdminCategories();
+  productCategorySelect.innerHTML = activeCategories.length
+    ? `<option value="">请选择分类</option>${getAdminCategoryOptionsHtml(previous)}`
+    : '<option value="">暂无可用分类</option>';
+  productCategorySelect.disabled = activeCategories.length === 0;
+  if (productCategoryEmpty) productCategoryEmpty.hidden = activeCategories.length > 0;
+  if (productSubmitButton && !productSubmitButton.textContent.includes('上架中')) {
+    productSubmitButton.disabled = activeCategories.length === 0;
+  }
+}
+
+function renderAdminCategories() {
+  refreshAdminProductCategorySelect();
+  if (!categoryList) return;
+  const rows = adminCategories.filter((category) => {
+    if (activeAdminCategoryFilter === 'ACTIVE') return Number(category.isDeleted) === 0;
+    if (activeAdminCategoryFilter === 'DELETED') return Number(category.isDeleted) === 1;
+    return true;
+  });
+  categoryFilter?.querySelectorAll('[data-admin-category-filter-value]').forEach((button) => {
+    const active = button.dataset.adminCategoryFilterValue === activeAdminCategoryFilter;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  if (!rows.length) {
+    categoryList.innerHTML = '<div class="admin-empty">当前筛选暂无分类</div>';
+    return;
+  }
+  categoryList.innerHTML = rows.map((category) => {
+    const deleted = Number(category.isDeleted) === 1;
+    const busy = pendingAdminCategoryIds.has(category.categoryId);
+    const hasProducts = category.productCount > 0;
+    return `
+      <article class="admin-category-row ${deleted ? 'is-deleted' : ''}" data-admin-category-row="${category.categoryId}">
+        <div class="admin-category-row__meta"><span>分类 ID</span><strong>${category.categoryId}</strong></div>
+        <label class="admin-category-row__field"><span>分类名称</span><input maxlength="80" value="${escapeHtml(category.name)}" data-admin-category-edit-name ${deleted || busy ? 'disabled' : ''} /></label>
+        <label class="admin-category-row__field"><span>排序值</span><input type="number" min="0" max="9999" step="1" value="${category.sortOrder}" data-admin-category-edit-sort ${deleted || busy ? 'disabled' : ''} /></label>
+        <div class="admin-category-row__meta admin-category-row__counts"><span>商品统计</span><strong>全部 ${category.productCount} · 上架 ${category.onSaleProductCount} · 下架 ${category.offSaleProductCount}</strong></div>
+        <div class="admin-category-row__meta"><span>状态</span><strong>${deleted ? '已删除' : '使用中'}</strong></div>
+        <div class="admin-category-row__actions">
+          ${deleted
+            ? `<button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-category-restore="${category.categoryId}" ${busy ? 'disabled' : ''}>恢复分类</button>`
+            : `<button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-category-save="${category.categoryId}" ${busy ? 'disabled' : ''}>保存修改</button>
+               <button type="button" class="ghost-button ghost-button--small ghost-button--danger" data-admin-category-delete="${category.categoryId}" ${busy || hasProducts ? 'disabled' : ''}>删除分类</button>`}
+        </div>
+        ${!deleted && hasProducts ? '<p class="admin-category-row__hint">请先移动该分类下的商品</p>' : ''}
+      </article>
+    `;
+  }).join('');
+}
+
+async function refreshAdminCategoriesFromApi() {
+  try {
+    if (categoryList && !adminCategories.length) categoryList.innerHTML = '<div class="admin-empty">正在加载分类...</div>';
+    adminCategories = await loadAdminCategoriesFromApi();
+    renderAdminCategories();
+    renderProducts();
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      clearStoredAdminSession();
+      resetAdminDashboardState();
+      renderAdminAuthState(error.detail || error.message);
+      return;
+    }
+    if (categoryList) categoryList.innerHTML = `<div class="admin-empty">加载分类失败：${escapeHtml(error.message)}</div>`;
+    setFeedback(categoryFeedback, `加载分类失败：${error.message}`, true);
+  }
 }
 
   function refreshAdminData() {
@@ -5425,6 +5622,17 @@ async function refreshAdminProductsFromApi() {
                 <span>${escapeHtml(row.category)} · ${escapeHtml(row.badge)}</span>
                 <span>状态：${escapeHtml(statusLabel)} · 图片 ${escapeHtml(imageCount)} 张 · ${escapeHtml(row.imageLabel)}</span>
                 <span>SKU ${escapeHtml(row.skuCount || 1)} 个 · 可用库存 ${escapeHtml(row.stock || 0)} · 锁定 ${escapeHtml(row.lockedStock || 0)} · 销量 ${escapeHtml(row.sales || 0)}</span>
+
+                <div class="admin-product-category-control">
+                  <span>所属分类</span>
+                  <select data-admin-product-category-select="${row.productId}" data-admin-product-category-original="${row.categoryId}" ${getActiveAdminCategories().length ? '' : 'disabled'}>
+                    ${getAdminCategoryOptionsHtml(row.categoryId)}
+                  </select>
+                  <div class="admin-product-category-control__actions">
+                    <button type="button" class="ghost-button ghost-button--small ghost-button--solid" data-admin-product-category-save="${row.productId}" disabled>保存分类</button>
+                    <small data-admin-product-category-feedback="${row.productId}"></small>
+                  </div>
+                </div>
 
                 <div class="admin-sku-list">
                   ${row.skuList
@@ -5736,7 +5944,7 @@ async function createAdminProductToApi(values, imageFiles = []) {
 
   const firstSku = skuRows[0];
 
-  formData.append("category_name", String(values.category || "").trim());
+  formData.append("category_id", String(Number(values.categoryId || values.category_id || 0)));
   formData.append("product_name", String(values.name || "").trim());
   formData.append("description", normalizeProductDescription(values.description));
 
@@ -5811,6 +6019,7 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     populateImageSelect();
     await refreshAdminOrdersFromApi();
     await refreshAdminStatsFromApi();
+    await refreshAdminCategoriesFromApi();
     await refreshAdminProductsFromApi();
   }
 
@@ -5866,6 +6075,10 @@ async function deleteAdminProductImageToApi(productId, imageId) {
 
       if (activePanel === "products") {
         refreshAdminProductsFromApi();
+      }
+
+      if (activePanel === "categories") {
+        refreshAdminCategoriesFromApi();
       }
     });
   });
@@ -6442,7 +6655,7 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       const values = Object.fromEntries(new FormData(productForm).entries());
       const imageFiles = Array.from(productImageInput?.files || []);
       const name = String(values.name || '').trim();
-      const category = String(values.category || '').trim();
+      const categoryId = Number(values.category_id);
       const description = normalizeProductDescription(values.description);
 
       if (String(values.description || "").length > PRODUCT_DESCRIPTION_MAX_LENGTH) {
@@ -6460,8 +6673,8 @@ async function deleteAdminProductImageToApi(productId, imageId) {
         return;
       }
 
-      if (!name || !category) {
-        setFeedback(productFeedback, '请完整填写商品名称和分类。', true);
+      if (!name || !Number.isInteger(categoryId) || categoryId <= 0) {
+        setFeedback(productFeedback, '请完整填写商品名称并选择已有分类。', true);
         return;
       }
 
@@ -6479,7 +6692,7 @@ async function deleteAdminProductImageToApi(productId, imageId) {
         {
           ...values,
           name,
-          category,
+          categoryId,
           description,
           skuRows,
         },
@@ -6501,18 +6714,88 @@ async function deleteAdminProductImageToApi(productId, imageId) {
         }
 
       await refreshAdminProductsFromApi();
+      await refreshAdminCategoriesFromApi();
       syncPanels();
       } catch (error) {
         console.error("后台新增商品失败：", error);
         setFeedback(productFeedback, `新增商品失败：${error.message}`, true);
       } finally {
         if (productSubmitButton) {
-          productSubmitButton.disabled = false;
+          productSubmitButton.disabled = getActiveAdminCategories().length === 0;
           productSubmitButton.textContent = "上架新品";
         }
       }
     });
   }
+
+  categoryForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = String(categoryNameInput?.value || '').trim();
+    const sortOrder = Number(categorySortOrderInput?.value);
+    const submitButton = categoryForm.querySelector('button[type="submit"]');
+    if (!name || name === '全部' || name.length > 80) {
+      setFeedback(categoryFeedback, name === '全部' ? '分类名称不能使用“全部”。' : '分类名称不能为空且最多 80 个字符。', true);
+      return;
+    }
+    if (!Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 9999) {
+      setFeedback(categoryFeedback, '排序值必须是 0 到 9999 的整数。', true);
+      return;
+    }
+    try {
+      submitButton.disabled = true;
+      submitButton.textContent = '新增中...';
+      const result = await createAdminCategoryToApi(name, sortOrder);
+      setFeedback(categoryFeedback, result.restored ? '同名已删除分类已恢复。' : '分类新增成功。');
+      categoryForm.reset();
+      if (categorySortOrderInput) categorySortOrderInput.value = '0';
+      await refreshAdminCategoriesFromApi();
+      await refreshAdminProductsFromApi();
+    } catch (error) {
+      setFeedback(categoryFeedback, error.message, true);
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = '新增分类';
+    }
+  });
+
+  categoryFilter?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-admin-category-filter-value]');
+    if (!button) return;
+    activeAdminCategoryFilter = button.dataset.adminCategoryFilterValue || 'ALL';
+    renderAdminCategories();
+  });
+
+  categoryList?.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-admin-category-save], [data-admin-category-delete], [data-admin-category-restore]');
+    if (!button || button.disabled) return;
+    const categoryId = Number(button.dataset.adminCategorySave || button.dataset.adminCategoryDelete || button.dataset.adminCategoryRestore);
+    const row = categoryList.querySelector(`[data-admin-category-row="${categoryId}"]`);
+    if (!Number.isInteger(categoryId) || categoryId <= 0 || !row || pendingAdminCategoryIds.has(categoryId)) return;
+    try {
+      pendingAdminCategoryIds.add(categoryId);
+      button.disabled = true;
+      if (button.matches('[data-admin-category-save]')) {
+        const name = String(row.querySelector('[data-admin-category-edit-name]')?.value || '').trim();
+        const sortOrder = Number(row.querySelector('[data-admin-category-edit-sort]')?.value);
+        await updateAdminCategoryToApi(categoryId, name, sortOrder);
+        setFeedback(categoryFeedback, `分类 ${categoryId} 已保存。`);
+      } else if (button.matches('[data-admin-category-delete]')) {
+        if (!window.confirm('确定逻辑删除这个空分类吗？')) return;
+        await deleteAdminCategoryToApi(categoryId);
+        setFeedback(categoryFeedback, `分类 ${categoryId} 已删除。`);
+      } else {
+        await restoreAdminCategoryToApi(categoryId);
+        setFeedback(categoryFeedback, `分类 ${categoryId} 已恢复。`);
+      }
+      await refreshAdminCategoriesFromApi();
+      await refreshAdminProductsFromApi();
+    } catch (error) {
+      setFeedback(categoryFeedback, error.message, true);
+    } finally {
+      pendingAdminCategoryIds.delete(categoryId);
+      renderAdminCategories();
+    }
+  });
 
   if (productFilterBar) {
     productFilterBar.addEventListener("click", (event) => {
@@ -6723,13 +7006,41 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   }
 
   if (productList) {
+  productList.addEventListener('change', (event) => {
+    const select = event.target.closest('[data-admin-product-category-select]');
+    if (!select) return;
+    const productId = Number(select.dataset.adminProductCategorySelect);
+    const button = productList.querySelector(`[data-admin-product-category-save="${productId}"]`);
+    if (button) button.disabled = Number(select.value) === Number(select.dataset.adminProductCategoryOriginal);
+  });
+
   productList.addEventListener("click", async (event) => {
+    const categorySaveButton = event.target.closest('[data-admin-product-category-save]');
     const stockButton = event.target.closest("[data-admin-stock-save]");
     const statusButton = event.target.closest("[data-admin-product-status-id]");
     const deleteButton = event.target.closest("[data-admin-product-delete-id]");
     const manageImagesButton = event.target.closest("[data-admin-product-image-manage]");
     const manageSkusButton = event.target.closest("[data-admin-product-sku-manage]");
     const editDescriptionButton = event.target.closest("[data-admin-product-description-edit]");
+
+    if (categorySaveButton) {
+      const productId = Number(categorySaveButton.dataset.adminProductCategorySave);
+      const select = productList.querySelector(`[data-admin-product-category-select="${productId}"]`);
+      const categoryId = Number(select?.value);
+      if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(categoryId) || categoryId <= 0) return;
+      try {
+        categorySaveButton.disabled = true;
+        categorySaveButton.textContent = '保存中...';
+        await updateAdminProductCategoryToApi(productId, categoryId);
+        setFeedback(productManageFeedback || productFeedback, `商品 ${productId} 分类修改成功。`);
+        await refreshAdminProductsFromApi();
+        await refreshAdminCategoriesFromApi();
+      } catch (error) {
+        setFeedback(productManageFeedback || productFeedback, `修改商品分类失败：${error.message}`, true);
+        await refreshAdminProductsFromApi();
+      }
+      return;
+    }
 
     if (editDescriptionButton) {
       const productId = Number(editDescriptionButton.dataset.adminProductDescriptionEdit);
@@ -6882,16 +7193,6 @@ initScrollTools();
 if (isAdminPage) {
   initAdminPage();
 } else {
-collectionRail.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-collection]');
-  if (!button) {
-    return;
-  }
-
-  activeCategory = button.dataset.collection;
-  updateView();
-});
-
 sidebarNavButtons.forEach((button) => {
   button.addEventListener('click', () => {
     openSidebar(button.dataset.sidebarTarget);
@@ -7499,7 +7800,7 @@ renderSidebar();
 updateHeroParallax();
 updateHeroScrollState();
 // testLoadProductsFromApi(); 测试函数，通过以后就可以不再使用。
-void loadProductsFromApi()
+void Promise.all([loadProductsFromApi(), loadCategoriesFromApi()])
   .then(() => syncCartFromApi(CURRENT_USER_ID))
   .catch((error) => {
     console.error('初始化数据库购物车失败，继续使用本地缓存：', error);

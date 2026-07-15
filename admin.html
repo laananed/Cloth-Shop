@@ -66,6 +66,7 @@
         <aside class="admin-nav" aria-label="后台导航">
           <button class="admin-nav__button is-active" type="button" data-admin-nav-target="orders" data-admin-nav-orders>订单查看</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="products" data-admin-nav-products>商品管理</button>
+          <button class="admin-nav__button" type="button" data-admin-nav-target="categories" data-admin-nav-categories>分类管理</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="product-create" data-admin-nav-product-create>新增商品</button>
           <button class="admin-nav__button" type="button" data-admin-nav-target="stats" data-admin-nav-stats>销量统计</button>
         </aside>
@@ -139,6 +140,36 @@
             </div>
           </section>
 
+          <section class="admin-panel" data-admin-panel="categories">
+            <div class="admin-panel__header">
+              <div>
+                <p class="admin-panel__eyebrow">分类管理</p>
+                <h2>商品分类与排序</h2>
+              </div>
+              <p class="admin-panel__note">分类名称会同步到前后台；有商品的分类需先移动商品后才能删除。</p>
+            </div>
+
+            <form class="admin-category-form" data-admin-category-form>
+              <label class="admin-field">
+                <span>分类名称</span>
+                <input type="text" maxlength="80" data-admin-category-name placeholder="例如：连衣裙" />
+              </label>
+              <label class="admin-field">
+                <span>排序值</span>
+                <input type="number" min="0" max="9999" step="1" value="0" data-admin-category-sort-order />
+              </label>
+              <button class="admin-submit" type="submit">新增分类</button>
+            </form>
+            <p class="admin-feedback" data-admin-category-feedback aria-live="polite"></p>
+
+            <div class="admin-category-filter" data-admin-category-filter aria-label="分类状态筛选">
+              <button class="is-active" type="button" data-admin-category-filter-value="ALL" aria-pressed="true">全部</button>
+              <button type="button" data-admin-category-filter-value="ACTIVE" aria-pressed="false">使用中</button>
+              <button type="button" data-admin-category-filter-value="DELETED" aria-pressed="false">已删除</button>
+            </div>
+            <div class="admin-category-list" data-admin-category-list></div>
+          </section>
+
           <section class="admin-panel" data-admin-panel="product-create">
             <div class="admin-panel__header">
               <div>
@@ -156,7 +187,10 @@
 
               <label class="admin-field">
                 <span>分类</span>
-                <input type="text" name="category" placeholder="例如：连衣裙" />
+                <select name="category_id" data-admin-product-category-select required disabled>
+                  <option value="">正在加载分类...</option>
+                </select>
+                <small data-admin-product-category-empty>请先在分类管理中创建分类</small>
               </label>
 
               <label class="admin-field">

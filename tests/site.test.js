@@ -3242,3 +3242,199 @@ test('[CART-CHECKOUT-10-8] expected payment rejection stays out of browser error
   assert.doesNotMatch(payBody, /console\.error\(['"]购物车订单支付失败/);
 });
 
+test('[CATEGORY-13-1] category helpers keep database identity stable and static fallbacks deterministic', async () => {
+  const modulePath = 'src/category-utils.js';
+  assert.equal(existsSync(modulePath), true, `${modulePath} should exist`);
+
+  const {
+    ALL_CATEGORY_KEY,
+    createApiCategoryKey,
+    createStaticCategoryKey,
+    normalizeApiCategory,
+  } = await import('../src/category-utils.js');
+  const beforeRename = normalizeApiCategory({ category_id: 7, category_name: '连衣裙', sort_order: 10, product_count: 2 });
+  const afterRename = normalizeApiCategory({ category_id: 7, category_name: '礼服裙', sort_order: 10, product_count: 2 });
+
+  assert.equal(ALL_CATEGORY_KEY, 'all');
+  assert.equal(createApiCategoryKey(7), 'category:7');
+  assert.equal(createStaticCategoryKey(' 日常轻搭 '), 'static:日常轻搭');
+  assert.equal(beforeRename.key, afterRename.key);
+  assert.equal(afterRename.name, '礼服裙');
+});
+
+test('[CATEGORY-13-2] category helpers sort API rows and derive database categories without mutating products', async () => {
+  assert.equal(existsSync('src/category-utils.js'), true, 'src/category-utils.js should exist');
+  const { deriveApiCategoriesFromProducts, normalizeApiCategories } = await import('../src/category-utils.js');
+  const rows = [
+    { category_id: 3, category_name: '外套', sort_order: 20, product_count: 1 },
+    { category_id: 2, category_name: '半身裙', sort_order: 10, product_count: 1 },
+    { category_id: 1, category_name: '连衣裙', sort_order: 10, product_count: 0 },
+  ];
+  const products = [
+    { productId: 1, categoryId: 3, category: '外套' },
+    { productId: 2, categoryId: 3, category: '外套' },
+    { productId: 3, categoryId: 2, category: '半身裙' },
+  ];
+  const snapshot = structuredClone(products);
+
+  assert.deepEqual(normalizeApiCategories(rows).map((item) => item.categoryId), [2, 1, 3]);
+  assert.deepEqual(deriveApiCategoriesFromProducts(products).map((item) => [item.categoryId, item.productCount]), [[2, 1], [3, 2]]);
+  assert.deepEqual(products, snapshot);
+});
+
+test('[CATEGORY-13-3] category filtering combines stable category ids with search text and resets invalid keys', async () => {
+  assert.equal(existsSync('src/category-utils.js'), true, 'src/category-utils.js should exist');
+  const { filterProductsByCategory, resolveActiveCategoryKey } = await import('../src/category-utils.js');
+  const products = [
+    { productId: 1, categoryId: 7, category: '礼服裙', name: '海盐长裙' },
+    { productId: 2, categoryId: 8, category: '外套', name: '星夜风衣' },
+  ];
+  const categories = [{ key: 'category:7' }, { key: 'category:8' }];
+
+  assert.deepEqual(filterProductsByCategory(products, 'category:7', '海盐').map((item) => item.productId), [1]);
+  assert.deepEqual(filterProductsByCategory(products, 'category:7', '风衣'), []);
+  assert.equal(resolveActiveCategoryKey('category:7', categories), 'category:7');
+  assert.equal(resolveActiveCategoryKey('category:99', categories), 'all');
+});
+
+test('[CATEGORY-13-4] backend exposes shared counted category queries and fixed public and admin routes', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const queryBody = sliceBetween(backend, 'def query_categories(', '@app.get("/categories")');
+  const routes = sliceBetween(backend, '@app.get("/categories")', '@app.post("/products")');
+
+  assert.ok(queryBody.includes('COUNT(DISTINCT CASE WHEN p.is_deleted = 0 THEN p.id END)'));
+  assert.ok(queryBody.includes("p.status = 'ON_SALE'"));
+  assert.ok(queryBody.includes("p.status <> 'ON_SALE'"));
+  assert.ok(queryBody.includes('ORDER BY c.is_deleted ASC, c.sort_order ASC, c.name ASC, c.id ASC'));
+  assert.ok(routes.includes('@app.get("/categories")'));
+  assert.ok(routes.includes('@app.get("/admin/categories")'));
+  assert.ok(routes.includes('require_admin_user(authorization)'));
+});
+
+test('[CATEGORY-13-5] category request models normalize names and enforce reserved name and sort boundaries', () => {
+  const script = String.raw`
+import json
+from pydantic import ValidationError
+from app.main import CategoryCreateRequest, CategoryUpdateRequest
+
+result = {"trimmed": CategoryCreateRequest(name="  连衣裙  ", sort_order=10).name}
+for key, payload in {
+    "blank": {"name": "   ", "sort_order": 0},
+    "reserved": {"name": "全部", "sort_order": 0},
+    "too_long": {"name": "测" * 81, "sort_order": 0},
+    "negative": {"name": "连衣裙", "sort_order": -1},
+    "too_large": {"name": "连衣裙", "sort_order": 10000},
+}.items():
+    try:
+        CategoryUpdateRequest(**payload)
+    except ValidationError:
+        result[key] = True
+    else:
+        result[key] = False
+print(json.dumps(result, ensure_ascii=True))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    trimmed: '连衣裙', blank: true, reserved: true, too_long: true, negative: true, too_large: true,
+  });
+});
+
+test('[CATEGORY-13-6] category mutation routes are authenticated transactional logical operations', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const categoryRoutes = sliceBetween(backend, '@app.get("/admin/categories")', '@app.patch("/admin/products/{product_id}/category")');
+
+  for (const route of [
+    '@app.post("/admin/categories")',
+    '@app.patch("/admin/categories/{category_id}")',
+    '@app.delete("/admin/categories/{category_id}")',
+    '@app.post("/admin/categories/{category_id}/restore")',
+  ]) assert.ok(categoryRoutes.includes(route), `${route} should exist`);
+  assert.ok(categoryRoutes.includes('require_admin_user(authorization)'));
+  assert.ok(categoryRoutes.includes('FOR UPDATE'));
+  assert.ok(categoryRoutes.includes('conn.commit()'));
+  assert.ok(categoryRoutes.includes('conn.rollback()'));
+  assert.ok(categoryRoutes.includes('SET is_deleted = 1'));
+  assert.ok(categoryRoutes.includes('分类下仍有商品，请先移动商品'));
+  assert.doesNotMatch(categoryRoutes, /DELETE\s+FROM\s+category/i);
+});
+
+test('[CATEGORY-13-7] product category movement changes only category_id and reports idempotency', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const route = sliceBetween(backend, '@app.patch("/admin/products/{product_id}/category")', '@app.post("/products")');
+
+  assert.ok(route.includes('require_admin_user(authorization)'));
+  assert.match(route, /UPDATE product\s+SET category_id = %s\s+WHERE id = %s/);
+  assert.ok(route.includes('changed'));
+  assert.ok(route.includes('category_name'));
+  assert.doesNotMatch(route, /UPDATE\s+product_sku|UPDATE\s+inventory|UPDATE\s+product_image/i);
+});
+
+test('[CATEGORY-13-8] product creation prefers category_id and never creates or restores categories implicitly', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const route = sliceBetween(backend, '@app.post("/products")', '@app.post("/admin/products/{product_id}/images")');
+
+  assert.ok(route.includes('category_id: int | None = Form(None)'));
+  assert.ok(route.includes('category_name: str | None = Form(None)'));
+  assert.ok(route.includes('分类不存在，请先在分类管理中创建'));
+  assert.doesNotMatch(route, /INSERT\s+INTO\s+category/i);
+  assert.doesNotMatch(route, /ON\s+DUPLICATE\s+KEY\s+UPDATE/i);
+});
+
+test('[CATEGORY-13-9] admin markup exposes category management and existing-category product selection', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const categoryPanel = sliceBetween(html, 'data-admin-panel="categories"', 'data-admin-panel="product-create"');
+  const productCreate = sliceBetween(html, 'data-admin-panel="product-create"', 'data-admin-panel="stats"');
+
+  assert.ok(html.includes('data-admin-nav-target="categories"'));
+  assert.ok(categoryPanel.includes('data-admin-category-form'));
+  assert.ok(categoryPanel.includes('data-admin-category-filter'));
+  assert.ok(categoryPanel.includes('data-admin-category-list'));
+  assert.ok(productCreate.includes('<select name="category_id"'));
+  assert.ok(productCreate.includes('data-admin-product-category-select'));
+  assert.doesNotMatch(productCreate, /<input[^>]+name="category"/);
+});
+
+test('[CATEGORY-13-10] admin frontend owns category CRUD state and per-product category adjustment', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const cardRender = sliceBetween(mainJs, 'function renderProducts() {', 'async function updateAdminSkuStockToApi(');
+
+  assert.ok(mainJs.includes('loadAdminCategoriesFromApi'));
+  assert.ok(mainJs.includes('refreshAdminCategoriesFromApi'));
+  assert.ok(mainJs.includes('createAdminCategoryToApi'));
+  assert.ok(mainJs.includes('updateAdminCategoryToApi'));
+  assert.ok(mainJs.includes('deleteAdminCategoryToApi'));
+  assert.ok(mainJs.includes('restoreAdminCategoryToApi'));
+  assert.ok(mainJs.includes('updateAdminProductCategoryToApi'));
+  assert.ok(cardRender.includes('data-admin-product-category-select'));
+  assert.ok(cardRender.includes('data-admin-product-category-save'));
+});
+
+test('[CATEGORY-13-11] storefront loads database categories and filters database products by category id', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const mapper = sliceBetween(mainJs, 'function convertApiProducts(', 'async function loadProductsFromApi()');
+  const renderer = sliceBetween(mainJs, 'function renderCollections()', 'function renderProducts()');
+
+  assert.ok(mainJs.includes("from './category-utils.js"));
+  assert.ok(mainJs.includes('loadCategoriesFromApi'));
+  assert.ok(mainJs.includes('deriveApiCategoriesFromProducts'));
+  assert.ok(mapper.includes('categoryId: Number(row.category_id)'));
+  assert.ok(renderer.includes('activeCategoryKey'));
+  assert.ok(renderer.includes('filterProductsByCategory'));
+  assert.ok(renderer.includes('aria-pressed'));
+  assert.ok(renderer.includes('productCount > 0'));
+});
+
+test('[CATEGORY-13-12] category UI includes responsive editable list styling without changing SQL files', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(styles, /\.admin-category-list\s*\{/);
+  assert.match(styles, /\.admin-category-row\s*\{/);
+  assert.match(styles, /\.admin-product-category-control\s*\{/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.admin-category-row/);
+  assert.equal(existsSync('sql语句/09_商品分类管理增量迁移.sql'), false);
+});
+

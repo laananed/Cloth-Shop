@@ -1,6 +1,7 @@
 ﻿from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi import Query
 from pathlib import Path
 from typing import Literal
 import json
@@ -8,11 +9,24 @@ import base64
 import hashlib
 import hmac
 import time
+import logging
+from datetime import datetime
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pymysql.err import IntegrityError, MySQLError
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import test_connection, get_db
+from app.operation_logs import (
+    ACTION_RESULTS,
+    CURRENT_TARGET_TYPES,
+    create_operation_request_id,
+    insert_operation_log,
+    parse_operation_detail,
+    safe_failure_reason,
+    write_failure_operation_log,
+)
+
+LOGGER = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Frieren Cloth Shop API",
@@ -1289,6 +1303,26 @@ def update_admin_product_tags(
         raise HTTPException(status_code=500, detail=f"修改商品标签失败：{str(e)}")
 
 
+def write_admin_operation_failure(
+    admin_user: dict,
+    action_type: str,
+    target_type: str,
+    target_id: int | None,
+    error: Exception,
+    request_id: str,
+) -> None:
+    reason_summary = safe_failure_reason(error)
+    write_failure_operation_log(
+        operator_id=admin_user["id"],
+        action_type=action_type,
+        target_type=target_type,
+        target_id=target_id,
+        remark=f"{action_type} 失败",
+        detail={"reason_summary": reason_summary},
+        request_id=request_id,
+    )
+
+
 @app.get("/categories")
 def get_categories():
     try:
@@ -1312,7 +1346,10 @@ def get_admin_categories(authorization: str | None = Header(None)):
 
 @app.post("/admin/categories")
 def create_admin_category(req: CategoryCreateRequest, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    failure_action_type = "CATEGORY_CREATE"
+    failure_target_id = None
     try:
         with get_db() as conn:
             try:
@@ -1323,11 +1360,13 @@ def create_admin_category(req: CategoryCreateRequest, authorization: str | None 
                     )
                     existing = cursor.fetchone()
                     restored = False
-                    if existing and int(existing["is_deleted"]) == 0:
-                        raise HTTPException(status_code=409, detail="分类名称已存在")
                     if existing:
                         category_id = int(existing["id"])
+                        failure_target_id = category_id
+                        if int(existing["is_deleted"]) == 0:
+                            raise HTTPException(status_code=409, detail="分类名称已存在")
                         restored = True
+                        failure_action_type = "CATEGORY_RESTORE"
                         cursor.execute(
                             "UPDATE category SET is_deleted = 0, sort_order = %s WHERE id = %s",
                             (req.sort_order, category_id)
@@ -1338,32 +1377,62 @@ def create_admin_category(req: CategoryCreateRequest, authorization: str | None 
                             (req.name, req.sort_order)
                         )
                         category_id = int(cursor.lastrowid)
-                conn.commit()
+                    action_type = "CATEGORY_RESTORE" if restored else "CATEGORY_CREATE"
+                    detail = {
+                        "after": {
+                            "name": req.name,
+                            "sort_order": req.sort_order,
+                            "is_deleted": 0,
+                        },
+                        "changed_fields": ["is_deleted", "sort_order"] if restored else ["name", "sort_order"],
+                    }
+                    insert_operation_log(
+                        cursor,
+                        admin_user["id"],
+                        action_type,
+                        "CATEGORY",
+                        category_id,
+                        "SUCCESS",
+                        "恢复分类" if restored else "新增分类",
+                        detail,
+                        request_id,
+                    )
                 row = query_category_by_id(conn, category_id)
+                response = {
+                    "success": True,
+                    "restored": restored,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(row),
+                }
+                conn.commit()
             except HTTPException:
                 conn.rollback()
                 raise
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "restored": restored, "data": jsonable_encoder(row)}
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, failure_action_type, "CATEGORY", failure_target_id, error, request_id)
         raise
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="分类名称已存在")
+    except IntegrityError as error:
+        write_admin_operation_failure(admin_user, failure_action_type, "CATEGORY", failure_target_id, error, request_id)
+        raise HTTPException(status_code=409, detail="分类名称已存在") from error
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"新增分类失败：{str(e)}")
+        write_admin_operation_failure(admin_user, failure_action_type, "CATEGORY", failure_target_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"新增分类失败：{str(e)}") from e
 
 
 @app.patch("/admin/categories/{category_id}")
 def update_admin_category(category_id: int, req: CategoryUpdateRequest, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT id, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        "SELECT id, name, sort_order, is_deleted FROM category WHERE id = %s FOR UPDATE",
                         (category_id,)
                     )
                     current = cursor.fetchone()
@@ -1381,53 +1450,75 @@ def update_admin_category(category_id: int, req: CategoryUpdateRequest, authoriz
                         "UPDATE category SET name = %s, sort_order = %s WHERE id = %s",
                         (req.name, req.sort_order, category_id)
                     )
-                conn.commit()
+                    before = {"name": current["name"], "sort_order": int(current["sort_order"])}
+                    after = {"name": req.name, "sort_order": req.sort_order}
+                    changed_fields = [key for key in after if before[key] != after[key]]
+                    insert_operation_log(
+                        cursor, admin_user["id"], "CATEGORY_UPDATE", "CATEGORY", category_id,
+                        "SUCCESS", "修改分类", {"before": before, "after": after, "changed_fields": changed_fields},
+                        request_id,
+                    )
                 row = query_category_by_id(conn, category_id)
+                response = {"success": True, "request_id": request_id, "data": jsonable_encoder(row)}
+                conn.commit()
             except HTTPException:
                 conn.rollback()
                 raise
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "data": jsonable_encoder(row)}
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "CATEGORY_UPDATE", "CATEGORY", category_id, error, request_id)
         raise
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="分类名称已存在")
+    except IntegrityError as error:
+        write_admin_operation_failure(admin_user, "CATEGORY_UPDATE", "CATEGORY", category_id, error, request_id)
+        raise HTTPException(status_code=409, detail="分类名称已存在") from error
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"修改分类失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "CATEGORY_UPDATE", "CATEGORY", category_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"修改分类失败：{str(e)}") from e
 
 
 @app.delete("/admin/categories/{category_id}")
 def delete_admin_category(category_id: int, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT id, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        "SELECT id, name, sort_order, is_deleted FROM category WHERE id = %s FOR UPDATE",
                         (category_id,)
                     )
                     current = cursor.fetchone()
                     if not current:
                         raise HTTPException(status_code=404, detail="分类不存在")
-                    if int(current["is_deleted"]) == 1:
-                        conn.rollback()
-                        return {"success": True, "already_deleted": True, "category_id": category_id}
-                    cursor.execute(
-                        "SELECT COUNT(DISTINCT id) AS product_count FROM product WHERE category_id = %s AND is_deleted = 0",
-                        (category_id,)
-                    )
-                    product_count = int(cursor.fetchone()["product_count"] or 0)
-                    if product_count > 0:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"分类下仍有商品，请先移动商品（当前 {product_count} 件）"
+                    already_deleted = int(current["is_deleted"]) == 1
+                    if not already_deleted:
+                        cursor.execute(
+                            "SELECT COUNT(DISTINCT id) AS product_count FROM product WHERE category_id = %s AND is_deleted = 0",
+                            (category_id,)
                         )
-                    cursor.execute(
-                        "UPDATE category SET is_deleted = 1 WHERE id = %s",
-                        (category_id,)
+                        product_count = int(cursor.fetchone()["product_count"] or 0)
+                        if product_count > 0:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"分类下仍有商品，请先移动商品（当前 {product_count} 件）"
+                            )
+                        cursor.execute(
+                            "UPDATE category SET is_deleted = 1 WHERE id = %s",
+                            (category_id,)
+                        )
+                    insert_operation_log(
+                        cursor, admin_user["id"], "CATEGORY_DELETE", "CATEGORY", category_id,
+                        "SUCCESS", "删除分类",
+                        {
+                            "before": {"name": current["name"], "is_deleted": int(current["is_deleted"])},
+                            "after": {"name": current["name"], "is_deleted": 1},
+                            "changed_fields": [] if already_deleted else ["is_deleted"],
+                        },
+                        request_id,
                     )
                 conn.commit()
             except HTTPException:
@@ -1436,22 +1527,25 @@ def delete_admin_category(category_id: int, authorization: str | None = Header(N
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "already_deleted": False, "category_id": category_id}
-    except HTTPException:
+        return {"success": True, "already_deleted": already_deleted, "category_id": category_id, "request_id": request_id}
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "CATEGORY_DELETE", "CATEGORY", category_id, error, request_id)
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除分类失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "CATEGORY_DELETE", "CATEGORY", category_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"删除分类失败：{str(e)}") from e
 
 
 @app.post("/admin/categories/{category_id}/restore")
 def restore_admin_category(category_id: int, authorization: str | None = Header(None)):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT id, name, is_deleted FROM category WHERE id = %s FOR UPDATE",
+                        "SELECT id, name, sort_order, is_deleted FROM category WHERE id = %s FOR UPDATE",
                         (category_id,)
                     )
                     current = cursor.fetchone()
@@ -1469,21 +1563,40 @@ def restore_admin_category(category_id: int, authorization: str | None = Header(
                             "UPDATE category SET is_deleted = 0 WHERE id = %s",
                             (category_id,)
                         )
-                conn.commit()
+                    insert_operation_log(
+                        cursor, admin_user["id"], "CATEGORY_RESTORE", "CATEGORY", category_id,
+                        "SUCCESS", "恢复分类",
+                        {
+                            "before": {"name": current["name"], "is_deleted": int(current["is_deleted"])},
+                            "after": {"name": current["name"], "is_deleted": 0},
+                            "changed_fields": [] if already_active else ["is_deleted"],
+                        },
+                        request_id,
+                    )
                 row = query_category_by_id(conn, category_id)
+                response = {
+                    "success": True,
+                    "already_active": already_active,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(row),
+                }
+                conn.commit()
             except HTTPException:
                 conn.rollback()
                 raise
             except Exception:
                 conn.rollback()
                 raise
-        return {"success": True, "already_active": already_active, "data": jsonable_encoder(row)}
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "CATEGORY_RESTORE", "CATEGORY", category_id, error, request_id)
         raise
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="分类名称已存在，无法恢复")
+    except IntegrityError as error:
+        write_admin_operation_failure(admin_user, "CATEGORY_RESTORE", "CATEGORY", category_id, error, request_id)
+        raise HTTPException(status_code=409, detail="分类名称已存在，无法恢复") from error
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"恢复分类失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "CATEGORY_RESTORE", "CATEGORY", category_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"恢复分类失败：{str(e)}") from e
 
 
 @app.patch("/admin/products/{product_id}/category")
@@ -1492,7 +1605,8 @@ def update_admin_product_category(
     req: AdminProductCategoryUpdateRequest,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
@@ -1523,6 +1637,16 @@ def update_admin_product_category(
                             """,
                             (req.category_id, product_id)
                         )
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_CATEGORY_UPDATE", "PRODUCT", product_id,
+                        "SUCCESS", "修改商品分类",
+                        {
+                            "before": {"category_id": int(product["category_id"])},
+                            "after": {"category_id": req.category_id},
+                            "changed_fields": ["category_id"] if changed else [],
+                        },
+                        request_id,
+                    )
                 conn.commit()
             except HTTPException:
                 conn.rollback()
@@ -1536,11 +1660,14 @@ def update_admin_product_category(
             "category_id": req.category_id,
             "category_name": category["name"],
             "changed": changed,
+            "request_id": request_id,
         }
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_CATEGORY_UPDATE", "PRODUCT", product_id, error, request_id)
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"修改商品分类失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "PRODUCT_CATEGORY_UPDATE", "PRODUCT", product_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"修改商品分类失败：{str(e)}") from e
 
 
 @app.get("/products")
@@ -1627,6 +1754,21 @@ def admin_login(req: AdminLoginRequest):
 
         admin_user_id = int(admin_user["id"])
         token = create_admin_token(admin_user_id)
+        request_id = create_operation_request_id()
+        try:
+            with get_db() as audit_conn:
+                try:
+                    with audit_conn.cursor() as audit_cursor:
+                        insert_operation_log(
+                            audit_cursor, admin_user_id, "ADMIN_LOGIN", "USER", admin_user_id,
+                            "SUCCESS", "管理员登录成功", None, request_id,
+                        )
+                    audit_conn.commit()
+                except Exception:
+                    audit_conn.rollback()
+                    raise
+        except Exception as audit_error:
+            LOGGER.warning("管理员登录成功但操作日志写入失败 request_id=%s error=%s", request_id, audit_error)
 
         return {
             "success": True,
@@ -1634,6 +1776,7 @@ def admin_login(req: AdminLoginRequest):
             "admin_user_id": admin_user_id,
             "email": admin_user["email"],
             "admin_token": token,
+            "request_id": request_id,
         }
 
     except HTTPException:
@@ -1820,39 +1963,43 @@ async def create_product(
     第一版：一个商品只创建一个 SKU。
     支持上传商品主图，图片保存到 uploads/products，路径写入 product.image_url。
     """
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    try:
+        category_name = str(category_name or "").strip()
+        product_name = product_name.strip()
+        description = normalize_product_description(description)
+        sku_name = sku_name.strip() or "默认规格"
 
-    category_name = str(category_name or "").strip()
-    product_name = product_name.strip()
-    description = normalize_product_description(description)
-    sku_name = sku_name.strip() or "默认规格"
+        if category_id is None and not category_name:
+            raise HTTPException(status_code=400, detail="请选择商品分类")
 
-    if category_id is None and not category_name:
-        raise HTTPException(status_code=400, detail="请选择商品分类")
+        if not product_name:
+            raise HTTPException(status_code=400, detail="鍟嗗搧鍚嶇О涓嶈兘涓虹┖")
 
-    if not product_name:
-        raise HTTPException(status_code=400, detail="鍟嗗搧鍚嶇О涓嶈兘涓虹┖")
+        if price <= 0:
+            raise HTTPException(status_code=400, detail="鍟嗗搧浠锋牸蹇呴』澶т簬 0")
 
-    if price <= 0:
-        raise HTTPException(status_code=400, detail="鍟嗗搧浠锋牸蹇呴』澶т簬 0")
+        if available_stock < 0:
+            raise HTTPException(status_code=400, detail="鍒濆搴撳瓨涓嶈兘灏忎簬 0")
+        sku_rows = parse_product_skus(
+            skus_json=skus_json,
+            sku_name=sku_name,
+            price=price,
+            available_stock=available_stock
+        )
 
-    if available_stock < 0:
-        raise HTTPException(status_code=400, detail="鍒濆搴撳瓨涓嶈兘灏忎簬 0")
-    sku_rows = parse_product_skus(
-        skus_json=skus_json,
-        sku_name=sku_name,
-        price=price,
-        available_stock=available_stock
-    )
-    tag_ids = parse_tag_ids_json(tag_ids_json)
+        tag_ids = parse_tag_ids_json(tag_ids_json)
+        uploaded_images = []
+        if image:
+            uploaded_images.append(image)
+        if images:
+            uploaded_images.extend(images)
 
-    uploaded_images = []
-    if image:
-        uploaded_images.append(image)
-    if images:
-        uploaded_images.extend(images)
-
-    saved_images = await save_product_uploads(uploaded_images)
+        saved_images = await save_product_uploads(uploaded_images)
+    except Exception as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_CREATE", "PRODUCT", None, error, request_id)
+        raise
 
     image_url = saved_images[0] if saved_images else None
     transaction_committed = False
@@ -1984,10 +2131,25 @@ async def create_product(
                             (sku_id,)
                         )
 
-                conn.commit()
-                transaction_committed = True
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_CREATE", "PRODUCT", int(product_id),
+                        "SUCCESS", "新增商品",
+                        {
+                            "after": {
+                                "category_id": resolved_category_id,
+                                "name": product_name,
+                                "status": "ON_SALE",
+                                "description_empty": not bool(description),
+                                "description_length": len(description),
+                            },
+                            "ids": [int(value) for value in sku_ids],
+                            "sku_count": len(sku_ids),
+                            "image_count": len(saved_images),
+                        },
+                        request_id,
+                    )
 
-                # 6. 新增成功后，从 v_product_detail 查询完整商品信息
+                # 6. 提交前从当前事务读取并编码完整商品信息，避免提交后的响应构建失败被误报为业务失败。
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -2024,6 +2186,18 @@ async def create_product(
                     rows = serialize_sku_rows(rows)
                     rows = attach_product_images(conn, rows)
                     rows = attach_product_tags(conn, rows)
+                response = {
+                    "success": True,
+                    "message": "新增商品成功",
+                    "product_id": product_id,
+                    "sku_ids": sku_ids,
+                    "sku_count": len(sku_ids),
+                    "image_url": image_url,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(rows),
+                }
+                conn.commit()
+                transaction_committed = True
 
             except Exception:
                 conn.rollback()
@@ -2031,24 +2205,18 @@ async def create_product(
                     cleanup_saved_product_images(saved_images)
                 raise
 
-        return {
-            "success": True,
-            "message": "新增商品成功",
-            "product_id": product_id,
-            "sku_ids": sku_ids,
-            "sku_count": len(sku_ids),
-            "image_url": image_url,
-            "data": jsonable_encoder(rows)
-        }
+        return response
 
-    except HTTPException:
+    except HTTPException as error:
         if not transaction_committed:
             cleanup_saved_product_images(saved_images)
+        write_admin_operation_failure(admin_user, "PRODUCT_CREATE", "PRODUCT", None, error, request_id)
         raise
 
     except MySQLError as e:
         if not transaction_committed:
             cleanup_saved_product_images(saved_images)
+        write_admin_operation_failure(admin_user, "PRODUCT_CREATE", "PRODUCT", None, e, request_id)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
         raise HTTPException(
             status_code=400,
@@ -2058,6 +2226,7 @@ async def create_product(
     except Exception as e:
         if not transaction_committed:
             cleanup_saved_product_images(saved_images)
+        write_admin_operation_failure(admin_user, "PRODUCT_CREATE", "PRODUCT", None, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"服务器错误：{str(e)}"
@@ -2070,11 +2239,14 @@ async def append_admin_product_images(
     images: list[UploadFile] | None = File(None),
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
 
     uploaded_images = [image for image in (images or []) if image and image.filename]
     if not uploaded_images:
-        raise HTTPException(status_code=400, detail="请至少选择一张商品图片")
+        error = HTTPException(status_code=400, detail="请至少选择一张商品图片")
+        write_admin_operation_failure(admin_user, "PRODUCT_IMAGE_ADD", "PRODUCT_IMAGE", product_id, error, request_id)
+        raise error
 
     saved_images = []
 
@@ -2126,6 +2298,7 @@ async def append_admin_product_images(
 
                     saved_images = await save_product_uploads(uploaded_images)
                     first_upload_becomes_main = max_sort_order is None and not product_image_url
+                    added_image_ids = []
 
                     for index, saved_image_url in enumerate(saved_images):
                         cursor.execute(
@@ -2142,6 +2315,7 @@ async def append_admin_product_images(
                                 1 if first_upload_becomes_main and index == 0 else 0,
                             )
                         )
+                        added_image_ids.append(int(cursor.lastrowid))
 
                     if first_upload_becomes_main:
                         product_image_url = saved_images[0]
@@ -2156,7 +2330,21 @@ async def append_admin_product_images(
 
                     image_map = query_product_images(conn, [product_id])
                     product_images = image_map.get(product_id, [])
-
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_IMAGE_ADD", "PRODUCT_IMAGE", product_id,
+                        "SUCCESS", "追加商品图片",
+                        {"count": len(added_image_ids), "ids": added_image_ids, "image_count": len(product_images)},
+                        request_id,
+                    )
+                    response = {
+                        "success": True,
+                        "message": "商品图片追加成功",
+                        "product_id": product_id,
+                        "image_url": product_image_url,
+                        "images": jsonable_encoder(product_images),
+                        "image_count": len(product_images),
+                        "request_id": request_id,
+                    }
                 conn.commit()
 
             except Exception:
@@ -2164,20 +2352,15 @@ async def append_admin_product_images(
                 cleanup_saved_product_images(saved_images)
                 raise
 
-        return {
-            "success": True,
-            "message": "商品图片追加成功",
-            "product_id": product_id,
-            "image_url": product_image_url,
-            "images": jsonable_encoder(product_images),
-            "image_count": len(product_images),
-        }
+        return response
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_IMAGE_ADD", "PRODUCT_IMAGE", product_id, error, request_id)
         raise
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"商品图片追加失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "PRODUCT_IMAGE_ADD", "PRODUCT_IMAGE", product_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"商品图片追加失败：{str(e)}") from e
 
 
 @app.delete("/admin/products/{product_id}/images/{image_id}")
@@ -2186,7 +2369,8 @@ def delete_admin_product_image(
     image_id: int,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
 
     try:
         with get_db() as conn:
@@ -2290,7 +2474,32 @@ def delete_admin_product_image(
 
                     image_map = query_product_images(conn, [product_id])
                     product_images = image_map.get(product_id, [])
-
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_IMAGE_DELETE", "PRODUCT_IMAGE", image_id,
+                        "SUCCESS", "删除商品图片",
+                        {
+                            "before": {
+                                "product_id": product_id,
+                                "sort_order": int(image["sort_order"]),
+                                "is_main": int(image["is_main"]),
+                                "is_deleted": 0,
+                            },
+                            "after": {"product_id": product_id, "is_deleted": 1},
+                            "changed_fields": ["is_deleted", "is_main"],
+                            "image_count": len(product_images),
+                        },
+                        request_id,
+                    )
+                    response = {
+                        "success": True,
+                        "message": "商品图片删除成功",
+                        "product_id": product_id,
+                        "deleted_image_id": image_id,
+                        "image_url": current_image_url,
+                        "images": jsonable_encoder(product_images),
+                        "image_count": len(product_images),
+                        "request_id": request_id,
+                    }
                 conn.commit()
 
             except HTTPException:
@@ -2301,21 +2510,15 @@ def delete_admin_product_image(
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "商品图片删除成功",
-            "product_id": product_id,
-            "deleted_image_id": image_id,
-            "image_url": current_image_url,
-            "images": jsonable_encoder(product_images),
-            "image_count": len(product_images),
-        }
+        return response
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_IMAGE_DELETE", "PRODUCT_IMAGE", image_id, error, request_id)
         raise
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"商品图片删除失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "PRODUCT_IMAGE_DELETE", "PRODUCT_IMAGE", image_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"商品图片删除失败：{str(e)}") from e
 
 
 def query_user_addresses(conn, user_id: int):
@@ -3601,12 +3804,8 @@ def refund_order(req: RefundOrderRequest):
                         (req.order_id,)
                     )
 
-                conn.commit()
-
-                with get_db() as detail_conn:
-                    detail = query_order_detail(detail_conn, req.order_id)
-
-                return {
+                detail = query_order_detail(conn, req.order_id)
+                response = {
                     "success": True,
                     "message": "退款申请已提交，等待商家处理",
                     "order_id": req.order_id,
@@ -3616,6 +3815,8 @@ def refund_order(req: RefundOrderRequest):
                     "status_logs": jsonable_encoder(detail["status_logs"]),
                     "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
                 }
+                conn.commit()
+                return response
 
             except HTTPException:
                 conn.rollback()
@@ -3640,9 +3841,10 @@ def approve_admin_refund(req: AdminApproveRefundRequest, authorization: str | No
     """
     管理员同意退款。
     """
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    action_type = "REFUND_APPROVE"
     try:
-        admin_user = require_admin_user(authorization)
-        action_type = "ADMIN_APPROVE_REFUND"
 
         with get_db() as conn:
             try:
@@ -3745,25 +3947,35 @@ def approve_admin_refund(req: AdminApproveRefundRequest, authorization: str | No
                         """,
                         (req.order_id,)
                     )
+                    insert_operation_log(
+                        cursor, admin_user["id"], action_type, "ORDER", req.order_id,
+                        "SUCCESS", f"将订单 {req.order_id} 状态由 {current_status} 修改为 REFUNDED",
+                        {
+                            "before": {"status": current_status},
+                            "after": {"status": "REFUNDED"},
+                            "changed_fields": ["status", "inventory", "sales_stat"],
+                            "reason_summary": "管理员同意退款",
+                        },
+                        request_id,
+                    )
 
-                conn.commit()
-
-                with get_db() as detail_conn:
-                    detail = query_order_detail(detail_conn, req.order_id)
-
-                return {
+                detail = query_order_detail(conn, req.order_id)
+                response = {
                     "success": True,
                     "message": "退款已同意",
                     "admin_user_id": admin_user["id"],
                     "action_type": action_type,
                     "order_id": req.order_id,
                     "status": "REFUNDED",
+                    "request_id": request_id,
                     "order_summary": jsonable_encoder(detail["order_summary"]),
                     "order_items": jsonable_encoder(detail["order_items"]),
                     "payment_records": jsonable_encoder(detail["payment_records"]),
                     "status_logs": jsonable_encoder(detail["status_logs"]),
                     "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
                 }
+                conn.commit()
+                return response
 
             except HTTPException:
                 conn.rollback()
@@ -3773,14 +3985,16 @@ def approve_admin_refund(req: AdminApproveRefundRequest, authorization: str | No
                 conn.rollback()
                 raise
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"同意退款失败：{str(e)}"
-        )
+        ) from e
 
 
 @app.post("/admin/orders/refund/reject")
@@ -3788,9 +4002,10 @@ def reject_admin_refund(req: AdminRejectRefundRequest, authorization: str | None
     """
     管理员拒绝退款。
     """
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    action_type = "REFUND_REJECT"
     try:
-        admin_user = require_admin_user(authorization)
-        action_type = "ADMIN_REJECT_REFUND"
 
         with get_db() as conn:
             try:
@@ -3833,25 +4048,35 @@ def reject_admin_refund(req: AdminRejectRefundRequest, authorization: str | None
                         """,
                         (previous_status, req.order_id)
                     )
+                    insert_operation_log(
+                        cursor, admin_user["id"], action_type, "ORDER", req.order_id,
+                        "SUCCESS", f"将订单 {req.order_id} 状态由 {current_status} 修改为 {previous_status}",
+                        {
+                            "before": {"status": current_status},
+                            "after": {"status": previous_status},
+                            "changed_fields": ["status"],
+                            "reason_summary": "管理员拒绝退款",
+                        },
+                        request_id,
+                    )
 
-                conn.commit()
-
-                with get_db() as detail_conn:
-                    detail = query_order_detail(detail_conn, req.order_id)
-
-                return {
+                detail = query_order_detail(conn, req.order_id)
+                response = {
                     "success": True,
                     "message": "已拒绝退款申请",
                     "admin_user_id": admin_user["id"],
                     "action_type": action_type,
                     "order_id": req.order_id,
                     "status": previous_status,
+                    "request_id": request_id,
                     "order_summary": jsonable_encoder(detail["order_summary"]),
                     "order_items": jsonable_encoder(detail["order_items"]),
                     "payment_records": jsonable_encoder(detail["payment_records"]),
                     "status_logs": jsonable_encoder(detail["status_logs"]),
                     "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
                 }
+                conn.commit()
+                return response
 
             except HTTPException:
                 conn.rollback()
@@ -3861,14 +4086,16 @@ def reject_admin_refund(req: AdminRejectRefundRequest, authorization: str | None
                 conn.rollback()
                 raise
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"拒绝退款失败：{str(e)}"
-        )
+        ) from e
 
 
 @app.get("/orders/user/{user_id}")
@@ -3996,8 +4223,10 @@ def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Hea
     """
     管理员发货。
     """
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    action_type = "ORDER_SHIP"
     try:
-        admin_user = require_admin_user(authorization)
 
         with get_db() as conn:
             try:
@@ -4035,23 +4264,34 @@ def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Hea
                         """,
                         (req.order_id,)
                     )
+                    insert_operation_log(
+                        cursor, admin_user["id"], action_type, "ORDER", req.order_id,
+                        "SUCCESS", f"将订单 {req.order_id} 状态由 {current_status} 修改为 SHIPPED",
+                        {
+                            "before": {"status": current_status},
+                            "after": {"status": "SHIPPED"},
+                            "changed_fields": ["status"],
+                            "reason_summary": "管理员后台发货",
+                        },
+                        request_id,
+                    )
 
-                conn.commit()
-
-                with get_db() as detail_conn:
-                    detail = query_order_detail(detail_conn, req.order_id)
-
-                return {
+                detail = query_order_detail(conn, req.order_id)
+                response = {
                     "success": True,
                     "message": "订单发货成功",
                     "admin_user_id": admin_user["id"],
                     "order_id": req.order_id,
+                    "action_type": action_type,
+                    "request_id": request_id,
                     "order_summary": jsonable_encoder(detail["order_summary"]),
                     "order_items": jsonable_encoder(detail["order_items"]),
                     "payment_records": jsonable_encoder(detail["payment_records"]),
                     "status_logs": jsonable_encoder(detail["status_logs"]),
                     "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
                 }
+                conn.commit()
+                return response
 
             except HTTPException:
                 conn.rollback()
@@ -4061,14 +4301,16 @@ def ship_admin_order(req: AdminShipOrderRequest, authorization: str | None = Hea
                 conn.rollback()
                 raise
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"后台发货失败：{str(e)}"
-        )
+        ) from e
 
 
 @app.post("/admin/orders/unship")
@@ -4076,9 +4318,10 @@ def unship_admin_order(req: AdminUnshipOrderRequest, authorization: str | None =
     """
     管理员取消发货。
     """
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    action_type = "ORDER_UNSHIP"
     try:
-        admin_user = require_admin_user(authorization)
-        action_type = "ADMIN_UNSHIP_ORDER"
 
         with get_db() as conn:
             try:
@@ -4112,24 +4355,34 @@ def unship_admin_order(req: AdminUnshipOrderRequest, authorization: str | None =
                         "UPDATE order_main SET status = 'PAID' WHERE id = %s",
                         (req.order_id,)
                     )
+                    insert_operation_log(
+                        cursor, admin_user["id"], action_type, "ORDER", req.order_id,
+                        "SUCCESS", f"将订单 {req.order_id} 状态由 {current_status} 修改为 PAID",
+                        {
+                            "before": {"status": current_status},
+                            "after": {"status": "PAID"},
+                            "changed_fields": ["status"],
+                            "reason_summary": "管理员后台取消发货",
+                        },
+                        request_id,
+                    )
 
-                conn.commit()
-
-                with get_db() as detail_conn:
-                    detail = query_order_detail(detail_conn, req.order_id)
-
-                return {
+                detail = query_order_detail(conn, req.order_id)
+                response = {
                     "success": True,
                     "message": "取消发货成功",
                     "admin_user_id": admin_user["id"],
                     "action_type": action_type,
                     "order_id": req.order_id,
+                    "request_id": request_id,
                     "order_summary": jsonable_encoder(detail["order_summary"]),
                     "order_items": jsonable_encoder(detail["order_items"]),
                     "payment_records": jsonable_encoder(detail["payment_records"]),
                     "status_logs": jsonable_encoder(detail["status_logs"]),
                     "inventory_logs": jsonable_encoder(detail["inventory_logs"]),
                 }
+                conn.commit()
+                return response
 
             except HTTPException:
                 conn.rollback()
@@ -4139,14 +4392,176 @@ def unship_admin_order(req: AdminUnshipOrderRequest, authorization: str | None =
                 conn.rollback()
                 raise
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, action_type, "ORDER", req.order_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"后台取消发货失败：{str(e)}"
+        ) from e
+
+
+@app.get("/admin/operation-logs")
+def get_admin_operation_logs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    action_type: str | None = Query(None, max_length=64),
+    target_type: str | None = Query(None, max_length=40),
+    target_id: int | None = Query(None, gt=0),
+    action_result: str | None = Query(None, max_length=16),
+    operator_id: int | None = Query(None, gt=0),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    keyword: str | None = Query(None, max_length=100),
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    normalized_action_type = str(action_type or "").strip().upper() or None
+    normalized_target_type = str(target_type or "").strip().upper() or None
+    normalized_action_result = str(action_result or "").strip().upper() or None
+    normalized_keyword = str(keyword or "").strip() or None
+
+    if normalized_target_type and normalized_target_type not in CURRENT_TARGET_TYPES:
+        raise HTTPException(status_code=400, detail="目标类型筛选值无效")
+    if normalized_action_result and normalized_action_result not in ACTION_RESULTS:
+        raise HTTPException(status_code=400, detail="操作结果筛选值无效")
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="开始时间不能晚于结束时间")
+
+    where_clauses = []
+    params = []
+    if normalized_action_type:
+        where_clauses.append("ol.action_type = %s")
+        params.append(normalized_action_type)
+    if normalized_target_type:
+        where_clauses.append("ol.target_type = %s")
+        params.append(normalized_target_type)
+    if target_id is not None:
+        where_clauses.append("ol.target_id = %s")
+        params.append(target_id)
+    if normalized_action_result:
+        where_clauses.append("ol.action_result = %s")
+        params.append(normalized_action_result)
+    if operator_id is not None:
+        where_clauses.append("ol.operator_id = %s")
+        params.append(operator_id)
+    if date_from:
+        where_clauses.append("ol.created_at >= %s")
+        params.append(date_from)
+    if date_to:
+        where_clauses.append("ol.created_at <= %s")
+        params.append(date_to)
+    if normalized_keyword:
+        keyword_pattern = f"%{normalized_keyword}%"
+        where_clauses.append(
+            "(ol.action_type LIKE %s OR ol.remark LIKE %s OR ol.request_id LIKE %s "
+            "OR u.email LIKE %s OR CAST(ol.target_id AS CHAR) LIKE %s OR CAST(ol.detail_json AS CHAR) LIKE %s)"
         )
+        params.extend([keyword_pattern] * 6)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM operation_log ol
+                    LEFT JOIN `user` u ON u.id = ol.operator_id
+                    {where_sql}
+                    """,
+                    tuple(params),
+                )
+                total = int((cursor.fetchone() or {}).get("total") or 0)
+                cursor.execute(
+                    f"""
+                    SELECT
+                        ol.id AS log_id,
+                        ol.operator_id,
+                        u.email AS operator_email,
+                        ol.action_type,
+                        ol.target_type,
+                        ol.target_id,
+                        ol.action_result,
+                        ol.remark,
+                        ol.detail_json,
+                        ol.request_id,
+                        ol.created_at
+                    FROM operation_log ol
+                    LEFT JOIN `user` u ON u.id = ol.operator_id
+                    {where_sql}
+                    ORDER BY ol.created_at DESC, ol.id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple(params + [page_size, (page - 1) * page_size]),
+                )
+                rows = cursor.fetchall()
+
+        data = []
+        for row in rows:
+            data.append({
+                "log_id": int(row["log_id"]),
+                "operator_id": int(row["operator_id"]),
+                "operator_email": row.get("operator_email"),
+                "action_type": row.get("action_type"),
+                "target_type": row.get("target_type"),
+                "target_id": row.get("target_id"),
+                "action_result": row.get("action_result"),
+                "remark": row.get("remark"),
+                "detail": parse_operation_detail(row.get("detail_json")),
+                "request_id": row.get("request_id"),
+                "created_at": row.get("created_at"),
+            })
+        pages = (total + page_size - 1) // page_size
+        return {
+            "success": True,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "pages": pages,
+            "data": jsonable_encoder(data),
+        }
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"查询管理员操作日志失败：{str(error)}") from error
+
+
+@app.get("/admin/operation-log-options")
+def get_admin_operation_log_options(authorization: str | None = Header(None)):
+    require_admin_user(authorization)
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT DISTINCT action_type FROM operation_log ORDER BY action_type ASC"
+                )
+                action_types = [row["action_type"] for row in cursor.fetchall() if row.get("action_type")]
+                cursor.execute(
+                    "SELECT DISTINCT target_type FROM operation_log WHERE target_type IS NOT NULL ORDER BY target_type ASC"
+                )
+                logged_target_types = {row["target_type"] for row in cursor.fetchall() if row.get("target_type")}
+                cursor.execute(
+                    """
+                    SELECT DISTINCT ol.operator_id, u.email AS operator_email
+                    FROM operation_log ol
+                    LEFT JOIN `user` u ON u.id = ol.operator_id
+                    ORDER BY u.email ASC, ol.operator_id ASC
+                    """
+                )
+                operators = cursor.fetchall()
+        return {
+            "success": True,
+            "action_types": action_types,
+            "target_types": sorted(CURRENT_TARGET_TYPES | logged_target_types),
+            "action_results": sorted(ACTION_RESULTS),
+            "operators": jsonable_encoder(operators),
+        }
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"查询管理员操作日志筛选项失败：{str(error)}") from error
 
 
 @app.get("/admin/stats")
@@ -4275,23 +4690,41 @@ def update_admin_product_description(
     req: AdminProductDescriptionUpdateRequest,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
-    description = normalize_product_description(req.description)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    try:
+        description = normalize_product_description(req.description)
+    except Exception as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_DESCRIPTION_UPDATE", "PRODUCT", product_id, error, request_id)
+        raise
 
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT id FROM product WHERE id = %s AND is_deleted = 0 FOR UPDATE",
+                        "SELECT id, description FROM product WHERE id = %s AND is_deleted = 0 FOR UPDATE",
                         (product_id,)
                     )
-                    if not cursor.fetchone():
+                    product = cursor.fetchone()
+                    if not product:
                         raise HTTPException(status_code=404, detail="商品不存在或已删除")
 
                     cursor.execute(
                         "UPDATE product SET description = %s WHERE id = %s AND is_deleted = 0",
                         (description, product_id)
+                    )
+                    before_description = product.get("description") or ""
+                    after_description = description or ""
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_DESCRIPTION_UPDATE", "PRODUCT", product_id,
+                        "SUCCESS", "修改商品介绍",
+                        {
+                            "before": {"description_empty": not bool(before_description), "description_length": len(before_description)},
+                            "after": {"description_empty": not bool(after_description), "description_length": len(after_description)},
+                            "changed_fields": ["description"] if before_description != after_description else [],
+                        },
+                        request_id,
                     )
                 conn.commit()
             except Exception:
@@ -4303,14 +4736,18 @@ def update_admin_product_description(
             "message": "商品介绍更新成功",
             "product_id": product_id,
             "description": description,
+            "request_id": request_id,
         }
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_DESCRIPTION_UPDATE", "PRODUCT", product_id, error, request_id)
         raise
     except MySQLError as e:
+        write_admin_operation_failure(admin_user, "PRODUCT_DESCRIPTION_UPDATE", "PRODUCT", product_id, e, request_id)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
-        raise HTTPException(status_code=400, detail=f"修改商品介绍失败：{error_message}")
+        raise HTTPException(status_code=400, detail=f"修改商品介绍失败：{error_message}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"修改商品介绍失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "PRODUCT_DESCRIPTION_UPDATE", "PRODUCT", product_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"修改商品介绍失败：{str(e)}") from e
 
 
 @app.get("/admin/products/{product_id}/skus")
@@ -4340,19 +4777,24 @@ def create_admin_product_skus(
     req: AdminSkuBatchCreateRequest,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
-    sku_rows = normalize_structured_sku_rows([
-        {
-            "sku_code": item.sku_code,
-            "sku_name": item.sku_name,
-            "color": item.color,
-            "size": item.size,
-            "price": item.price,
-            "stock": item.stock,
-            "on_sale": item.on_sale,
-        }
-        for item in req.skus
-    ])
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    try:
+        sku_rows = normalize_structured_sku_rows([
+            {
+                "sku_code": item.sku_code,
+                "sku_name": item.sku_name,
+                "color": item.color,
+                "size": item.size,
+                "price": item.price,
+                "stock": item.stock,
+                "on_sale": item.on_sale,
+            }
+            for item in req.skus
+        ])
+    except Exception as error:
+        write_admin_operation_failure(admin_user, "SKU_CREATE", "SKU", product_id, error, request_id)
+        raise
 
     try:
         with get_db() as conn:
@@ -4407,8 +4849,23 @@ def create_admin_product_skus(
                             """,
                             (sku_id,)
                         )
-                conn.commit()
+                    insert_operation_log(
+                        cursor, admin_user["id"], "SKU_CREATE", "SKU", product_id,
+                        "SUCCESS", "新增 SKU 组合",
+                        {"count": len(created_sku_ids), "ids": [int(value) for value in created_sku_ids], "sku_count": len(created_sku_ids)},
+                        request_id,
+                    )
                 rows = query_admin_product_skus(conn, product_id)
+                response = {
+                    "success": True,
+                    "message": "新增 SKU 组合成功",
+                    "product_id": product_id,
+                    "sku_ids": created_sku_ids,
+                    "count": len(created_sku_ids),
+                    "request_id": request_id,
+                    "data": jsonable_encoder(rows),
+                }
+                conn.commit()
             except HTTPException:
                 conn.rollback()
                 raise
@@ -4416,21 +4873,17 @@ def create_admin_product_skus(
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "新增 SKU 组合成功",
-            "product_id": product_id,
-            "sku_ids": created_sku_ids,
-            "count": len(created_sku_ids),
-            "data": jsonable_encoder(rows),
-        }
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "SKU_CREATE", "SKU", product_id, error, request_id)
         raise
     except MySQLError as e:
+        write_admin_operation_failure(admin_user, "SKU_CREATE", "SKU", product_id, e, request_id)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
-        raise HTTPException(status_code=400, detail=f"新增 SKU 失败：{error_message}")
+        raise HTTPException(status_code=400, detail=f"新增 SKU 失败：{error_message}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"新增 SKU 失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "SKU_CREATE", "SKU", product_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"新增 SKU 失败：{str(e)}") from e
 
 
 @app.patch("/admin/products/{product_id}/skus/{sku_id}")
@@ -4440,8 +4893,13 @@ def update_admin_product_sku(
     req: AdminSkuUpdateRequest,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
-    sku_row = admin_sku_payload_to_row(req)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
+    try:
+        sku_row = admin_sku_payload_to_row(req)
+    except Exception as error:
+        write_admin_operation_failure(admin_user, "SKU_UPDATE", "SKU", sku_id, error, request_id)
+        raise
 
     try:
         with get_db() as conn:
@@ -4449,16 +4907,20 @@ def update_admin_product_sku(
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT id
-                        FROM product_sku
-                        WHERE id = %s
-                          AND product_id = %s
-                          AND is_deleted = 0
+                        SELECT
+                            s.id, s.sku_code, s.sku_name, s.color_name, s.size_name,
+                            s.price, s.status, COALESCE(i.available_stock, 0) AS available_stock
+                        FROM product_sku s
+                        LEFT JOIN inventory i ON i.sku_id = s.id
+                        WHERE s.id = %s
+                          AND s.product_id = %s
+                          AND s.is_deleted = 0
                         FOR UPDATE
                         """,
                         (sku_id, product_id)
                     )
-                    if not cursor.fetchone():
+                    current = cursor.fetchone()
+                    if not current:
                         raise HTTPException(status_code=404, detail="SKU 不存在、已删除或不属于该商品")
 
                     ensure_admin_sku_unique(cursor, product_id, sku_row, sku_id)
@@ -4492,8 +4954,42 @@ def update_admin_product_sku(
                         """,
                         (sku_id, sku_row["stock"])
                     )
-                conn.commit()
+                    before = {
+                        "sku_code": current.get("sku_code"),
+                        "sku_name": current.get("sku_name"),
+                        "color": current.get("color_name"),
+                        "size": current.get("size_name"),
+                        "price": current.get("price"),
+                        "status": current.get("status"),
+                        "available_stock": int(current.get("available_stock") or 0),
+                    }
+                    after = {
+                        "sku_code": sku_row["sku_code"],
+                        "sku_name": sku_row["sku_name"],
+                        "color": sku_row["color"],
+                        "size": sku_row["size"],
+                        "price": sku_row["price"],
+                        "status": sku_row["status"],
+                        "available_stock": sku_row["stock"],
+                    }
+                    changed_fields = [key for key in after if str(before[key]) != str(after[key])]
+                    insert_operation_log(
+                        cursor, admin_user["id"], "SKU_UPDATE", "SKU", sku_id,
+                        "SUCCESS", "修改 SKU",
+                        {"before": before, "after": after, "changed_fields": changed_fields},
+                        request_id,
+                    )
                 rows = query_admin_product_skus(conn, product_id)
+                updated_row = next(row for row in rows if int(row["sku_id"]) == sku_id)
+                response = {
+                    "success": True,
+                    "message": "SKU 修改成功",
+                    "product_id": product_id,
+                    "sku_id": sku_id,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(updated_row),
+                }
+                conn.commit()
             except HTTPException:
                 conn.rollback()
                 raise
@@ -4501,21 +4997,17 @@ def update_admin_product_sku(
                 conn.rollback()
                 raise
 
-        updated_row = next(row for row in rows if int(row["sku_id"]) == sku_id)
-        return {
-            "success": True,
-            "message": "SKU 修改成功",
-            "product_id": product_id,
-            "sku_id": sku_id,
-            "data": jsonable_encoder(updated_row),
-        }
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "SKU_UPDATE", "SKU", sku_id, error, request_id)
         raise
     except MySQLError as e:
+        write_admin_operation_failure(admin_user, "SKU_UPDATE", "SKU", sku_id, e, request_id)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
-        raise HTTPException(status_code=400, detail=f"修改 SKU 失败：{error_message}")
+        raise HTTPException(status_code=400, detail=f"修改 SKU 失败：{error_message}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"修改 SKU 失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "SKU_UPDATE", "SKU", sku_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"修改 SKU 失败：{str(e)}") from e
 
 
 @app.delete("/admin/products/{product_id}/skus/{sku_id}")
@@ -4524,14 +5016,15 @@ def delete_admin_product_sku(
     sku_id: int,
     authorization: str | None = Header(None),
 ):
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT id
+                        SELECT id, sku_code, sku_name, status
                         FROM product_sku
                         WHERE product_id = %s AND is_deleted = 0
                         ORDER BY id
@@ -4539,7 +5032,8 @@ def delete_admin_product_sku(
                         """,
                         (product_id,)
                     )
-                    active_sku_ids = [int(row["id"]) for row in cursor.fetchall()]
+                    active_sku_rows = cursor.fetchall()
+                    active_sku_ids = [int(row["id"]) for row in active_sku_rows]
                     if sku_id not in active_sku_ids:
                         raise HTTPException(status_code=404, detail="SKU 不存在、已删除或不属于该商品")
                     if len(active_sku_ids) <= 1:
@@ -4554,8 +5048,33 @@ def delete_admin_product_sku(
                         """,
                         (sku_id, product_id)
                     )
-                conn.commit()
+                    current = next(row for row in active_sku_rows if int(row["id"]) == sku_id)
+                    insert_operation_log(
+                        cursor, admin_user["id"], "SKU_DELETE", "SKU", sku_id,
+                        "SUCCESS", "删除 SKU",
+                        {
+                            "before": {
+                                "product_id": product_id,
+                                "sku_code": current.get("sku_code"),
+                                "sku_name": current.get("sku_name"),
+                                "status": current.get("status"),
+                                "is_deleted": 0,
+                            },
+                            "after": {"product_id": product_id, "status": "OFF_SALE", "is_deleted": 1},
+                            "changed_fields": ["status", "is_deleted"],
+                        },
+                        request_id,
+                    )
                 rows = query_admin_product_skus(conn, product_id)
+                response = {
+                    "success": True,
+                    "message": "SKU 已逻辑删除",
+                    "product_id": product_id,
+                    "sku_id": sku_id,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(rows),
+                }
+                conn.commit()
             except HTTPException:
                 conn.rollback()
                 raise
@@ -4563,20 +5082,17 @@ def delete_admin_product_sku(
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "SKU 已逻辑删除",
-            "product_id": product_id,
-            "sku_id": sku_id,
-            "data": jsonable_encoder(rows),
-        }
-    except HTTPException:
+        return response
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "SKU_DELETE", "SKU", sku_id, error, request_id)
         raise
     except MySQLError as e:
+        write_admin_operation_failure(admin_user, "SKU_DELETE", "SKU", sku_id, e, request_id)
         error_message = e.args[1] if len(e.args) > 1 else str(e)
-        raise HTTPException(status_code=400, detail=f"删除 SKU 失败：{error_message}")
+        raise HTTPException(status_code=400, detail=f"删除 SKU 失败：{error_message}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除 SKU 失败：{str(e)}")
+        write_admin_operation_failure(admin_user, "SKU_DELETE", "SKU", sku_id, e, request_id)
+        raise HTTPException(status_code=500, detail=f"删除 SKU 失败：{str(e)}") from e
 
 
 @app.get("/admin/inventory")
@@ -4644,7 +5160,8 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
     后台修改 SKU 可用库存。
     注意：这里修改的是 available_stock，不直接修改 locked_stock。
     """
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
         with get_db() as conn:
             try:
@@ -4670,7 +5187,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                     # 2. 锁定库存行，避免并发修改
                     cursor.execute(
                         """
-                        SELECT id, locked_stock
+                        SELECT id, available_stock, locked_stock
                         FROM inventory
                         WHERE sku_id = %s
                         FOR UPDATE
@@ -4701,10 +5218,22 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                             """,
                             (req.sku_id, req.available_stock)
                         )
+                    before = {
+                        "available_stock": int(inventory.get("available_stock") or 0) if inventory else None,
+                        "locked_stock": int(inventory.get("locked_stock") or 0) if inventory else 0,
+                    }
+                    after = {
+                        "available_stock": req.available_stock,
+                        "locked_stock": before["locked_stock"],
+                    }
+                    insert_operation_log(
+                        cursor, admin_user["id"], "INVENTORY_UPDATE", "INVENTORY", req.sku_id,
+                        "SUCCESS", "修改可用库存",
+                        {"before": before, "after": after, "changed_fields": ["available_stock"] if before["available_stock"] != req.available_stock else []},
+                        request_id,
+                    )
 
-                conn.commit()
-
-                # 4. 杩斿洖淇敼鍚庣殑搴撳瓨璇︽儏
+                # 4. 提交前读取并编码修改后的库存详情，避免提交后的响应构建失败被误报为业务失败。
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -4739,6 +5268,13 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                     row = cursor.fetchone()
                     serialize_sku_rows([row])
                     attach_product_images(conn, [row])
+                response = {
+                    "success": True,
+                    "message": "搴撳瓨淇敼鎴愬姛",
+                    "request_id": request_id,
+                    "data": jsonable_encoder(row),
+                }
+                conn.commit()
 
             except HTTPException:
                 conn.rollback()
@@ -4748,20 +5284,18 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "搴撳瓨淇敼鎴愬姛",
-            "data": jsonable_encoder(row)
-        }
+        return response
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "INVENTORY_UPDATE", "INVENTORY", req.sku_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, "INVENTORY_UPDATE", "INVENTORY", req.sku_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"库存修改失败：{str(e)}"
-        )
+        ) from e
 
 
 @app.post("/admin/products/update-status")
@@ -4770,15 +5304,18 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
     鍚庡彴淇敼鍟嗗搧涓婁笅鏋剁姸鎬併€?
     绗竴鐗堬細鍟嗗搧鍜岃鍟嗗搧涓嬪叏閮?SKU 鐘舵€佷繚鎸佷竴鑷淬€?
     """
-    require_admin_user(authorization)
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
 
     new_status = req.status.strip().upper()
 
     if new_status not in {"ON_SALE", "OFF_SALE"}:
-        raise HTTPException(
+        error = HTTPException(
             status_code=400,
             detail="鍟嗗搧鐘舵€佸彧鑳芥槸 ON_SALE 鎴?OFF_SALE"
         )
+        write_admin_operation_failure(admin_user, "PRODUCT_STATUS_UPDATE", "PRODUCT", req.product_id, error, request_id)
+        raise error
 
     try:
         with get_db() as conn:
@@ -4787,7 +5324,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                     # 1. 纭鍟嗗搧瀛樺湪涓旀湭鍒犻櫎
                     cursor.execute(
                         """
-                        SELECT id
+                        SELECT id, name, status
                         FROM product
                         WHERE id = %s
                           AND is_deleted = 0
@@ -4811,6 +5348,16 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                         """,
                         (new_status, req.product_id)
                     )
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_STATUS_UPDATE", "PRODUCT", req.product_id,
+                        "SUCCESS", "修改商品状态",
+                        {
+                            "before": {"name": product.get("name"), "status": product.get("status")},
+                            "after": {"name": product.get("name"), "status": new_status},
+                            "changed_fields": ["status"] if product.get("status") != new_status else [],
+                        },
+                        request_id,
+                    )
 
                     # 3. 绗竴鐗堝悓姝ヤ慨鏀硅鍟嗗搧涓嬮潰鍏ㄩ儴 SKU 鐘舵€?
                     cursor.execute(
@@ -4823,9 +5370,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                         (new_status, req.product_id)
                     )
 
-                conn.commit()
-
-                # 4. 杩斿洖淇敼鍚庣殑鍟嗗搧璇︽儏
+                # 4. 提交前读取并编码修改后的商品详情，避免提交后的响应构建失败被误报为业务失败。
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -4861,6 +5406,15 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                     rows = cursor.fetchall()
                     rows = serialize_sku_rows(rows)
                     rows = attach_product_images(conn, rows)
+                response = {
+                    "success": True,
+                    "message": "商品状态修改成功",
+                    "product_id": req.product_id,
+                    "status": new_status,
+                    "request_id": request_id,
+                    "data": jsonable_encoder(rows),
+                }
+                conn.commit()
 
             except HTTPException:
                 conn.rollback()
@@ -4870,37 +5424,34 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                 conn.rollback()
                 raise
 
-        return {
-            "success": True,
-            "message": "商品状态修改成功",
-            "product_id": req.product_id,
-            "status": new_status,
-            "data": jsonable_encoder(rows)
-        }
+        return response
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_STATUS_UPDATE", "PRODUCT", req.product_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, "PRODUCT_STATUS_UPDATE", "PRODUCT", req.product_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"鍟嗗搧鐘舵€佷慨鏀瑰け璐ワ細{str(e)}"
-        )
+        ) from e
 
 
 @app.post("/admin/products/delete")
 def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | None = Header(None)):
     """
     鍚庡彴鍟嗗搧閫昏緫鍒犻櫎銆?    涓嶅垹闄ゅ簱涓殑璁板綍锛屼粎鏍囪 product銆乸roduct_sku 涓哄凡鍒犻櫎銆?    """
+    admin_user = require_admin_user(authorization)
+    request_id = create_operation_request_id()
     try:
-        require_admin_user(authorization)
 
         with get_db() as conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT id
+                        SELECT id, name, status, is_deleted
                         FROM product
                         WHERE id = %s
                           AND is_deleted = 0
@@ -4924,6 +5475,20 @@ def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | No
                         """,
                         (req.product_id,)
                     )
+                    insert_operation_log(
+                        cursor, admin_user["id"], "PRODUCT_DELETE", "PRODUCT", req.product_id,
+                        "SUCCESS", "删除商品",
+                        {
+                            "before": {
+                                "name": product.get("name"),
+                                "status": product.get("status"),
+                                "is_deleted": int(product.get("is_deleted") or 0),
+                            },
+                            "after": {"name": product.get("name"), "status": "OFF_SALE", "is_deleted": 1},
+                            "changed_fields": ["status", "is_deleted"],
+                        },
+                        request_id,
+                    )
 
                     cursor.execute(
                         """
@@ -4941,6 +5506,7 @@ def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | No
                     "success": True,
                     "message": "鍟嗗搧宸查€昏緫鍒犻櫎",
                     "product_id": req.product_id,
+                    "request_id": request_id,
                 }
 
             except HTTPException:
@@ -4951,14 +5517,16 @@ def delete_admin_product(req: AdminProductDeleteRequest, authorization: str | No
                 conn.rollback()
                 raise
 
-    except HTTPException:
+    except HTTPException as error:
+        write_admin_operation_failure(admin_user, "PRODUCT_DELETE", "PRODUCT", req.product_id, error, request_id)
         raise
 
     except Exception as e:
+        write_admin_operation_failure(admin_user, "PRODUCT_DELETE", "PRODUCT", req.product_id, e, request_id)
         raise HTTPException(
             status_code=500,
             detail=f"商品删除失败：{str(e)}"
-        )
+        ) from e
 
 
 @app.get("/orders/{order_id}")

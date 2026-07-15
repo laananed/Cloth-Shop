@@ -1816,7 +1816,7 @@ test('admin order unship source wiring is present', () => {
 
   assert.ok(backend.includes('AdminUnshipOrderRequest'));
   assert.ok(backend.includes('@app.post("/admin/orders/unship")'));
-  assert.ok(backend.includes('ADMIN_UNSHIP_ORDER'));
+  assert.ok(backend.includes('ORDER_UNSHIP'));
   assert.ok(backend.includes("UPDATE order_main SET status = 'PAID'"));
   assert.ok(backend.includes('取消发货成功'));
 
@@ -2244,8 +2244,8 @@ test('refund request backend wiring is present in source', () => {
   assert.ok(backend.includes('REFUND_RESTORE'));
   assert.ok(backend.includes('@app.post("/admin/orders/refund/approve")'));
   assert.ok(backend.includes('@app.post("/admin/orders/refund/reject")'));
-  assert.ok(backend.includes('ADMIN_APPROVE_REFUND'));
-  assert.ok(backend.includes('ADMIN_REJECT_REFUND'));
+  assert.ok(backend.includes('REFUND_APPROVE'));
+  assert.ok(backend.includes('REFUND_REJECT'));
 });
 
 test('refund request contract stays order based and preserves business errors', () => {
@@ -2879,7 +2879,7 @@ test('[DESCRIPTION-4] admin description update is authenticated transactional an
   assert.ok(routeBody.includes('(description, product_id)'));
   assert.ok(routeBody.includes('conn.commit()'));
   assert.ok(routeBody.includes('conn.rollback()'));
-  assert.ok(routeBody.includes('except HTTPException:'));
+  assert.match(routeBody, /except HTTPException(?: as \w+)?:/);
 });
 
 test('[DESCRIPTION-5] storefront maps real descriptions without replacing them with sku summaries', () => {
@@ -4007,5 +4007,285 @@ test('[TAGS-15-8] batch toolbar and product selectors remain usable on desktop a
   assert.doesNotMatch(styles, /overflow-x:\s*auto[^}]*admin-product-batch-tag-options/);
   assert.equal(existsSync('sql语句/10_商品标签批量管理增量迁移.sql'), false);
   assert.ok(sqlFiles.includes('[TAGS-14-4]'));
+});
+
+test('[OPERATION-LOG-16-1] migration 10 extends operation_log idempotently without replacing historical rows', () => {
+  const migrationPath = 'sql语句/10_管理员操作日志增量迁移.sql';
+  assert.ok(existsSync(migrationPath));
+  assert.equal(existsSync('sql语句/09_管理员操作日志增量迁移.sql'), false);
+  const migration = readFileSync(migrationPath, 'utf8');
+
+  assert.match(migration, /USE\s+frieren_cloth_shop_db/i);
+  assert.match(migration, /information_schema\.columns/i);
+  assert.match(migration, /information_schema\.statistics/i);
+  assert.match(migration, /target_type\s+VARCHAR\(40\)\s+NULL/i);
+  assert.match(migration, /target_id\s+BIGINT\s+NULL/i);
+  assert.match(migration, /action_result\s+VARCHAR\(16\)\s+NOT NULL\s+DEFAULT\s+'SUCCESS'/i);
+  assert.match(migration, /detail_json\s+JSON\s+NULL/i);
+  assert.match(migration, /request_id\s+VARCHAR\(64\)\s+NULL/i);
+  assert.match(migration, /idx_operation_log_action_created[\s\S]*action_type[\s\S]*created_at/i);
+  assert.match(migration, /idx_operation_log_target_created[\s\S]*target_type[\s\S]*target_id[\s\S]*created_at/i);
+  assert.match(migration, /idx_operation_log_result_created[\s\S]*action_result[\s\S]*created_at/i);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|TRUNCATE|DELETE\s+FROM\s+operation_log|UPDATE\s+operation_log\s+SET\s+remark/i);
+});
+
+test('[OPERATION-LOG-16-2] audit helpers sanitize details truncate remarks and parameterize inserts', () => {
+  const script = String.raw`
+import json
+import app.operation_logs as operation_logs
+from app.operation_logs import (
+    create_operation_request_id,
+    insert_operation_log,
+    parse_operation_detail,
+    sanitize_operation_detail,
+    serialize_operation_detail,
+    truncate_operation_remark,
+)
+
+class Cursor:
+    def __init__(self):
+        self.calls = []
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+
+detail = sanitize_operation_detail({
+    "before": {"available_stock": 44, "password": "secret", "Authorization": "Bearer secret"},
+    "after": {"available_stock": 50, "token": "secret"},
+    "changed_fields": ["available_stock"],
+    "ids": [9],
+    "ignored": "must not survive",
+    "pay_password": "123456",
+})
+cursor = Cursor()
+request_id = insert_operation_log(
+    cursor,
+    operator_id=7,
+    action_type="INVENTORY_UPDATE",
+    target_type="INVENTORY",
+    target_id=9,
+    action_result="SUCCESS",
+    remark="测" * 300,
+    detail=detail,
+    request_id="fixed-request-id",
+)
+insert_operation_log(
+    cursor,
+    operator_id=7,
+    action_type="ADMIN_LOGIN",
+    target_type="USER",
+    target_id=None,
+    action_result="SUCCESS",
+    remark="管理员登录成功",
+    detail=None,
+)
+original_get_db = operation_logs.get_db
+def broken_get_db():
+    raise RuntimeError("audit database unavailable")
+operation_logs.get_db = broken_get_db
+failure_write_result = operation_logs.write_failure_operation_log(
+    operator_id=7,
+    action_type="CATEGORY_UPDATE",
+    target_type="CATEGORY",
+    target_id=9,
+    remark="修改分类失败",
+    detail={"reason_summary": "分类名称已存在"},
+)
+operation_logs.get_db = original_get_db
+print(json.dumps({
+    "detail": detail,
+    "serialized": json.loads(serialize_operation_detail(detail)),
+    "unsupported": serialize_operation_detail({"before": {"bad": object()}}),
+    "remark": truncate_operation_remark("测" * 300),
+    "ids_unique": create_operation_request_id() != create_operation_request_id(),
+    "request_id": request_id,
+    "sql": cursor.calls[0][0],
+    "params": cursor.calls[0][1],
+    "nullable_target": cursor.calls[1][1][3],
+    "nullable_detail": cursor.calls[1][1][6],
+    "invalid_detail": parse_operation_detail("not-json"),
+    "failure_write_result": failure_write_result,
+}, ensure_ascii=True, default=str))
+`;
+  const result = spawnSync('backend\\.venv\\Scripts\\python.exe', ['-c', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PYTHONPATH: 'backend' },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout.trim());
+  assert.deepEqual(payload.detail, {
+    before: { available_stock: 44 },
+    after: { available_stock: 50 },
+    changed_fields: ['available_stock'],
+    ids: [9],
+  });
+  assert.deepEqual(payload.serialized, payload.detail);
+  assert.equal(payload.unsupported, null);
+  assert.equal(payload.remark.length, 255);
+  assert.ok(payload.remark.endsWith('…'));
+  assert.equal(payload.ids_unique, true);
+  assert.equal(payload.request_id, 'fixed-request-id');
+  assert.match(payload.sql, /INSERT\s+INTO\s+operation_log/i);
+  assert.match(payload.sql, /VALUES\s*\(%s,\s*%s,\s*%s,\s*%s,\s*%s,\s*%s,\s*%s,\s*%s\)/i);
+  assert.equal(payload.params[0], 7);
+  assert.equal(payload.params[4], 'SUCCESS');
+  assert.equal(payload.nullable_target, null);
+  assert.equal(payload.nullable_detail, null);
+  assert.equal(payload.invalid_detail, null);
+  assert.equal(payload.failure_write_result, false);
+});
+
+test('[OPERATION-LOG-16-3] backend exposes authenticated filtered read-only log APIs', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const helper = readFileSync('backend/app/operation_logs.py', 'utf8');
+  const routes = sliceBetween(backend, '@app.get("/admin/operation-logs")', '@app.get("/admin/stats")');
+
+  assert.ok(routes.includes('@app.get("/admin/operation-logs")'));
+  assert.ok(routes.includes('@app.get("/admin/operation-log-options")'));
+  assert.ok(routes.includes('require_admin_user(authorization)'));
+  assert.match(routes, /page:\s*int\s*=\s*Query\(1,\s*ge=1\)/);
+  assert.match(routes, /page_size:\s*int\s*=\s*Query\(20,\s*ge=1,\s*le=100\)/);
+  assert.match(routes, /keyword:\s*str\s*\|\s*None\s*=\s*Query\(None,\s*max_length=100\)/);
+  assert.ok(routes.includes('date_from'));
+  assert.ok(routes.includes('date_to'));
+  assert.ok(routes.includes('date_from > date_to'));
+  assert.ok(routes.includes('created_at DESC, ol.id DESC'));
+  assert.ok(routes.includes('total'));
+  assert.ok(routes.includes('pages'));
+  assert.ok(helper.includes('parse_operation_detail'));
+  assert.doesNotMatch(backend, /@app\.(delete|post|patch)\("\/admin\/operation-logs/);
+});
+
+test('[OPERATION-LOG-16-4] every stage 13 administrator mutation uses shared success and failure audit helpers', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const actions = [
+    'ADMIN_LOGIN',
+    'CATEGORY_CREATE', 'CATEGORY_UPDATE', 'CATEGORY_DELETE', 'CATEGORY_RESTORE',
+    'PRODUCT_CREATE', 'PRODUCT_CATEGORY_UPDATE', 'PRODUCT_DESCRIPTION_UPDATE',
+    'PRODUCT_STATUS_UPDATE', 'PRODUCT_DELETE',
+    'PRODUCT_IMAGE_ADD', 'PRODUCT_IMAGE_DELETE',
+    'SKU_CREATE', 'SKU_UPDATE', 'SKU_DELETE',
+    'INVENTORY_UPDATE',
+    'ORDER_SHIP', 'ORDER_UNSHIP', 'REFUND_APPROVE', 'REFUND_REJECT',
+  ];
+
+  for (const action of actions) {
+    assert.ok(backend.includes(`"${action}"`), `${action} should be wired`);
+  }
+  const mutationRoutes = [
+    ['@app.post("/admin/categories")', 'CATEGORY_CREATE'],
+    ['@app.patch("/admin/categories/{category_id}")', 'CATEGORY_UPDATE'],
+    ['@app.delete("/admin/categories/{category_id}")', 'CATEGORY_DELETE'],
+    ['@app.post("/admin/categories/{category_id}/restore")', 'CATEGORY_RESTORE'],
+    ['@app.patch("/admin/products/{product_id}/category")', 'PRODUCT_CATEGORY_UPDATE'],
+    ['@app.post("/products")', 'PRODUCT_CREATE'],
+    ['@app.post("/admin/products/{product_id}/images")', 'PRODUCT_IMAGE_ADD'],
+    ['@app.delete("/admin/products/{product_id}/images/{image_id}")', 'PRODUCT_IMAGE_DELETE'],
+    ['@app.post("/admin/orders/refund/approve")', 'REFUND_APPROVE'],
+    ['@app.post("/admin/orders/refund/reject")', 'REFUND_REJECT'],
+    ['@app.post("/admin/orders/ship")', 'ORDER_SHIP'],
+    ['@app.post("/admin/orders/unship")', 'ORDER_UNSHIP'],
+    ['@app.patch("/admin/products/{product_id}/description")', 'PRODUCT_DESCRIPTION_UPDATE'],
+    ['@app.post("/admin/products/{product_id}/skus")', 'SKU_CREATE'],
+    ['@app.patch("/admin/products/{product_id}/skus/{sku_id}")', 'SKU_UPDATE'],
+    ['@app.delete("/admin/products/{product_id}/skus/{sku_id}")', 'SKU_DELETE'],
+    ['@app.post("/admin/inventory/update-stock")', 'INVENTORY_UPDATE'],
+    ['@app.post("/admin/products/update-status")', 'PRODUCT_STATUS_UPDATE'],
+    ['@app.post("/admin/products/delete")', 'PRODUCT_DELETE'],
+  ];
+  for (const [route, action] of mutationRoutes) {
+    const routeStart = backend.indexOf(route);
+    const routeEnd = backend.indexOf('\n@app.', routeStart + route.length);
+    const routeBody = backend.slice(routeStart, routeEnd < 0 ? backend.length : routeEnd);
+    assert.ok(routeStart >= 0, `${route} should exist`);
+    assert.ok(routeBody.includes(`"${action}"`) || routeBody.includes('action_type'), `${action} should be in its route`);
+    assert.ok(routeBody.includes('admin_user = require_admin_user(authorization)'), `${action} should use the authenticated operator`);
+    assert.ok(routeBody.includes('request_id = create_operation_request_id()'), `${action} should create a request id`);
+    assert.ok(routeBody.includes('insert_operation_log('), `${action} should write SUCCESS in the business transaction`);
+    assert.ok(routeBody.indexOf('insert_operation_log(') < routeBody.indexOf('conn.commit()'), `${action} audit must precede commit`);
+    assert.ok(routeBody.includes('write_admin_operation_failure('), `${action} should attempt an independent FAILURE audit`);
+
+    const commitIndex = routeBody.indexOf('conn.commit()');
+    const firstReturnAfterCommit = routeBody.indexOf('return ', commitIndex);
+    const firstReturnLineEnd = firstReturnAfterCommit < 0
+      ? routeBody.length
+      : routeBody.indexOf('\n', firstReturnAfterCommit);
+    const postCommitResponseWork = routeBody.slice(
+      commitIndex + 'conn.commit()'.length,
+      firstReturnLineEnd < 0 ? routeBody.length : firstReturnLineEnd,
+    );
+    assert.doesNotMatch(
+      postCommitResponseWork,
+      /cursor\.execute\(|query_[a-z_]+\(|serialize_[a-z_]+\(|attach_product_images\(|jsonable_encoder\(/,
+      `${action} must finish fallible response reads and serialization before commit`,
+    );
+  }
+  const loginRoute = sliceBetween(backend, '@app.post("/admin/login")', 'def normalize_sku_status');
+  assert.ok(loginRoute.includes('"ADMIN_LOGIN"'));
+  assert.ok(loginRoute.includes('audit_conn.commit()'));
+  assert.doesNotMatch(loginRoute, /write_admin_operation_failure|write_failure_operation_log/);
+  assert.ok(backend.includes('from app.operation_logs import'));
+  assert.ok((backend.match(/insert_operation_log\(/g) || []).length >= actions.length);
+  assert.ok(backend.includes('def write_admin_operation_failure('));
+  assert.ok((backend.match(/write_admin_operation_failure\(/g) || []).length >= actions.length - 1);
+  assert.ok(backend.includes('write_failure_operation_log('));
+  assert.ok(backend.includes('request_id'));
+  assert.ok(backend.includes('admin_user["id"]'));
+  assert.doesNotMatch(backend, /operator_id\s*=\s*CURRENT_USER_ID|operator_id\s*=\s*1\b/);
+
+  const categoryCreateRoute = sliceBetween(
+    backend,
+    '@app.post("/admin/categories")',
+    '@app.patch("/admin/categories/{category_id}")',
+  );
+  assert.ok(categoryCreateRoute.includes('failure_action_type = "CATEGORY_CREATE"'));
+  assert.ok(categoryCreateRoute.includes('failure_action_type = "CATEGORY_RESTORE"'));
+  assert.ok(categoryCreateRoute.includes('failure_target_id = category_id'));
+  assert.match(
+    categoryCreateRoute,
+    /write_admin_operation_failure\(admin_user, failure_action_type, "CATEGORY", failure_target_id,/,
+  );
+});
+
+test('[OPERATION-LOG-16-5] operation log panel is read-only filterable expandable and paginated', () => {
+  const html = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const panel = sliceBetween(html, 'data-admin-panel="operation-logs"', '</section>\n        </section>');
+
+  assert.ok(html.includes('data-admin-nav-target="operation-logs"'));
+  for (const hook of [
+    'data-admin-operation-log-filter',
+    'data-admin-operation-log-action',
+    'data-admin-operation-log-target',
+    'data-admin-operation-log-result',
+    'data-admin-operation-log-operator',
+    'data-admin-operation-log-date-from',
+    'data-admin-operation-log-date-to',
+    'data-admin-operation-log-keyword',
+    'data-admin-operation-log-reset',
+    'data-admin-operation-log-list',
+    'data-admin-operation-log-first',
+    'data-admin-operation-log-prev',
+    'data-admin-operation-log-next',
+    'data-admin-operation-log-last',
+  ]) assert.ok(panel.includes(hook), `${hook} should exist`);
+  assert.doesNotMatch(panel, /删除日志|清空日志|编辑日志|导出日志/);
+  assert.ok(mainJs.includes('loadAdminOperationLogOptions'));
+  assert.ok(mainJs.includes('loadAdminOperationLogs'));
+  assert.ok(mainJs.includes('renderAdminOperationLogs'));
+  assert.ok(mainJs.includes('URLSearchParams'));
+  assert.ok(mainJs.includes('无结构化详情'));
+  assert.ok(mainJs.includes('JSON.stringify'));
+  assert.ok(mainJs.includes('成功'));
+  assert.ok(mainJs.includes('失败'));
+});
+
+test('[OPERATION-LOG-16-6] operation log layout protects long content and narrow viewports', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+
+  assert.match(styles, /\.admin-operation-log-filter\s*\{/);
+  assert.match(styles, /\.admin-operation-log-card\s*\{/);
+  assert.match(styles, /\.admin-operation-log-detail\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
+  assert.match(styles, /\.admin-operation-log-request-id\s*\{[\s\S]*word-break:\s*break-all;/);
+  assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*\.admin-operation-log-filter/);
 });
 

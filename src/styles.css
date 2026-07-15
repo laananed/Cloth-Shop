@@ -5548,7 +5548,144 @@ button.sku-option--disabled {
   align-items: center;
 }
 
+.admin-operation-log-filter {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid rgba(71, 107, 138, 0.16);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.admin-operation-log-filter__keyword {
+  grid-column: span 2;
+}
+
+.admin-operation-log-filter__actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.admin-operation-log-list {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-operation-log-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid rgba(71, 107, 138, 0.16);
+  border-left: 4px solid #4f7898;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(25, 55, 80, 0.07);
+}
+
+.admin-operation-log-card.is-success {
+  border-left-color: #37845b;
+}
+
+.admin-operation-log-card.is-failure {
+  border-left-color: #b44d4d;
+}
+
+.admin-operation-log-card__header,
+.admin-operation-log-meta,
+.admin-operation-log-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.admin-operation-log-card__header time {
+  margin-left: auto;
+  color: #647889;
+  font-size: 0.88rem;
+}
+
+.admin-operation-log-result {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(55, 132, 91, 0.12);
+  color: #276a48;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.is-failure .admin-operation-log-result {
+  background: rgba(180, 77, 77, 0.12);
+  color: #963b3b;
+}
+
+.admin-operation-log-meta {
+  color: #526879;
+  font-size: 0.88rem;
+}
+
+.admin-operation-log-remark,
+.admin-operation-log-request-id {
+  margin: 0;
+}
+
+.admin-operation-log-request-id {
+  color: #647889;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.admin-operation-log-detail {
+  overflow-wrap: anywhere;
+}
+
+.admin-operation-log-detail summary {
+  width: fit-content;
+  color: #365f7d;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.admin-operation-log-detail pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: #f3f7fa;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-operation-log-pagination {
+  justify-content: center;
+  margin-top: 18px;
+}
+
 @media (max-width: 760px) {
+  .admin-operation-log-filter {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .admin-operation-log-filter__keyword {
+    grid-column: auto;
+  }
+
+  .admin-operation-log-filter__actions,
+  .admin-operation-log-pagination {
+    align-items: stretch;
+  }
+
+  .admin-operation-log-card__header time {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .admin-sku-manager {
     padding: 8px;
   }

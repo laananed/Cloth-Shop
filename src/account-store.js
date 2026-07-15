@@ -346,6 +346,45 @@ export function isProductFavorited(favorites, product) {
   );
 }
 
+function getNonNegativeIntegerQuantity(value) {
+  if (value === null || value === undefined || typeof value === 'boolean' || String(value).trim() === '') {
+    return 0;
+  }
+
+  const quantity = Number(value);
+  return Number.isFinite(quantity) && quantity > 0 ? Math.floor(quantity) : 0;
+}
+
+export function getFavoriteCount(favorites, products = []) {
+  return normalizeProductFavorites(favorites, products).length;
+}
+
+export function isProductInCart(cart, product) {
+  const productCandidates = new Set(getFavoriteIdentityCandidates(product));
+
+  return (Array.isArray(cart) ? cart : []).some((item) =>
+    getNonNegativeIntegerQuantity(item?.quantity) > 0
+      && getFavoriteIdentityCandidates(item).some((candidate) => productCandidates.has(candidate)),
+  );
+}
+
+export function getCartQuantityCount(cart) {
+  return (Array.isArray(cart) ? cart : []).reduce(
+    (total, item) => total + getNonNegativeIntegerQuantity(item?.quantity),
+    0,
+  );
+}
+
+export function formatCountBadge(count) {
+  const safeCount = getNonNegativeIntegerQuantity(count);
+
+  if (safeCount === 0) {
+    return '';
+  }
+
+  return safeCount > 99 ? '99+' : String(safeCount);
+}
+
 export function toggleProductFavorite(favorites, product) {
   const normalized = normalizeProductFavorites(favorites, [product]);
 

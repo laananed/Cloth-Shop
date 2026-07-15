@@ -186,8 +186,14 @@
             <button class="sidebar-nav__button is-active" type="button" data-sidebar-target="account">账号信息</button>
             <button class="sidebar-nav__button" type="button" data-sidebar-target="address">收货地址</button>
             <button class="sidebar-nav__button" type="button" data-sidebar-target="orders">购买记录</button>
-            <button class="sidebar-nav__button" type="button" data-sidebar-target="favorites">收藏夹</button>
-            <button class="sidebar-nav__button" type="button" data-sidebar-target="cart">购物车</button>
+            <button class="sidebar-nav__button" type="button" data-sidebar-target="favorites" aria-label="收藏夹，共 0 件商品">
+              <span>收藏夹</span>
+              <span class="sidebar-nav__count" data-sidebar-count="favorites" aria-hidden="true" hidden></span>
+            </button>
+            <button class="sidebar-nav__button" type="button" data-sidebar-target="cart" aria-label="购物车，共 0 件商品">
+              <span>购物车</span>
+              <span class="sidebar-nav__count" data-sidebar-count="cart" aria-hidden="true" hidden></span>
+            </button>
           </nav>
 
           <div class="sidebar__content">
@@ -349,7 +355,7 @@
       </footer>
     </main>
 
-    <script type="module" src="./src/main.js?v=20260715d"></script>
+    <script type="module" src="./src/main.js?v=20260715e"></script>
   </body>
 </html>
 

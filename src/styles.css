@@ -758,11 +758,42 @@ body.has-modal {
   font-weight: 700;
   text-align: left;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .sidebar-nav__button.is-active {
   color: white;
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.sidebar-nav__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: #fff;
+  background: #ef6f9b;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sidebar-nav__count[hidden] {
+  display: none;
+}
+
+.sidebar-nav__button.is-active .sidebar-nav__count {
+  color: var(--accent-strong);
+  background: #fff;
 }
 
 .sidebar__content {
@@ -2589,6 +2620,26 @@ button:disabled,
 
 .ghost-button--icon-outline {
   background: rgba(255, 255, 255, 0.74);
+}
+
+.ghost-button--icon-outline.is-favorited {
+  color: #d83f6f;
+  border-color: rgba(216, 63, 111, 0.42);
+  background: rgba(255, 239, 245, 0.94);
+}
+
+.ghost-button--icon-outline.is-favorited svg path {
+  fill: currentColor;
+}
+
+.ghost-button--icon-outline.is-in-cart:not(:disabled) {
+  color: #a86800;
+  border-color: rgba(224, 164, 42, 0.48);
+  background: rgba(255, 246, 211, 0.96);
+}
+
+.ghost-button--icon-outline.is-in-cart:disabled {
+  color: var(--muted);
 }
 
 .product-card--purchase-ui .ghost-button {

@@ -14,11 +14,15 @@ import {
   addAdminProduct,
   getStoredAdminProducts,
   getStoredAddressBook,
+  formatCountBadge,
+  getCartQuantityCount,
+  getFavoriteCount,
   getStoredCart,
   getStoredCartSelections,
   getStoredFavorites,
   getStoredProfile,
   isProductFavorited,
+  isProductInCart,
   renderAdminProductsView,
   renderAdminStatsView,
   renderFavoriteProductItems,
@@ -31,7 +35,7 @@ import {
   toggleProductFavorite,
   validateAddress,
   validateRegistration,
-} from './account-store.js?v=20260715c';
+} from './account-store.js?v=20260715d';
 import {
   buildSkuMatrix,
   getDimensionOptions,
@@ -134,6 +138,8 @@ const sidebarCartFeedback = document.querySelector('[data-sidebar-cart-feedback]
 const favoritesList = document.querySelector('[data-favorites-list]');
 const cartList = document.querySelector('[data-cart-list]');
 const cartSummary = document.querySelector('[data-cart-summary]');
+const sidebarFavoriteCount = document.querySelector('[data-sidebar-count="favorites"]');
+const sidebarCartCount = document.querySelector('[data-sidebar-count="cart"]');
 const ordersList = document.querySelector('[data-orders-list]');
 const accountEmail = document.querySelector('[data-account-email]');
 const accountDisplayName = document.querySelector('[data-account-display-name]');
@@ -1173,6 +1179,7 @@ async function syncCartFromApi(userId = CURRENT_USER_ID) {
 
   // 暂时仍然复用原前端购物车展示逻辑，但数据来源改成后端
   saveStoredCart(storage, cartItems);
+  refreshCommerceIndicators();
 
   console.log("已同步后端购物车：", {
     count: cartItems.length,
@@ -2256,6 +2263,7 @@ function renderProducts() {
 
   const visibleProducts = filteredProducts();
   const favorites = getStoredFavorites(storage, products);
+  const cart = getStoredCart(storage);
   
   if (!visibleProducts.length) {
       productGrid.innerHTML = `
@@ -2286,6 +2294,7 @@ function renderProducts() {
       const hasSelectedSku = Boolean(selectedSku);
       const canOpenActionModal = canOpenProductActionModal(product);
       const isFavorite = isProductFavorited(favorites, product);
+      const isInCart = isProductInCart(cart, product);
       const stockLabel = !hasSelectedSku
         ? "请选择规格后查看库存"
         : productState.key === "OFF_SALE"
@@ -2360,14 +2369,16 @@ function renderProducts() {
                   class="ghost-button ghost-button--icon ghost-button--icon-outline ${isFavorite ? 'is-favorited' : ''}"
                   aria-label="${isFavorite ? '取消收藏' : '加入收藏'}"
                   aria-pressed="${isFavorite}"
+                  data-favorite-state="${isFavorite ? 'active' : 'inactive'}"
                   data-favorite-toggle
                 >
                   <span class="ghost-button__icon">${getFavoriteIcon()}</span>
                 </button>
                 <button
                   type="button"
-                  class="ghost-button ghost-button--icon ghost-button--icon-outline"
-                  aria-label="加入购物车"
+                  class="ghost-button ghost-button--icon ghost-button--icon-outline ${isInCart ? 'is-in-cart' : ''}"
+                  aria-label="${isInCart ? '已在购物车，继续添加' : '加入购物车'}"
+                  data-cart-state="${isInCart ? 'active' : 'inactive'}"
                   data-sidebar-launch="cart"
                   ${canOpenActionModal ? '' : 'disabled'}
                 >
@@ -2399,6 +2410,31 @@ function renderProducts() {
 function updateView() {
   renderCollections();
   renderProducts();
+}
+
+function renderSidebarCountBadge(element, count, label) {
+  if (!element) {
+    return;
+  }
+
+  const badgeText = formatCountBadge(count);
+  element.textContent = badgeText;
+  element.hidden = !badgeText;
+  element.closest('[data-sidebar-target]')?.setAttribute('aria-label', `${label}，共 ${count} 件商品`);
+}
+
+function renderSidebarCountBadges() {
+  const favorites = getStoredFavorites(storage, products);
+  const cart = getStoredCart(storage);
+
+  renderSidebarCountBadge(sidebarFavoriteCount, getFavoriteCount(favorites, products), '收藏夹');
+  renderSidebarCountBadge(sidebarCartCount, getCartQuantityCount(cart), '购物车');
+}
+
+function refreshCommerceIndicators() {
+  renderProducts();
+  renderSidebarCountBadges();
+  renderCommerceSidebarContent();
 }
 
 function setFeedback(target, message, isError = false) {
@@ -3190,8 +3226,7 @@ function toggleFavorite(product) {
 
   saveStoredFavorites(storage, nextFavorites);
   setFeedback(sidebarFavoritesFeedback, wasFavorite ? '已取消收藏。' : '已加入收藏夹。');
-  renderSidebar();
-  updateView();
+  refreshCommerceIndicators();
 }
 
 function removeFavorite(favoriteId) {
@@ -3200,6 +3235,7 @@ function removeFavorite(favoriteId) {
 
   saveStoredFavorites(storage, nextFavorites);
   setFeedback(sidebarFavoritesFeedback, '已取消收藏。');
+  refreshCommerceIndicators();
 }
 
 function upsertCartItem(product) {
@@ -3636,6 +3672,29 @@ function renderCartSummary(cart, selectedIds) {
   `;
 }
 
+function getValidCartSelectionIds(cart, selectedIds) {
+  const invalidItemIds = new Set(getInvalidCartItems(cart).map((item) => item.id));
+
+  return selectedIds.filter((id) => !invalidItemIds.has(id) && cart.some((item) => item.id === id));
+}
+
+function renderCommerceSidebarContent() {
+  const currentFavoriteProducts = hasLoadedProductsFromApi ? products : [];
+  renderFavoritesShelf(
+    favoritesList,
+    getStoredFavorites(storage, currentFavoriteProducts),
+    '暂无收藏夹',
+    currentFavoriteProducts,
+  );
+
+  const cart = getStoredCart(storage);
+  const selectedIds = getStoredCartSelections(storage);
+  const validSelectedIds = getValidCartSelectionIds(cart, selectedIds);
+
+  renderCartShelf(cartList, cart, '暂无购物车', validSelectedIds);
+  renderCartSummary(cart, validSelectedIds);
+}
+
 function renderSidebar() {
   const profile = getStoredProfile(storage);
   const email = profile?.user?.email || '未登录';
@@ -3653,6 +3712,8 @@ function renderSidebar() {
   sidebarNavButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.sidebarTarget === activeSidebarSection);
   });
+
+  renderSidebarCountBadges();
 
   
 
@@ -3674,25 +3735,15 @@ function renderSidebar() {
     ordersList.innerHTML = `<p class="orders-empty">正在加载数据库订单...</p>`;
   }
 
-  const currentFavoriteProducts = hasLoadedProductsFromApi ? products : [];
-  renderFavoritesShelf(
-    favoritesList,
-    getStoredFavorites(storage, currentFavoriteProducts),
-    '暂无收藏夹',
-    currentFavoriteProducts,
-  );
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
-  const invalidItems = getInvalidCartItems(cart);
-  const invalidItemIds = new Set(invalidItems.map((item) => item.id));
-  const validSelectedIds = selectedIds.filter((id) => !invalidItemIds.has(id) && cart.some((item) => item.id === id));
+  const validSelectedIds = getValidCartSelectionIds(cart, selectedIds);
 
   if (validSelectedIds.length !== selectedIds.length) {
     saveStoredCartSelections(storage, validSelectedIds);
   }
 
-  renderCartShelf(cartList, cart, '暂无购物车', validSelectedIds);
-  renderCartSummary(cart, validSelectedIds);
+  renderCommerceSidebarContent();
 }
 
 function updateHeroParallax() {
@@ -6422,8 +6473,6 @@ if (favoritesList) {
 
     if (removeButton) {
       removeFavorite(removeButton.dataset.favoriteRemoveId);
-      renderSidebar();
-      updateView();
       return;
     }
 
@@ -6888,7 +6937,12 @@ renderSidebar();
 updateHeroParallax();
 updateHeroScrollState();
 // testLoadProductsFromApi(); 测试函数，通过以后就可以不再使用。
-loadProductsFromApi();
+void loadProductsFromApi()
+  .then(() => syncCartFromApi(CURRENT_USER_ID))
+  .catch((error) => {
+    console.error('初始化数据库购物车失败，继续使用本地缓存：', error);
+    refreshCommerceIndicators();
+  });
 
 window.addEventListener('scroll', scheduleHeroParallax, { passive: true });
 window.addEventListener('resize', scheduleHeroParallax);

@@ -1057,6 +1057,105 @@ test('[FAVORITE-6-4] toggling favorites uses product identity and does not requi
   assert.deepEqual(removedA.map((item) => item.id), ['product-2']);
 });
 
+test('[INDICATOR-8-1] favorite count uses normalized unique product records', () => {
+  const favorites = [
+    { id: 'product-4-sku-8', productId: 'product-4', name: '商品 A / 白色 / M', skuName: '白色 / M' },
+    { id: 'product-4-sku-9', productId: 'product-4', name: '商品 A / 蓝色 / L', skuName: '蓝色 / L' },
+    { id: 'product-5', productId: 5, name: '商品 B' },
+    null,
+    { broken: true },
+  ];
+
+  assert.equal(typeof accountStore.getFavoriteCount, 'function');
+  assert.equal(accountStore.getFavoriteCount(favorites), 2);
+  assert.equal(accountStore.getFavoriteCount([]), 0);
+});
+
+test('[INDICATOR-8-2] cart product state aggregates positive sku rows by product identity', () => {
+  const product = { id: 'product-4', productId: 4 };
+  const cart = [
+    { id: 'sku-8', productId: 4, skuId: 8, quantity: 0 },
+    { id: 'sku-9', productId: 4, skuId: 9, quantity: 2, invalidReason: '商品已下架' },
+    { id: 'sku-11', productId: 4, skuId: 11, quantity: 1 },
+    { id: 'sku-10', productId: 5, skuId: 10, quantity: 1 },
+  ];
+
+  assert.equal(typeof accountStore.isProductInCart, 'function');
+  assert.equal(accountStore.isProductInCart(cart, product), true);
+  assert.equal(accountStore.isProductInCart(cart.filter((item) => item.skuId !== 9), product), true);
+  assert.equal(accountStore.isProductInCart([cart[0]], product), false);
+  assert.equal(accountStore.isProductInCart(cart, { id: 'product-6', productId: 6 }), false);
+});
+
+test('[INDICATOR-8-3] cart badge totals safe non-negative integer quantities across all rows', () => {
+  const cart = [
+    { productId: 4, skuId: 8, quantity: 2 },
+    { productId: 4, skuId: 9, quantity: '3' },
+    { productId: 5, skuId: 10, quantity: 4.8, invalidReason: 'SKU 已下架' },
+    { productId: 6, skuId: 11, quantity: -9 },
+    { productId: 7, skuId: 12, quantity: 'not-a-number' },
+    { productId: 8, skuId: 13, quantity: true },
+    { productId: 9, skuId: 14, quantity: '' },
+    { productId: 10, skuId: 15, quantity: null },
+  ];
+
+  assert.equal(typeof accountStore.getCartQuantityCount, 'function');
+  assert.equal(accountStore.getCartQuantityCount(cart), 9);
+  assert.equal(accountStore.getCartQuantityCount([]), 0);
+});
+
+test('[INDICATOR-8-4] badge formatting hides zero and caps visible text without losing source count', () => {
+  assert.equal(typeof accountStore.formatCountBadge, 'function');
+  assert.equal(accountStore.formatCountBadge(0), '');
+  assert.equal(accountStore.formatCountBadge(1), '1');
+  assert.equal(accountStore.formatCountBadge(99), '99');
+  assert.equal(accountStore.formatCountBadge(100), '99+');
+  assert.equal(accountStore.formatCountBadge(128), '99+');
+});
+
+test('[INDICATOR-8-5] storefront indicators expose stable state and badge hooks', () => {
+  const html = readFileSync('index.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const renderProductsBody = sliceBetween(mainJs, 'function renderProducts() {', 'function updateView() {');
+  const refreshIndicatorsBody = sliceBetween(mainJs, 'function refreshCommerceIndicators() {', 'function setFeedback(');
+  const renderSidebarBody = sliceBetween(mainJs, 'function renderSidebar() {', 'function updateHeroParallax() {');
+  const sidebarButtonStyles = sliceBetween(styles, '.sidebar-nav__button {', '.sidebar-nav__button.is-active');
+  const favoriteVisualStyles = sliceBetween(styles, '.favorite-card__visual {', '.favorite-card__visual:disabled');
+
+  assert.ok(html.includes('data-sidebar-count="favorites"'));
+  assert.ok(html.includes('data-sidebar-count="cart"'));
+  assert.ok(renderProductsBody.includes('data-favorite-state="${isFavorite ? \'active\' : \'inactive\'}"'));
+  assert.ok(renderProductsBody.includes('data-cart-state="${isInCart ? \'active\' : \'inactive\'}"'));
+  assert.ok(renderProductsBody.includes("is-in-cart"));
+  assert.ok(renderProductsBody.includes("已在购物车，继续添加"));
+  assert.ok(renderSidebarBody.includes('renderSidebarCountBadges'));
+  assert.ok(mainJs.includes('function refreshCommerceIndicators('));
+  assert.ok(refreshIndicatorsBody.includes('renderProducts();'));
+  assert.ok(refreshIndicatorsBody.includes('renderSidebarCountBadges();'));
+  assert.ok(refreshIndicatorsBody.includes('renderCommerceSidebarContent();'));
+  assert.ok(!refreshIndicatorsBody.includes('renderSidebar();'));
+  assert.ok(!refreshIndicatorsBody.includes('saveStored'));
+  assert.ok(styles.includes('.ghost-button--icon-outline.is-favorited'));
+  assert.ok(styles.includes('.ghost-button--icon-outline.is-in-cart'));
+  assert.ok(styles.includes('.sidebar-nav__count'));
+  assert.ok(sidebarButtonStyles.includes('display: flex'));
+  assert.ok(sidebarButtonStyles.includes('justify-content: space-between'));
+  assert.ok(!favoriteVisualStyles.includes('justify-content: space-between'));
+});
+
+test('[INDICATOR-8-6] cart api sync and initial load refresh indicators without clearing cache on failure', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const syncBody = sliceBetween(mainJs, 'async function syncCartFromApi(', 'async function addCartToApi(');
+  const initBody = sliceBetween(mainJs, 'renderHero();', "window.addEventListener('scroll'");
+
+  assert.ok(syncBody.includes('saveStoredCart(storage, cartItems)'));
+  assert.ok(syncBody.includes('refreshCommerceIndicators()'));
+  assert.doesNotMatch(syncBody, /catch[\s\S]*saveStoredCart\(storage, \[\]\)/);
+  assert.ok(initBody.includes('syncCartFromApi(CURRENT_USER_ID)'));
+  assert.ok(initBody.includes('refreshCommerceIndicators()'));
+});
+
 test('[FAVORITE-6-5] storefront favorite toggles directly while cart and buy keep sku modal semantics', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderProductsBody = sliceBetween(mainJs, 'function renderProducts() {', 'function updateView() {');
@@ -1080,12 +1179,12 @@ test('[FAVORITE-6-5] storefront favorite toggles directly while cart and buy kee
 test('[FAVORITE-6-6] favorites shelf removal synchronizes storage cards and the open panel', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderShelfBody = sliceBetween(mainJs, 'function renderFavoritesShelf(', 'function formatCartMoney(');
+  const removeFavoriteBody = sliceBetween(mainJs, 'function removeFavorite(', 'function upsertCartItem(');
   const favoriteEvents = sliceBetween(mainJs, 'if (favoritesList) {', 'if (cartList) {');
 
   assert.ok(renderShelfBody.includes('data-favorite-remove-id'));
   assert.ok(favoriteEvents.includes('removeFavorite('));
-  assert.ok(favoriteEvents.includes('renderSidebar();'));
-  assert.ok(favoriteEvents.includes('updateView();'));
+  assert.ok(removeFavoriteBody.includes('refreshCommerceIndicators();'));
 });
 
 test('[FAVORITE-7-1] favorite cards prefer live product fields and keep snapshot fallbacks', () => {
@@ -1136,12 +1235,12 @@ test('[FAVORITE-7-1] favorite cards prefer live product fields and keep snapshot
 test('[FAVORITE-7-1A] static catalog fallback is not treated as live favorite detail data', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const loaderBody = sliceBetween(mainJs, 'async function loadProductsFromApi()', 'const selectedSkuByProductId');
-  const sidebarBody = sliceBetween(mainJs, 'function renderSidebar() {', 'function updateHeroParallax()');
+  const commerceSidebarBody = sliceBetween(mainJs, 'function renderCommerceSidebarContent() {', 'function renderSidebar() {');
 
   assert.ok(mainJs.includes('let hasLoadedProductsFromApi = false;'));
   assert.ok(loaderBody.includes('hasLoadedProductsFromApi = true;'));
   assert.ok(loaderBody.includes('hasLoadedProductsFromApi = false;'));
-  assert.ok(sidebarBody.includes("hasLoadedProductsFromApi ? products : []"));
+  assert.ok(commerceSidebarBody.includes("hasLoadedProductsFromApi ? products : []"));
 });
 
 test('[FAVORITE-7-2] favorite cards use neutral description text without leaking sku fields', () => {
@@ -2435,7 +2534,7 @@ test('[SKU-SYNC-6] storefront cache-busts the sku utility module after selection
   const html = readFileSync('index.html', 'utf8');
 
   assert.ok(mainJs.includes("from './sku-utils.js?v=20260715a'"));
-  assert.ok(html.includes('./src/main.js?v=20260715d'));
+  assert.ok(html.includes('./src/main.js?v=20260715e'));
 });
 
 test('[SKU-SYNC-7] cart modal hides payment controls without hiding sku controls', () => {

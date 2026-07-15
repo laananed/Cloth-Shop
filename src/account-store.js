@@ -248,7 +248,119 @@ export function saveStoredOrders(storage, orders) {
   storage.setItem(ORDERS_KEY, JSON.stringify(orders));
 }
 
-export function getStoredFavorites(storage) {
+function getFavoriteIdentityCandidates(value) {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  const candidates = new Set();
+  const addCandidate = (candidate) => {
+    const normalized = String(candidate ?? '').trim();
+    if (!normalized) {
+      return;
+    }
+
+    candidates.add(normalized);
+    const legacyId = normalized.replace(/-sku-[^-]+$/, '');
+    candidates.add(legacyId);
+
+    if (/^\d+$/.test(normalized)) {
+      candidates.add(`product-${Number(normalized)}`);
+    }
+
+    const productIdMatch = normalized.match(/^product-0*(\d+)$/);
+    if (productIdMatch) {
+      candidates.add(String(Number(productIdMatch[1])));
+      candidates.add(`product-${Number(productIdMatch[1])}`);
+    }
+  };
+
+  addCandidate(value.productId);
+  addCandidate(value.id);
+  return [...candidates];
+}
+
+function findCurrentFavoriteProduct(favorite, products) {
+  const favoriteCandidates = new Set(getFavoriteIdentityCandidates(favorite));
+  return products.find((product) =>
+    getFavoriteIdentityCandidates(product).some((candidate) => favoriteCandidates.has(candidate)),
+  ) || null;
+}
+
+function getCanonicalFavoriteId(value) {
+  const candidates = getFavoriteIdentityCandidates(value);
+  return candidates.find((candidate) => candidate.startsWith('product-') && !candidate.includes('-sku-'))
+    || candidates.find((candidate) => !/^\d+$/.test(candidate) && !candidate.includes('-sku-'))
+    || '';
+}
+
+function getLegacyProductName(favorite) {
+  const name = String(favorite?.name || '').trim();
+  const skuName = String(favorite?.skuName || '').trim();
+  const suffix = skuName ? ` / ${skuName}` : '';
+
+  return suffix && name.endsWith(suffix) ? name.slice(0, -suffix.length).trim() : name;
+}
+
+function createProductFavorite(product, fallback = null) {
+  const source = product || fallback;
+  const id = getCanonicalFavoriteId(product) || getCanonicalFavoriteId(fallback);
+
+  if (!source || !id) {
+    return null;
+  }
+
+  return {
+    id,
+    productId: product?.productId ?? fallback?.productId ?? id,
+    name: String(product?.name || getLegacyProductName(fallback) || '').trim(),
+    category: String(product?.category || fallback?.category || '').trim(),
+    image: String(product?.image || fallback?.image || '').trim(),
+    detail: String(product?.detail || fallback?.detail || '').trim(),
+    price: Number(product?.price ?? fallback?.price ?? 0) || 0,
+    badge: String(product?.badge || fallback?.badge || '').trim(),
+  };
+}
+
+export function normalizeProductFavorites(favorites, products = []) {
+  const sourceFavorites = Array.isArray(favorites) ? favorites : [];
+  const currentProducts = Array.isArray(products) ? products : [];
+  const normalizedById = new Map();
+
+  sourceFavorites.forEach((favorite) => {
+    const currentProduct = findCurrentFavoriteProduct(favorite, currentProducts);
+    const normalized = createProductFavorite(currentProduct, favorite);
+
+    if (normalized && !normalizedById.has(normalized.id)) {
+      normalizedById.set(normalized.id, normalized);
+    }
+  });
+
+  return [...normalizedById.values()];
+}
+
+export function isProductFavorited(favorites, product) {
+  const productCandidates = new Set(getFavoriteIdentityCandidates(product));
+  return (Array.isArray(favorites) ? favorites : []).some((favorite) =>
+    getFavoriteIdentityCandidates(favorite).some((candidate) => productCandidates.has(candidate)),
+  );
+}
+
+export function toggleProductFavorite(favorites, product) {
+  const normalized = normalizeProductFavorites(favorites, [product]);
+
+  if (isProductFavorited(normalized, product)) {
+    const productCandidates = new Set(getFavoriteIdentityCandidates(product));
+    return normalized.filter((favorite) =>
+      !getFavoriteIdentityCandidates(favorite).some((candidate) => productCandidates.has(candidate)),
+    );
+  }
+
+  const nextFavorite = createProductFavorite(product);
+  return nextFavorite ? [...normalized, nextFavorite] : normalized;
+}
+
+export function getStoredFavorites(storage, products = []) {
   const raw = storage.getItem(FAVORITES_KEY);
   if (!raw) {
     return [];
@@ -256,7 +368,18 @@ export function getStoredFavorites(storage) {
 
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const normalized = normalizeProductFavorites(parsed, products);
+    const normalizedRaw = JSON.stringify(normalized);
+
+    if (normalizedRaw !== raw) {
+      storage.setItem(FAVORITES_KEY, normalizedRaw);
+    }
+
+    return normalized;
   } catch {
     return [];
   }

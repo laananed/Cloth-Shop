@@ -220,7 +220,7 @@ test('purchase flow exposes modal hooks in the source and markup', () => {
   assert.ok(mainJs.includes('data-purchase-launch="buy"'));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
-  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(!mainJs.includes("openPurchaseModal(product, 'favorites')"));
 });
 
 test('purchase modal source keeps product selection before derived state', () => {
@@ -264,7 +264,7 @@ test('purchase modal supports product image galleries without changing purchase 
   assert.ok(mainJs.includes('data-purchase-gallery-image'));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
-  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(!mainJs.includes("openPurchaseModal(product, 'favorites')"));
   assert.ok(styles.includes('.purchase-modal__gallery'));
   assert.ok(styles.includes('.purchase-modal__gallery-button.is-active'));
 });
@@ -325,16 +325,16 @@ test('purchase image lightbox reuses product images and preserves purchase state
   assert.doesNotMatch(lightboxLogic, /window\.open\(/);
   assert.equal((mainJs.match(/function getProductImages\(/g) || []).length, 1);
 });
-test('purchase modal routes actions through the shared selection flow', () => {
+test('cart and buy route through the shared sku flow while favorites toggle directly', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const renderModalBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
-  const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {', 'function normalizePayMethod(method) {');
-  const favoriteBody = sliceBetween(mainJs, 'function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {', 'function upsertCartItem(product) {');
+  const addCartBody = sliceBetween(mainJs, 'async function addCartToApi(product, selectedSku = null, quantity = 1) {', 'function normalizePayMethod(method) {');
+  const favoriteBody = sliceBetween(mainJs, 'function toggleFavorite(product) {', 'function upsertCartItem(product) {');
   const directOrderBody = sliceBetween(mainJs, 'async function createDirectOrderFromApi(product, quantity = 1, skuIdFromModal = null) {', 'function openSidebar(section = \'account\') {');
   const buyBranchStart = mainJs.indexOf("if (actionButton.dataset.purchaseLaunch === 'buy') {");
-  const buyBranchEnd = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {", buyBranchStart);
+  const buyBranchEnd = mainJs.indexOf('if (actionButton.dataset.favoriteToggle !== undefined) {', buyBranchStart);
   const buyBranchBody = mainJs.slice(buyBranchStart, buyBranchEnd);
-  const favoritesBranchStart = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'favorites') {");
+  const favoritesBranchStart = mainJs.indexOf('if (actionButton.dataset.favoriteToggle !== undefined) {');
   const favoritesBranchEnd = mainJs.indexOf("// if (actionButton.dataset.sidebarLaunch === 'cart') {", favoritesBranchStart);
   const favoritesBranchBody = mainJs.slice(favoritesBranchStart, favoritesBranchEnd);
   const cartBranchStart = mainJs.indexOf("if (actionButton.dataset.sidebarLaunch === 'cart') {", favoritesBranchStart);
@@ -349,9 +349,9 @@ test('purchase modal routes actions through the shared selection flow', () => {
   assert.ok(mainJs.includes('purchaseTotalSection.hidden = !actionConfig.showTotal;'));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'buy')"));
   assert.ok(mainJs.includes("openPurchaseModal(product, 'cart')"));
-  assert.ok(mainJs.includes("openPurchaseModal(product, 'favorites')"));
-  assert.ok(mainJs.includes('addCartToApi(activePurchaseProduct, selectedSku, quantity, { openSidebarAfterSuccess: false })'));
-  assert.ok(mainJs.includes('upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false })'));
+  assert.ok(!mainJs.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(mainJs.includes('addCartToApi(activePurchaseProduct, selectedSku, quantity)'));
+  assert.ok(mainJs.includes('toggleProductFavorite(favorites, product)'));
   assert.match(
     mainJs,
     /createDirectOrderFromApi\(\s*activePurchaseProduct,\s*quantity,\s*selectedSku\?\.(?:skuId)\s*\)/,
@@ -366,14 +366,13 @@ test('purchase modal routes actions through the shared selection flow', () => {
   assert.ok(addCartBody.includes('const actualSelectedSku = selectedSku || null;'));
   assert.ok(addCartBody.includes('const skuId = actualSelectedSku?.skuId;'));
   assert.ok(addCartBody.includes('quantity: nextQuantity'));
-  assert.ok(addCartBody.includes('openSidebarAfterSuccess'));
+  assert.ok(!addCartBody.includes('openSidebar('));
   assert.ok(!addCartBody.includes('getPurchaseSelectedSku(product)'));
 
-  assert.ok(favoriteBody.includes('const actualSelectedSku = selectedSku || null;'));
-  assert.ok(favoriteBody.includes('const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;'));
-  assert.ok(favoriteBody.includes('skuId: actualSelectedSku.skuId'));
-  assert.ok(favoriteBody.includes('skuName: actualSelectedSku.skuName || \'默认规格\''));
-  assert.ok(!favoriteBody.includes('favorites.some((item) => item.id === product.id)'));
+  assert.ok(favoriteBody.includes('getStoredFavorites(storage, products)'));
+  assert.ok(favoriteBody.includes('isProductFavorited(favorites, product)'));
+  assert.ok(favoriteBody.includes('saveStoredFavorites(storage, nextFavorites)'));
+  assert.ok(!favoriteBody.includes('selectedSku'));
 
   assert.ok(directOrderBody.includes('const selectedSku = skuList.find((sku) => Number(sku.skuId) === Number(skuIdFromModal)) || null;'));
   assert.ok(directOrderBody.includes('const skuId = selectedSku?.skuId;'));
@@ -381,7 +380,7 @@ test('purchase modal routes actions through the shared selection flow', () => {
   assert.ok(!directOrderBody.includes('getActionSelectedSku(product)'));
 
   assert.ok(buyBranchBody.includes("openPurchaseModal(product, 'buy')"));
-  assert.ok(favoritesBranchBody.includes("openPurchaseModal(product, 'favorites')"));
+  assert.ok(favoritesBranchBody.includes('toggleFavorite(product)'));
   assert.ok(cartBranchBody.includes("openPurchaseModal(product, 'cart')"));
   assert.ok(!buyBranchBody.includes('validateSkuBeforeProductAction'));
   assert.ok(!favoritesBranchBody.includes('validateSkuBeforeProductAction'));
@@ -392,7 +391,7 @@ test('purchase button click handling does not require a sidebar action hook', ()
   const mainJs = readFileSync('src/main.js', 'utf8');
 
   assert.ok(mainJs.includes("event.target.closest('button')"));
-  assert.ok(mainJs.indexOf("dataset.purchaseLaunch === 'buy'") < mainJs.indexOf("dataset.sidebarLaunch === 'favorites'"));
+  assert.ok(mainJs.indexOf("dataset.purchaseLaunch === 'buy'") < mainJs.indexOf('dataset.favoriteToggle !== undefined'));
 });
 
 test('scroll tools route sidebar and page scrolling through the right targets', () => {
@@ -771,7 +770,16 @@ test('personal data contract exposes account address order favorite and cart fie
   assert.ok(contract.orders.fields.includes('orderNo'));
   assert.ok(contract.orders.fields.includes('status'));
   assert.ok(contract.orders.fields.includes('items'));
-  assert.deepEqual(contract.favorites.fields, ['id', 'name', 'price', 'badge']);
+  assert.deepEqual(contract.favorites.fields, [
+    'id',
+    'productId',
+    'name',
+    'category',
+    'image',
+    'detail',
+    'price',
+    'badge',
+  ]);
   assert.deepEqual(contract.cart.fields, ['id', 'name', 'price', 'quantity']);
 });
 
@@ -913,7 +921,16 @@ test('orders panel renders an empty state when there are no orders', () => {
 
 test('favorite and cart shelves round-trip through storage', () => {
   const storage = createMemoryStorage();
-  const favorites = [{ id: 'product-01', name: '示例收藏', price: 299, badge: '主推' }];
+  const favorites = [{
+    id: 'product-01',
+    productId: 'product-01',
+    name: '示例收藏',
+    category: '',
+    image: '',
+    detail: '',
+    price: 299,
+    badge: '主推',
+  }];
   const cart = [{ id: 'product-02', name: '示例购物车', price: 289, quantity: 2 }];
 
   saveStoredFavorites(storage, favorites);
@@ -921,6 +938,153 @@ test('favorite and cart shelves round-trip through storage', () => {
 
   assert.deepEqual(getStoredFavorites(storage), favorites);
   assert.deepEqual(getStoredCart(storage), cart);
+});
+
+test('[FAVORITE-6-1] legacy sku favorites normalize to one current product record', async () => {
+  const { normalizeProductFavorites } = await import('../src/account-store.js');
+  assert.equal(typeof normalizeProductFavorites, 'function');
+
+  const products = [{
+    id: 'product-4',
+    productId: 4,
+    name: '海盐水手服',
+    category: '海风学院',
+    image: '/latest.jpg',
+    detail: '最新商品介绍',
+    price: 269,
+    badge: '热卖',
+  }];
+  const legacyFavorites = [
+    {
+      id: 'product-4-sku-8',
+      productId: 'product-4',
+      skuId: 8,
+      skuName: '白色 / M',
+      name: '海盐水手服 / 白色 / M',
+      category: '旧分类',
+      image: '/old-a.jpg',
+      price: 299,
+    },
+    {
+      id: 'product-4-sku-9',
+      productId: 'product-4',
+      skuId: 9,
+      skuName: '蓝色 / L',
+      name: '海盐水手服 / 蓝色 / L',
+      image: '/old-b.jpg',
+      price: 309,
+    },
+  ];
+
+  assert.deepEqual(normalizeProductFavorites(legacyFavorites, products), [{
+    id: 'product-4',
+    productId: 4,
+    name: '海盐水手服',
+    category: '海风学院',
+    image: '/latest.jpg',
+    detail: '最新商品介绍',
+    price: 269,
+    badge: '热卖',
+  }]);
+});
+
+test('[FAVORITE-6-2] favorite migration is idempotent and safely preserves identifiable fallbacks', async () => {
+  const { normalizeProductFavorites } = await import('../src/account-store.js');
+  const legacyFavorites = [
+    null,
+    { broken: true },
+    {
+      id: 'legacy-product-sku-18',
+      skuId: 18,
+      skuName: '白色 / M',
+      name: '遗留商品 / 白色 / M',
+      category: '旧分类',
+      image: '/legacy.jpg',
+      detail: '旧介绍',
+      price: 199,
+      badge: '旧角标',
+    },
+  ];
+
+  const once = normalizeProductFavorites(legacyFavorites, []);
+  const twice = normalizeProductFavorites(once, []);
+
+  assert.deepEqual(once, [{
+    id: 'legacy-product',
+    productId: 'legacy-product',
+    name: '遗留商品',
+    category: '旧分类',
+    image: '/legacy.jpg',
+    detail: '旧介绍',
+    price: 199,
+    badge: '旧角标',
+  }]);
+  assert.deepEqual(twice, once);
+});
+
+test('[FAVORITE-6-3] reading legacy favorites writes back the normalized product model', () => {
+  const storage = createMemoryStorage();
+  const products = [{ id: 'product-7', productId: 7, name: '星潮外套', price: 399 }];
+  storage.setItem('blue-song-favorites', JSON.stringify([
+    { id: 'product-7-sku-31', productId: 'product-7', skuId: 31, skuName: '黑色 / M', name: '星潮外套 / 黑色 / M' },
+    { id: 'product-7-sku-32', productId: 'product-7', skuId: 32, skuName: '黑色 / L', name: '星潮外套 / 黑色 / L' },
+  ]));
+
+  const favorites = getStoredFavorites(storage, products);
+
+  assert.equal(favorites.length, 1);
+  assert.deepEqual(JSON.parse(storage.getItem('blue-song-favorites')), favorites);
+  assert.equal(favorites[0].name, '星潮外套');
+  assert.equal('skuId' in favorites[0], false);
+  assert.equal('skuName' in favorites[0], false);
+});
+
+test('[FAVORITE-6-4] toggling favorites uses product identity and does not require sku data', async () => {
+  const { isProductFavorited, toggleProductFavorite } = await import('../src/account-store.js');
+  const productA = { id: 'product-1', productId: 1, name: '商品 A', price: 100 };
+  const productB = { id: 'product-2', productId: 2, name: '商品 B', price: 200 };
+
+  const addedA = toggleProductFavorite([], productA);
+  const addedBoth = toggleProductFavorite(addedA, productB);
+  const removedA = toggleProductFavorite(addedBoth, productA);
+
+  assert.equal(addedA.length, 1);
+  assert.equal(addedA[0].id, 'product-1');
+  assert.equal('skuId' in addedA[0], false);
+  assert.equal(isProductFavorited(addedBoth, productA), true);
+  assert.equal(isProductFavorited(addedBoth, productB), true);
+  assert.deepEqual(removedA.map((item) => item.id), ['product-2']);
+});
+
+test('[FAVORITE-6-5] storefront favorite toggles directly while cart and buy keep sku modal semantics', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderProductsBody = sliceBetween(mainJs, 'function renderProducts() {', 'function updateView() {');
+  const submitBody = sliceBetween(mainJs, 'async function submitPurchaseOrder() {', "function openSidebar(section = 'account') {");
+  const cartSubmitBody = sliceBetween(submitBody, "} else if (actionConfig.key === 'cart') {", '} catch (error) {');
+  const clickBody = sliceBetween(mainJs, "if (productGrid) {", "if (primaryCta) {");
+
+  assert.ok(renderProductsBody.includes('aria-pressed="${isFavorite}"'));
+  assert.ok(renderProductsBody.includes("aria-label=\"${isFavorite ? '取消收藏' : '加入收藏'}\""));
+  assert.ok(renderProductsBody.includes("is-favorited"));
+  assert.doesNotMatch(renderProductsBody, /data-sidebar-launch="favorites"[\s\S]{0,160}disabled/);
+  assert.ok(clickBody.includes('toggleFavorite(product)'));
+  assert.doesNotMatch(clickBody, /openPurchaseModal\(product, 'favorites'\)/);
+  assert.ok(clickBody.includes("openPurchaseModal(product, 'cart')"));
+  assert.ok(clickBody.includes("openPurchaseModal(product, 'buy')"));
+  assert.doesNotMatch(submitBody, /actionConfig\.key === 'favorites'/);
+  assert.doesNotMatch(cartSubmitBody, /openSidebar\(|closePurchaseModal\(/);
+  assert.ok(submitBody.includes('openSidebar(actionConfig.openSidebar)'));
+});
+
+test('[FAVORITE-6-6] favorites shelf removal synchronizes storage cards and the open panel', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const renderShelfBody = sliceBetween(mainJs, 'function renderProductShelf(', 'function formatCartMoney(');
+  const favoriteEvents = sliceBetween(mainJs, 'if (favoritesList) {', 'if (cartList) {');
+
+  assert.ok(renderShelfBody.includes('data-favorite-remove-id'));
+  assert.ok(favoriteEvents.includes('removeFavorite('));
+  assert.ok(favoriteEvents.includes('renderSidebar();'));
+  assert.ok(favoriteEvents.includes('updateView();'));
 });
 
 test('cart item totals and summary totals are calculated from quantity', () => {
@@ -2116,10 +2280,10 @@ test('[SKU-SYNC-6] storefront cache-busts the sku utility module after selection
   const html = readFileSync('index.html', 'utf8');
 
   assert.ok(mainJs.includes("from './sku-utils.js?v=20260715a'"));
-  assert.ok(html.includes('./src/main.js?v=20260715b'));
+  assert.ok(html.includes('./src/main.js?v=20260715c'));
 });
 
-test('[SKU-SYNC-7] cart and favorite modals hide payment controls without hiding sku controls', () => {
+test('[SKU-SYNC-7] cart modal hides payment controls without hiding sku controls', () => {
   const mainJs = readFileSync('src/main.js', 'utf8');
   const html = readFileSync('index.html', 'utf8');
   const renderBody = sliceBetween(mainJs, 'function renderPurchaseModal() {', "async function openPurchaseModal(product, action = 'buy') {");
@@ -2127,6 +2291,7 @@ test('[SKU-SYNC-7] cart and favorite modals hide payment controls without hiding
   assert.ok(html.includes('data-purchase-payment-title'));
   assert.ok(renderBody.includes('purchasePaymentTitle.hidden = !actionConfig.showPayment;'));
   assert.ok(renderBody.includes('purchasePaymentOptions.hidden = !actionConfig.showPayment;'));
+  assert.ok(!mainJs.includes("favorites: {\n    key: 'favorites'"));
   assert.ok(!mainJs.includes("purchasePaymentOptions?.closest('.purchase-modal__section')"));
 });
 

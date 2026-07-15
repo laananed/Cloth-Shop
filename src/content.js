@@ -247,7 +247,7 @@ export function getPersonalCenterContract() {
       fields: ['orderNo', 'status', 'items', 'totalPrice', 'createdAt'],
     },
     favorites: {
-      fields: ['id', 'name', 'price', 'badge'],
+      fields: ['id', 'productId', 'name', 'category', 'image', 'detail', 'price', 'badge'],
     },
     cart: {
       fields: ['id', 'name', 'price', 'quantity'],

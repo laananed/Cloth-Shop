@@ -18,6 +18,7 @@ import {
   getStoredCartSelections,
   getStoredFavorites,
   getStoredProfile,
+  isProductFavorited,
   renderAdminProductsView,
   renderAdminStatsView,
   renderSavedProductItems,
@@ -27,9 +28,10 @@ import {
   saveStoredProfile,
   saveStoredAddressBook,
   saveStoredCartSelections,
+  toggleProductFavorite,
   validateAddress,
   validateRegistration,
-} from './account-store.js?v=20260705a';
+} from './account-store.js?v=20260715b';
 import {
   buildSkuMatrix,
   getDimensionOptions,
@@ -417,18 +419,6 @@ const purchaseActionConfigs = {
     showPayment: false,
     showTotal: true,
     openSidebar: 'cart',
-  },
-  favorites: {
-    key: 'favorites',
-    label: '加入收藏夹',
-    eyebrow: '加入收藏夹',
-    submitLabel: () => '加入收藏',
-    pendingLabel: '正在加入收藏...',
-    showAddress: false,
-    showQuantity: false,
-    showPayment: false,
-    showTotal: false,
-    openSidebar: 'favorites',
   },
 };
 
@@ -862,7 +852,7 @@ function renderProductSkuOptions(product) {
   const selectedSku = getExplicitSelectedSku(product);
   const productOnSale = isOnSale(product.productStatus || product.status);
   const selectionHint = !selectedSku
-    ? '<p class="product-card__sku-hint">请选择规格后再加入购物车、收藏或购买。</p>'
+    ? '<p class="product-card__sku-hint">请选择规格后再加入购物车或购买。</p>'
     : '';
 
   return `
@@ -1162,43 +1152,27 @@ async function syncCartFromApi(userId = CURRENT_USER_ID) {
 }
 
 
-async function addCartToApi(product, selectedSku = null, quantity = 1, { openSidebarAfterSuccess = true } = {}) {
+async function addCartToApi(product, selectedSku = null, quantity = 1) {
   const actualSelectedSku = selectedSku || null;
   const skuId = actualSelectedSku?.skuId;
 
   if (!skuId) {
-    setFeedback(sidebarCartFeedback, "请先选择商品规格，再加入购物车。", true);
-    if (openSidebarAfterSuccess) {
-      openSidebar("cart");
-    }
-    return null;
+    throw new Error("请先选择商品规格，再加入购物车。");
   }
 
   const nextQuantity = Math.max(1, Number(quantity) || 1);
   const availableStock = getSkuAvailableStock(actualSelectedSku);
 
   if (!isOnSale(actualSelectedSku.skuStatus || actualSelectedSku.status || "ON_SALE")) {
-    setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格已下架。", true);
-    if (openSidebarAfterSuccess) {
-      openSidebar("cart");
-    }
-    return null;
+    throw new Error("当前规格已下架。");
   }
 
   if (availableStock <= 0) {
-    setFeedback(sidebarCartFeedback, "加入购物车失败：当前规格库存不足。", true);
-    if (openSidebarAfterSuccess) {
-      openSidebar("cart");
-    }
-    return null;
+    throw new Error("当前规格库存不足。");
   }
 
   if (nextQuantity > availableStock) {
-    setFeedback(sidebarCartFeedback, `加入购物车失败：当前规格最多只能购买 ${availableStock} 件。`, true);
-    if (openSidebarAfterSuccess) {
-      openSidebar("cart");
-    }
-    return null;
+    throw new Error(`当前规格最多只能购买 ${availableStock} 件。`);
   }
 
   try {
@@ -1226,10 +1200,6 @@ async function addCartToApi(product, selectedSku = null, quantity = 1, { openSid
       sidebarCartFeedback,
       `已加入数据库购物车，规格：${actualSelectedSku?.skuName || '默认规格'}。`
     );
-    if (openSidebarAfterSuccess) {
-      openSidebar("cart");
-    }
-
     console.log("加入购物车成功：", result);
     return result;
   } catch (error) {
@@ -1240,10 +1210,7 @@ async function addCartToApi(product, selectedSku = null, quantity = 1, { openSid
       `加入购物车失败：${error.message}`,
       true
     );
-    if (openSidebarAfterSuccess) {
-      openSidebar("cart");
-    }
-    return null;
+    throw error;
   }
 }
 
@@ -2257,6 +2224,7 @@ function renderProducts() {
   }
 
   const visibleProducts = filteredProducts();
+  const favorites = getStoredFavorites(storage, products);
   
   if (!visibleProducts.length) {
       productGrid.innerHTML = `
@@ -2286,6 +2254,7 @@ function renderProducts() {
       const isProductAvailable = productState.key === "AVAILABLE";
       const hasSelectedSku = Boolean(selectedSku);
       const canOpenActionModal = canOpenProductActionModal(product);
+      const isFavorite = isProductFavorited(favorites, product);
       const stockLabel = !hasSelectedSku
         ? "请选择规格后查看库存"
         : productState.key === "OFF_SALE"
@@ -2357,10 +2326,10 @@ function renderProducts() {
                     ? `
                 <button
                   type="button"
-                  class="ghost-button ghost-button--icon ghost-button--icon-outline"
-                  aria-label="加入收藏夹"
-                  data-sidebar-launch="favorites"
-                  ${canOpenActionModal ? '' : 'disabled'}
+                  class="ghost-button ghost-button--icon ghost-button--icon-outline ${isFavorite ? 'is-favorited' : ''}"
+                  aria-label="${isFavorite ? '取消收藏' : '加入收藏'}"
+                  aria-pressed="${isFavorite}"
+                  data-favorite-toggle
                 >
                   <span class="ghost-button__icon">${getFavoriteIcon()}</span>
                 </button>
@@ -3066,32 +3035,13 @@ async function submitPurchaseOrder() {
     } else if (actionConfig.key === 'cart') {
       setFeedback(purchaseFeedback, "正在加入购物车，请稍候...");
 
-      const result = await addCartToApi(activePurchaseProduct, selectedSku, quantity, { openSidebarAfterSuccess: false });
-
-      if (!result) {
-        throw new Error("加入购物车失败");
-      }
+      await addCartToApi(activePurchaseProduct, selectedSku, quantity);
 
       setFeedback(
         purchaseFeedback,
         `已加入数据库购物车，规格：${selectedSku?.skuName || '默认规格'}。`
       );
 
-      closePurchaseModal();
-      openSidebar(actionConfig.openSidebar);
-    } else if (actionConfig.key === 'favorites') {
-      setFeedback(purchaseFeedback, "正在加入收藏，请稍候...");
-
-      const result = upsertFavorite(activePurchaseProduct, selectedSku, { openSidebarAfterSuccess: false });
-
-      if (!result) {
-        throw new Error("加入收藏失败");
-      }
-
-      setFeedback(purchaseFeedback, "已加入收藏夹。");
-
-      closePurchaseModal();
-      openSidebar(actionConfig.openSidebar);
     }
   } catch (error) {
     console.error("提交订单或支付失败：", error);
@@ -3157,47 +3107,23 @@ function getStoredProductById(productId) {
   return products.find((product) => product.id === productId) || null;
 }
 
-function upsertFavorite(product, selectedSku = null, { openSidebarAfterSuccess = true } = {}) {
-  const actualSelectedSku = selectedSku || null;
-
-  if (!actualSelectedSku?.skuId) {
-    setFeedback(sidebarFavoritesFeedback, "请先选择商品规格，再加入收藏。", true);
-    if (openSidebarAfterSuccess) {
-      openSidebar("favorites");
-    }
-    return getStoredFavorites(storage);
-  }
-
-  const favorites = getStoredFavorites(storage);
-  const favoriteId = `${product.id}-sku-${actualSelectedSku.skuId}`;
-
-  if (favorites.some((item) => item.id === favoriteId)) {
-    if (openSidebarAfterSuccess) {
-      openSidebar("favorites");
-    }
-    return favorites;
-  }
-
-  const nextFavorites = [
-    ...favorites,
-    {
-      id: favoriteId,
-      productId: product.id,
-      skuId: actualSelectedSku.skuId,
-      skuName: actualSelectedSku.skuName || '默认规格',
-      name: `${product.name} / ${actualSelectedSku.skuName || "默认规格"}`,
-      price: actualSelectedSku.price,
-      badge: product.badge,
-      category: product.category,
-      image: product.image,
-    },
-  ];
+function toggleFavorite(product) {
+  const favorites = getStoredFavorites(storage, products);
+  const wasFavorite = isProductFavorited(favorites, product);
+  const nextFavorites = toggleProductFavorite(favorites, product);
 
   saveStoredFavorites(storage, nextFavorites);
-  if (openSidebarAfterSuccess) {
-    openSidebar("favorites");
-  }
-  return nextFavorites;
+  setFeedback(sidebarFavoritesFeedback, wasFavorite ? '已取消收藏。' : '已加入收藏夹。');
+  renderSidebar();
+  updateView();
+}
+
+function removeFavorite(favoriteId) {
+  const favorites = getStoredFavorites(storage, products);
+  const nextFavorites = favorites.filter((favorite) => favorite.id !== favoriteId);
+
+  saveStoredFavorites(storage, nextFavorites);
+  setFeedback(sidebarFavoritesFeedback, '已取消收藏。');
 }
 
 function upsertCartItem(product) {
@@ -3244,7 +3170,15 @@ function renderProductShelf(listElement, items, emptyState, { showQuantity = fal
         <article class="saved-item">
           <div class="saved-item__header">
             <strong>${item.name}</strong>
-            <span>${item.badge}</span>
+            <div>
+              <span>${item.badge}</span>
+              <button
+                type="button"
+                class="ghost-button ghost-button--small ghost-button--danger"
+                data-favorite-remove-id="${escapeHtml(item.id)}"
+                aria-label="取消收藏 ${escapeHtml(item.name)}"
+              >删除</button>
+            </div>
           </div>
           <p>${item.category}</p>
           <p>${formatPrice(item.price)}${showQuantity ? ` × ${item.quantity}` : ''}</p>
@@ -3633,7 +3567,7 @@ function renderSidebar() {
     ordersList.innerHTML = `<p class="orders-empty">正在加载数据库订单...</p>`;
   }
 
-  renderProductShelf(favoritesList, getStoredFavorites(storage), '暂无收藏夹');
+  renderProductShelf(favoritesList, getStoredFavorites(storage, products), '暂无收藏夹');
   const cart = getStoredCart(storage);
   const selectedIds = getStoredCartSelections(storage);
   const invalidItems = getInvalidCartItems(cart);
@@ -6368,6 +6302,18 @@ if (ordersList) {
   });
 }
 
+if (favoritesList) {
+  favoritesList.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('[data-favorite-remove-id]');
+
+    if (removeButton) {
+      removeFavorite(removeButton.dataset.favoriteRemoveId);
+      renderSidebar();
+      updateView();
+    }
+  });
+}
+
 if (cartList) {
   cartList.addEventListener('click', (event) => {
     const deleteButton = event.target.closest('[data-cart-delete-id]');
@@ -6727,18 +6673,10 @@ if (productGrid) {
       return;
     }
 
-    if (actionButton.dataset.sidebarLaunch === 'favorites') {
-      void openPurchaseModal(product, 'favorites').catch((error) => {
-        console.error("打开收藏弹窗失败：", error);
-      });
+    if (actionButton.dataset.favoriteToggle !== undefined) {
+      toggleFavorite(product);
       return;
     }
-
-    // if (actionButton.dataset.sidebarLaunch === 'cart') {
-    //   upsertCartItem(product);
-    //   setFeedback(sidebarCartFeedback, '已加入购物车。');
-    //   openSidebar('cart');
-    // }
 
     if (actionButton.dataset.sidebarLaunch === 'cart') {
       void openPurchaseModal(product, 'cart').catch((error) => {

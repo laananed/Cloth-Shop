@@ -41,6 +41,7 @@ import {
 } from './sku-utils.js?v=20260710a';
 
 const API_BASE_URL = "http://127.0.0.1:8050";
+const PRODUCT_DESCRIPTION_MAX_LENGTH = 1000;
 
 const CURRENT_USER_ID = 2;
 const CURRENT_ADDRESS_ID = 3;
@@ -576,6 +577,11 @@ function getProductImages(product) {
 function getProductMainImage(product) {
   return getProductImages(product)[0]?.image_url || String(product?.image || '').trim();
 }
+
+function normalizeProductDescription(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function convertApiProducts(apiRows) {
   const productMap = new Map();
 
@@ -631,7 +637,8 @@ function convertApiProducts(apiRows) {
           },
         ],
 
-        detail: "",
+        detail: normalizeProductDescription(row.description),
+        skuSummary: "",
 
         // 优先使用数据库图片；没有 image_url 时才复用原来的静态图片
         image: productImage,
@@ -673,7 +680,7 @@ function convertApiProducts(apiRows) {
     .map((product) => {
       const state = getProductDisplayState(product);
 
-      product.detail = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
+      product.skuSummary = `共 ${product.skuList.length} 个规格，库存 ${product.availableStock} 件，默认 SKU：${product.skuList[0]?.skuName || "无"}`;
       product.skuId = product.defaultSkuId;
       product.unavailableAt = getProductUnavailableAt(product);
       product.saleState = state.key;
@@ -2307,6 +2314,9 @@ function renderProducts() {
         : productState.key === "OFF_SALE"
           ? "已下架"
           : getStockLabel(selectedStock);
+      const detailMarkup = product.detail
+        ? `<p class="product-card__detail">${escapeHtml(product.detail)}</p>`
+        : "";
 
       return `
         <article class="product-card ${productStateClass} ${isPrimaryDetail ? 'product-card--primary-detail' : ''} ${isSplitDetail ? 'product-card--split-detail' : ''} ${isPurchaseUi ? 'product-card--purchase-ui' : ''}" data-category="${product.category}" data-product-id="${product.id}">
@@ -2332,7 +2342,7 @@ function renderProducts() {
                 <span class="product-card__sales-rank ${isTopSeller ? 'product-card__sales-rank--pill' : ''}">${salesRankLabel}</span>
               </div>
             </div>
-            <p class="product-card__detail">${product.detail}</p>
+            ${detailMarkup}
                 `
                 : isSplitDetail
                   ? `
@@ -2351,12 +2361,12 @@ function renderProducts() {
                   <span class="product-card__info-label">${salesRankLabel}</span>
                 </div>
               </div>
-              <p class="product-card__detail">${product.detail}</p>
+              ${detailMarkup}
             </div>
                   `
                   : `
             <h3>${product.name}</h3>
-            <p class="product-card__detail">${product.detail}</p>
+            ${detailMarkup}
                   `
             }
             ${renderProductSkuOptions(product)}
@@ -3806,6 +3816,7 @@ function initAdminPage() {
   const productImageInput = shell.querySelector('input[type="file"][name="image"]');
   const productImagePreview = shell.querySelector('[data-admin-image-preview]');
   const productNameInput = shell.querySelector('[data-admin-product-form] [name="name"]');
+  const productSubmitButton = shell.querySelector('[data-admin-product-form] button[type="submit"]');
   const adminSkuColorsInput = shell.querySelector('[data-admin-sku-colors]');
   const adminSkuSizesInput = shell.querySelector('[data-admin-sku-sizes]');
   const adminSkuBasePriceInput = shell.querySelector('[data-admin-sku-base-price]');
@@ -3820,6 +3831,14 @@ function initAdminPage() {
   const adminImageManagerClear = document.querySelector('[data-admin-image-manager-clear]');
   const adminImageManagerUpload = document.querySelector('[data-admin-image-manager-upload]');
   const adminImageManagerCloseButtons = document.querySelectorAll('[data-admin-image-manager-close]');
+  const adminDescriptionEditor = document.querySelector('[data-admin-description-editor]');
+  const adminDescriptionEditorTitle = document.querySelector('[data-admin-description-editor-title]');
+  const adminDescriptionEditorSummary = document.querySelector('[data-admin-description-editor-summary]');
+  const adminDescriptionEditorInput = document.querySelector('[data-admin-description-editor-input]');
+  const adminDescriptionEditorCount = document.querySelector('[data-admin-description-editor-count]');
+  const adminDescriptionEditorFeedback = document.querySelector('[data-admin-description-editor-feedback]');
+  const adminDescriptionEditorSave = document.querySelector('[data-admin-description-editor-save]');
+  const adminDescriptionEditorCloseButtons = document.querySelectorAll('[data-admin-description-editor-close]');
   const adminSkuManager = document.querySelector('[data-admin-sku-manager]');
   const adminSkuManagerTitle = document.querySelector('[data-admin-sku-manager-title]');
   const adminSkuManagerSummary = document.querySelector('[data-admin-sku-manager-summary]');
@@ -3847,6 +3866,9 @@ function initAdminPage() {
   let activeAdminImageManagerProduct = null;
   let adminImageManagerPendingFiles = [];
   let adminImageManagerUploading = false;
+  let activeAdminDescriptionProduct = null;
+  let adminDescriptionInitialValue = "";
+  let adminDescriptionSubmitting = false;
   let adminSkuRows = [];
   let activeAdminSkuManagerProduct = null;
   let adminSkuManagerRows = [];
@@ -4021,6 +4043,7 @@ function initAdminPage() {
 
   function resetAdminDashboardState() {
     closeAdminProductImageManager();
+    closeAdminDescriptionEditor();
     closeAdminSkuManager();
     products = [];
     orders = [];
@@ -4567,6 +4590,7 @@ function convertApiRowsToAdminProducts(apiRows) {
         imageCount: getAdminProductImageCount(row),
         imageLabel: imageUrl ? imageUrl.split("/").pop() : "暂无图片",
         createdAt: row.product_created_at || "",
+        description: normalizeProductDescription(row.description),
         skuCount: 0,
         stock: 0,
         lockedStock: 0,
@@ -4858,6 +4882,13 @@ async function refreshAdminProductsFromApi() {
                 <div class="admin-product-row__actions">
                   <button
                     type="button"
+                    class="ghost-button ghost-button--small"
+                    data-admin-product-description-edit="${row.productId}"
+                  >
+                    编辑介绍
+                  </button>
+                  <button
+                    type="button"
                     class="ghost-button ghost-button--small ghost-button--solid"
                     data-admin-product-sku-manage="${row.productId}"
                   >
@@ -4963,6 +4994,24 @@ async function updateAdminProductStatusToApi(productId, status) {
 
   if (!result.success) {
     throw new Error(result.detail || "修改商品状态失败");
+  }
+
+  return result;
+}
+
+async function updateAdminProductDescriptionToApi(productId, description) {
+  const result = await adminFetch(`${API_BASE_URL}/admin/products/${productId}/description`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      description: normalizeProductDescription(description),
+    }),
+  });
+
+  if (!result.success) {
+    throw new Error(result.detail || "修改商品介绍失败");
   }
 
   return result;
@@ -5106,6 +5155,7 @@ async function createAdminProductToApi(values, imageFiles = []) {
 
   formData.append("category_name", String(values.category || "").trim());
   formData.append("product_name", String(values.name || "").trim());
+  formData.append("description", normalizeProductDescription(values.description));
 
   formData.append("sku_name", firstSku.sku_name);
   formData.append("price", String(firstSku.price));
@@ -5349,6 +5399,129 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     document.body.classList.remove("has-modal");
   }
 
+  function renderAdminDescriptionEditorState() {
+    if (!adminDescriptionEditor || !activeAdminDescriptionProduct) {
+      return;
+    }
+
+    const currentValue = String(adminDescriptionEditorInput?.value || "");
+    const normalizedValue = normalizeProductDescription(currentValue);
+    const isOverLimit = currentValue.length > PRODUCT_DESCRIPTION_MAX_LENGTH;
+    const hasChanged = normalizedValue !== adminDescriptionInitialValue;
+
+    if (adminDescriptionEditorCount) {
+      adminDescriptionEditorCount.textContent = `${currentValue.length} / ${PRODUCT_DESCRIPTION_MAX_LENGTH}`;
+      adminDescriptionEditorCount.dataset.state = isOverLimit ? "error" : "";
+    }
+
+    if (adminDescriptionEditorInput) {
+      adminDescriptionEditorInput.disabled = adminDescriptionSubmitting;
+    }
+
+    if (adminDescriptionEditorSave) {
+      adminDescriptionEditorSave.disabled = adminDescriptionSubmitting || isOverLimit || !hasChanged;
+      adminDescriptionEditorSave.textContent = adminDescriptionSubmitting ? "保存中..." : "保存介绍";
+    }
+
+    adminDescriptionEditorCloseButtons.forEach((button) => {
+      button.disabled = adminDescriptionSubmitting;
+    });
+  }
+
+  function closeAdminDescriptionEditor() {
+    if (adminDescriptionSubmitting) {
+      return;
+    }
+
+    activeAdminDescriptionProduct = null;
+    adminDescriptionInitialValue = "";
+    if (adminDescriptionEditorInput) {
+      adminDescriptionEditorInput.value = "";
+      adminDescriptionEditorInput.disabled = false;
+    }
+    if (adminDescriptionEditorFeedback) {
+      adminDescriptionEditorFeedback.textContent = "";
+      adminDescriptionEditorFeedback.dataset.state = "";
+    }
+    if (adminDescriptionEditor) {
+      adminDescriptionEditor.hidden = true;
+      adminDescriptionEditor.classList.remove("is-open");
+      adminDescriptionEditor.setAttribute("aria-hidden", "true");
+    }
+    document.body.classList.remove("has-modal");
+  }
+
+  function openAdminDescriptionEditor(product) {
+    if (!adminDescriptionEditor || !adminDescriptionEditorInput) {
+      return;
+    }
+
+    activeAdminDescriptionProduct = product;
+    adminDescriptionInitialValue = normalizeProductDescription(product.description);
+    adminDescriptionSubmitting = false;
+    adminDescriptionEditorInput.value = adminDescriptionInitialValue;
+    if (adminDescriptionEditorTitle) {
+      adminDescriptionEditorTitle.textContent = `编辑“${product.name}”的介绍`;
+    }
+    if (adminDescriptionEditorSummary) {
+      adminDescriptionEditorSummary.textContent = `商品 ID：${product.productId} · 留空并保存即可清空介绍`;
+    }
+    if (adminDescriptionEditorFeedback) {
+      adminDescriptionEditorFeedback.textContent = adminDescriptionInitialValue ? "当前介绍已加载。" : "当前商品暂无介绍。";
+      adminDescriptionEditorFeedback.dataset.state = "";
+    }
+    adminDescriptionEditor.hidden = false;
+    adminDescriptionEditor.classList.add("is-open");
+    adminDescriptionEditor.setAttribute("aria-hidden", "false");
+    document.body.classList.add("has-modal");
+    renderAdminDescriptionEditorState();
+    adminDescriptionEditorInput.focus();
+  }
+
+  async function submitAdminDescriptionEditor() {
+    if (!activeAdminDescriptionProduct || adminDescriptionSubmitting) {
+      return;
+    }
+
+    const productId = Number(activeAdminDescriptionProduct.productId);
+    const currentValue = String(adminDescriptionEditorInput?.value || "");
+    if (currentValue.length > PRODUCT_DESCRIPTION_MAX_LENGTH) {
+      setFeedback(adminDescriptionEditorFeedback, "商品介绍不能超过 1000 个字符。", true);
+      renderAdminDescriptionEditorState();
+      return;
+    }
+
+    const description = normalizeProductDescription(currentValue);
+    if (description === adminDescriptionInitialValue) {
+      return;
+    }
+
+    adminDescriptionSubmitting = true;
+    renderAdminDescriptionEditorState();
+    setFeedback(adminDescriptionEditorFeedback, "正在保存商品介绍...");
+
+    try {
+      const result = await updateAdminProductDescriptionToApi(productId, description);
+      await refreshAdminProductsFromApi();
+      activeAdminDescriptionProduct = products.find((item) => item.productId === productId) || {
+        ...activeAdminDescriptionProduct,
+        description: result.description || "",
+      };
+      adminDescriptionInitialValue = normalizeProductDescription(result.description);
+      if (adminDescriptionEditorInput) {
+        adminDescriptionEditorInput.value = adminDescriptionInitialValue;
+      }
+      setFeedback(adminDescriptionEditorFeedback, result.message || "商品介绍保存成功。");
+      setFeedback(productManageFeedback || productFeedback, result.message || "商品介绍保存成功。");
+    } catch (error) {
+      console.error("后台修改商品介绍失败：", error);
+      setFeedback(adminDescriptionEditorFeedback, error.message || "修改商品介绍失败", true);
+    } finally {
+      adminDescriptionSubmitting = false;
+      renderAdminDescriptionEditorState();
+    }
+  }
+
   function renderAdminProductImageManager() {
     if (!adminImageManager || !activeAdminImageManagerProduct) {
       closeAdminProductImageManager();
@@ -5514,6 +5687,12 @@ async function deleteAdminProductImageToApi(productId, imageId) {
   adminImageManagerClear?.addEventListener("click", clearAdminImageManagerPendingFiles);
   adminImageManagerUpload?.addEventListener("click", submitAdminImageManagerUpload);
   window.addEventListener("beforeunload", clearAdminImageManagerPendingFiles);
+
+  adminDescriptionEditorCloseButtons.forEach((button) => {
+    button.addEventListener("click", closeAdminDescriptionEditor);
+  });
+  adminDescriptionEditorInput?.addEventListener("input", renderAdminDescriptionEditorState);
+  adminDescriptionEditorSave?.addEventListener("click", submitAdminDescriptionEditor);
 
   adminSkuManagerCloseButtons.forEach((button) => {
     button.addEventListener('click', closeAdminSkuManager);
@@ -5681,6 +5860,12 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       const imageFiles = Array.from(productImageInput?.files || []);
       const name = String(values.name || '').trim();
       const category = String(values.category || '').trim();
+      const description = normalizeProductDescription(values.description);
+
+      if (String(values.description || "").length > PRODUCT_DESCRIPTION_MAX_LENGTH) {
+        setFeedback(productFeedback, '商品介绍不能超过 1000 个字符。', true);
+        return;
+      }
 
       let skuRows = [];
 
@@ -5698,6 +5883,13 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       }
 
       try {
+        if (productSubmitButton?.disabled) {
+          return;
+        }
+        if (productSubmitButton) {
+          productSubmitButton.disabled = true;
+          productSubmitButton.textContent = "上架中...";
+        }
         setFeedback(productFeedback, '正在写入数据库，请稍候...');
 
       const result = await createAdminProductToApi(
@@ -5705,6 +5897,7 @@ async function deleteAdminProductImageToApi(productId, imageId) {
           ...values,
           name,
           category,
+          description,
           skuRows,
         },
         imageFiles
@@ -5729,6 +5922,11 @@ async function deleteAdminProductImageToApi(productId, imageId) {
       } catch (error) {
         console.error("后台新增商品失败：", error);
         setFeedback(productFeedback, `新增商品失败：${error.message}`, true);
+      } finally {
+        if (productSubmitButton) {
+          productSubmitButton.disabled = false;
+          productSubmitButton.textContent = "上架新品";
+        }
       }
     });
   }
@@ -5948,6 +6146,18 @@ async function deleteAdminProductImageToApi(productId, imageId) {
     const deleteButton = event.target.closest("[data-admin-product-delete-id]");
     const manageImagesButton = event.target.closest("[data-admin-product-image-manage]");
     const manageSkusButton = event.target.closest("[data-admin-product-sku-manage]");
+    const editDescriptionButton = event.target.closest("[data-admin-product-description-edit]");
+
+    if (editDescriptionButton) {
+      const productId = Number(editDescriptionButton.dataset.adminProductDescriptionEdit);
+      const product = products.find((item) => item.productId === productId);
+      if (!product) {
+        setFeedback(productManageFeedback || productFeedback, "商品数据不存在，无法编辑介绍。", true);
+        return;
+      }
+      openAdminDescriptionEditor(product);
+      return;
+    }
 
     if (manageSkusButton) {
       const productId = Number(manageSkusButton.dataset.adminProductSkuManage);

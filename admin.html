@@ -206,7 +206,8 @@
 
               <label class="admin-field">
                 <span>商品描述</span>
-                <textarea name="detail" rows="4" placeholder="简单描述商品卖点"></textarea>
+                <textarea name="description" rows="4" maxlength="1000" placeholder="填写商品介绍，支持换行"></textarea>
+                <small>普通文本，最多 1000 个字符。</small>
               </label>
 
               <button class="admin-submit" type="submit">上架新品</button>
@@ -268,6 +269,33 @@
             <button class="admin-submit admin-image-manager__upload-button" type="button" data-admin-image-manager-upload disabled>确认上传</button>
           </div>
         </section>
+      </div>
+    </section>
+
+    <section class="admin-description-editor" data-admin-description-editor hidden aria-hidden="true">
+      <button class="admin-description-editor__backdrop" type="button" data-admin-description-editor-close aria-label="关闭商品介绍编辑"></button>
+      <div class="admin-description-editor__panel" role="dialog" aria-modal="true" aria-labelledby="admin-description-editor-title">
+        <header class="admin-description-editor__header">
+          <div>
+            <p class="admin-panel__eyebrow">商品介绍</p>
+            <h2 id="admin-description-editor-title" data-admin-description-editor-title>编辑介绍</h2>
+          </div>
+          <button class="admin-description-editor__close" type="button" data-admin-description-editor-close aria-label="关闭">×</button>
+        </header>
+        <p class="admin-description-editor__summary" data-admin-description-editor-summary></p>
+        <label class="admin-description-editor__field">
+          <span>介绍内容</span>
+          <textarea rows="8" maxlength="1000" data-admin-description-editor-input placeholder="留空并保存即可清空商品介绍"></textarea>
+        </label>
+        <div class="admin-description-editor__meta">
+          <span>仅保存普通文本，支持换行。</span>
+          <span data-admin-description-editor-count>0 / 1000</span>
+        </div>
+        <p class="admin-feedback" data-admin-description-editor-feedback aria-live="polite"></p>
+        <div class="admin-description-editor__actions">
+          <button class="ghost-button ghost-button--small" type="button" data-admin-description-editor-close>取消</button>
+          <button class="admin-submit" type="button" data-admin-description-editor-save disabled>保存介绍</button>
+        </div>
       </div>
     </section>
 

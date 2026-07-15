@@ -2109,6 +2109,101 @@ test('[SKU-5] sku manager logically deletes skus with final sku protection', () 
   assert.doesNotMatch(backend, /DELETE\s+FROM\s+product_sku/i);
 });
 
+test('[DESCRIPTION-1] product description migration exists as a new numbered SQL file', () => {
+  assert.ok(existsSync('sql语句/06_商品描述增量迁移.sql'));
+});
+
+test('[DESCRIPTION-2] migration adds nullable description and preserves the final product detail view', () => {
+  const migration = readFileSync('sql语句/06_商品描述增量迁移.sql', 'utf8');
+
+  assert.match(migration, /information_schema\.columns/i);
+  assert.match(migration, /ALTER TABLE product ADD COLUMN description TEXT NULL/i);
+  assert.match(migration, /CREATE OR REPLACE VIEW v_product_detail/i);
+  assert.match(migration, /p\.description\s+AS\s+description/i);
+  assert.match(migration, /s\.sku_code\s+AS\s+sku_code/i);
+  assert.match(migration, /i\.updated_at\s+AS\s+inventory_updated_at/i);
+  assert.doesNotMatch(migration, /DROP\s+DATABASE|TRUNCATE\s+TABLE|DELETE\s+FROM\s+(product|product_sku|inventory)/i);
+});
+
+test('[DESCRIPTION-3] product create and query APIs persist and expose descriptions', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const createBody = sliceBetween(backend, '@app.post("/products")', '@app.post("/admin/products/{product_id}/images")');
+  const publicQuery = sliceBetween(backend, '@app.get("/products")', '@app.post("/admin/login")');
+  const inventoryQuery = sliceBetween(backend, '@app.get("/admin/inventory")', '@app.post("/admin/inventory/update-stock")');
+
+  assert.ok(createBody.includes('description: str = Form("")'));
+  assert.ok(createBody.includes('normalize_product_description(description)'));
+  assert.match(createBody, /INSERT INTO product\([\s\S]*description[\s\S]*VALUES\(%s, %s, %s, %s, 'ON_SALE', 0\)/);
+  assert.match(publicQuery, /product_name,[\s\S]*description,[\s\S]*FROM v_product_detail/);
+  assert.match(inventoryQuery, /product_name,[\s\S]*description,[\s\S]*FROM v_product_detail/);
+  assert.match(createBody, /product_name,[\s\S]*description,[\s\S]*FROM v_product_detail/);
+});
+
+test('[DESCRIPTION-4] admin description update is authenticated transactional and supports clearing', () => {
+  const backend = readFileSync('backend/app/main.py', 'utf8');
+  const routeBody = sliceBetween(
+    backend,
+    '@app.patch("/admin/products/{product_id}/description")',
+    '@app.get("/admin/products/{product_id}/skus")',
+  );
+
+  assert.ok(backend.includes('class AdminProductDescriptionUpdateRequest(BaseModel):'));
+  assert.ok(backend.includes('max_length=PRODUCT_DESCRIPTION_MAX_LENGTH'));
+  assert.ok(backend.includes('return normalized or None'));
+  assert.ok(routeBody.includes('require_admin_user(authorization)'));
+  assert.ok(routeBody.includes('WHERE id = %s AND is_deleted = 0 FOR UPDATE'));
+  assert.ok(routeBody.includes('UPDATE product SET description = %s WHERE id = %s AND is_deleted = 0'));
+  assert.ok(routeBody.includes('(description, product_id)'));
+  assert.ok(routeBody.includes('conn.commit()'));
+  assert.ok(routeBody.includes('conn.rollback()'));
+  assert.ok(routeBody.includes('except HTTPException:'));
+});
+
+test('[DESCRIPTION-5] storefront maps real descriptions without replacing them with sku summaries', () => {
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const converter = sliceBetween(mainJs, 'function convertApiProducts(apiRows)', 'async function loadProductsFromApi()');
+  const renderer = sliceBetween(mainJs, 'function renderProducts()', 'function getLoginFormValues');
+
+  assert.ok(converter.includes('detail: normalizeProductDescription(row.description)'));
+  assert.ok(converter.includes('skuSummary: ""'));
+  assert.ok(converter.includes('product.skuSummary = `共 ${product.skuList.length} 个规格'));
+  assert.doesNotMatch(converter, /product\.detail\s*=\s*`共/);
+  assert.ok(renderer.includes('const detailMarkup = product.detail'));
+  assert.ok(renderer.includes('escapeHtml(product.detail)'));
+  assert.ok(renderer.includes('${detailMarkup}'));
+  assert.match(styles, /\.product-card__detail\s*\{[\s\S]*white-space:\s*pre-line;[\s\S]*overflow-wrap:\s*break-word;/);
+});
+
+test('[DESCRIPTION-6] admin create and edit UI use one safe description contract', () => {
+  const adminHtml = readFileSync('admin.html', 'utf8');
+  const mainJs = readFileSync('src/main.js', 'utf8');
+  const createHelper = sliceBetween(mainJs, 'async function createAdminProductToApi(', 'async function appendAdminProductImagesToApi(');
+  const adminConverter = sliceBetween(mainJs, 'function convertApiRowsToAdminProducts(apiRows)', 'function renderAdminInventoryProductsView(');
+
+  assert.match(adminHtml, /textarea[^>]*name="description"[^>]*maxlength="1000"/);
+  assert.ok(createHelper.includes('formData.append("description"'));
+  assert.ok(adminConverter.includes('description: normalizeProductDescription(row.description)'));
+  assert.ok(adminHtml.includes('data-admin-description-editor'));
+  assert.ok(adminHtml.includes('data-admin-description-editor-input'));
+  assert.ok(adminHtml.includes('data-admin-description-editor-save'));
+  assert.ok(mainJs.includes('data-admin-product-description-edit'));
+  assert.ok(mainJs.includes('updateAdminProductDescriptionToApi'));
+  assert.ok(mainJs.includes('/admin/products/${productId}/description'));
+  assert.ok(mainJs.includes('adminDescriptionSubmitting'));
+  assert.ok(mainJs.includes('refreshAdminProductsFromApi()'));
+  assert.ok(mainJs.includes('PRODUCT_DESCRIPTION_MAX_LENGTH'));
+});
+
+test('[DESCRIPTION-7] admin description editor remains usable at narrow viewport', () => {
+  const styles = readFileSync('src/styles.css', 'utf8');
+  const narrowAdminStyles = sliceBetween(styles, '@media (max-width: 760px)', '.scroll-tools');
+
+  assert.match(narrowAdminStyles, /\.admin-layout\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+  assert.match(narrowAdminStyles, /\.admin-nav\s*\{[\s\S]*position:\s*static;/);
+  assert.match(narrowAdminStyles, /\.admin-description-editor__panel\s*\{[\s\S]*max-height:\s*calc\(100vh - 16px\);/);
+});
+
 function createMemoryStorage() {
   const data = new Map();
 

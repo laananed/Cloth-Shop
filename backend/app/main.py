@@ -42,6 +42,7 @@ PRODUCT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ADMIN_TOKEN_SECRET = b"frieren-cloth-shop-admin-token-v1"
 ADMIN_TOKEN_TTL_SECONDS = 8 * 60 * 60
+PRODUCT_DESCRIPTION_MAX_LENGTH = 1000
 
 
 def build_product_image_filename(original_filename: str) -> str:
@@ -343,6 +344,11 @@ class AdminProductStatusUpdateRequest(BaseModel):
 class AdminProductDeleteRequest(BaseModel):
     product_id: int = Field(..., gt=0, description="要逻辑删除的商品 ID")
 
+
+class AdminProductDescriptionUpdateRequest(BaseModel):
+    description: str = Field(..., max_length=PRODUCT_DESCRIPTION_MAX_LENGTH)
+
+
 class AdminLoginRequest(BaseModel):
     email: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=1, max_length=128)
@@ -366,6 +372,13 @@ class AdminApproveRefundRequest(BaseModel):
 class AdminRejectRefundRequest(BaseModel):
     order_id: int = Field(..., gt=0, description="订单ID")
     remark: str = Field("管理员拒绝退款", description="处理备注")
+
+
+def normalize_product_description(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    if len(normalized) > PRODUCT_DESCRIPTION_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail="商品介绍不能超过 1000 个字符")
+    return normalized or None
 
 
 @app.get("/")
@@ -566,6 +579,7 @@ def get_products():
                         category_name,
                         product_id,
                         product_name,
+                        description,
                         product_id,
                         product_name,
                         image_url,
@@ -810,6 +824,7 @@ def ensure_admin_sku_unique(cursor, product_id: int, sku_row: dict, exclude_sku_
 async def create_product(
     category_name: str = Form(...),
     product_name: str = Form(...),
+    description: str = Form(""),
     sku_name: str = Form("默认规格"),
     price: float = Form(...),
     available_stock: int = Form(...),
@@ -827,6 +842,7 @@ async def create_product(
 
     category_name = category_name.strip()
     product_name = product_name.strip()
+    description = normalize_product_description(description)
     sku_name = sku_name.strip() or "默认规格"
 
     if not category_name:
@@ -880,13 +896,14 @@ async def create_product(
                         INSERT INTO product(
                             category_id,
                             name,
+                            description,
                             image_url,
                             status,
                             is_deleted
                         )
-                        VALUES(%s, %s, %s, 'ON_SALE', 0)
+                        VALUES(%s, %s, %s, %s, 'ON_SALE', 0)
                         """,
-                        (category_id, product_name, image_url)
+                        (category_id, product_name, description, image_url)
                     )
                     product_id = cursor.lastrowid
                     # 3. 保存商品图片扩展记录，第一张图片兼容为主图。
@@ -981,6 +998,7 @@ async def create_product(
                             category_name,
                             product_id,
                             product_name,
+                            description,
                             image_url,
                             product_status,
                             sku_id,
@@ -3238,6 +3256,50 @@ def query_admin_product_skus(conn, product_id: int) -> list[dict]:
         return serialize_sku_rows(cursor.fetchall())
 
 
+@app.patch("/admin/products/{product_id}/description")
+def update_admin_product_description(
+    product_id: int,
+    req: AdminProductDescriptionUpdateRequest,
+    authorization: str | None = Header(None),
+):
+    require_admin_user(authorization)
+    description = normalize_product_description(req.description)
+
+    try:
+        with get_db() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id FROM product WHERE id = %s AND is_deleted = 0 FOR UPDATE",
+                        (product_id,)
+                    )
+                    if not cursor.fetchone():
+                        raise HTTPException(status_code=404, detail="商品不存在或已删除")
+
+                    cursor.execute(
+                        "UPDATE product SET description = %s WHERE id = %s AND is_deleted = 0",
+                        (description, product_id)
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        return {
+            "success": True,
+            "message": "商品介绍更新成功",
+            "product_id": product_id,
+            "description": description,
+        }
+    except HTTPException:
+        raise
+    except MySQLError as e:
+        error_message = e.args[1] if len(e.args) > 1 else str(e)
+        raise HTTPException(status_code=400, detail=f"修改商品介绍失败：{error_message}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"修改商品介绍失败：{str(e)}")
+
+
 @app.get("/admin/products/{product_id}/skus")
 def get_admin_product_skus(product_id: int, authorization: str | None = Header(None)):
     require_admin_user(authorization)
@@ -3522,6 +3584,7 @@ def get_admin_inventory(authorization: str | None = Header(None)):
                         category_name,
                         product_id,
                         product_name,
+                        description,
                         image_url,
                         product_status,
                         sku_id,
@@ -3636,6 +3699,7 @@ def update_admin_stock(req: AdminStockUpdateRequest, authorization: str | None =
                             category_name,
                             product_id,
                             product_name,
+                            description,
                             image_url,
                             product_status,
                             sku_id,
@@ -3756,6 +3820,7 @@ def update_admin_product_status(req: AdminProductStatusUpdateRequest, authorizat
                             category_name,
                             product_id,
                             product_name,
+                            description,
                             image_url,
                             product_status,
                             sku_id,
